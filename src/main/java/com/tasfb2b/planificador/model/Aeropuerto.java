@@ -1,8 +1,13 @@
 package com.tasfb2b.planificador.model;
 
-
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -16,7 +21,7 @@ public class Aeropuerto {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private int id;
+    private Integer id;
 
     @NotBlank(message = "Al aeropuerto le corresponde una ciudad")
     @Column(nullable = false, unique = true)
@@ -42,14 +47,20 @@ public class Aeropuerto {
     @Column(nullable = false, unique = true)
     private String codigo;
 
-    @NotBlank(message = "El aeropuerto debe tener registrado una capacidad de almacenaje")
+    @NotBlank(message = "El aeropuerto debe tener una offset de horario")
     @Column(nullable = false)
-    private int capacidad;
+    private String offsetHorario;
 
-    @Column(nullable = false, unique = true)
-    private float latitud;
+    @NotNull(message = "El aeropuerto debe tener registrado una capacidad de almacenaje")
+    @Column(nullable = false)
+    private Integer capacidad;
 
+    @NotNull(message = "El aeropuerto debe indicar su latitud")
     @Column(nullable = false, unique = true)
-    private float longitud;
+    private Double latitud;
+
+    @NotNull(message = "El aeropuerto debe indicar su longitud")
+    @Column(nullable = false, unique = true)
+    private Double longitud;
 
 }
