@@ -1,6 +1,8 @@
 package com.tasfb2b.planificador.model;
 
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 
 import java.time.LocalDateTime;
 
@@ -46,4 +48,13 @@ public class Vuelo {
     @Column(nullable = false)
     private LocalDateTime fechaHoraLlegada;
 
+    @NotNull
+    @ManyToOne
+    @JoinColumn(name = "aeropuerto_origen_id", nullable = false)
+    private Aeropuerto aeropuertoOrigen;
+    
+    @NotNull
+    @ManyToOne
+    @JoinColumn(name = "aeropuerto_destino_id", nullable = false)
+    private Aeropuerto aeropuertoDestino;
 }

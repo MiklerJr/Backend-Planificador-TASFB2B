@@ -1,10 +1,14 @@
 package com.tasfb2b.planificador.model;
 
+
+import java.util.ArrayList;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -62,5 +66,11 @@ public class Aeropuerto {
     @NotNull(message = "El aeropuerto debe indicar su longitud")
     @Column(nullable = false, unique = true)
     private Double longitud;
+
+    @OneToMany(mappedBy = "aeropuertoOrigen")
+    private ArrayList<Vuelo> vuelosComoOrigen = new ArrayList<>();
+
+    @OneToMany(mappedBy = "aeropuertoDestino")
+    private ArrayList<Vuelo> vuelosComoDestino = new ArrayList<>();
 
 }
