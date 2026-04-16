@@ -10,7 +10,7 @@ public class Graph {
     public Map<String, Node> nodes = new HashMap<>();
     public List<Edge> edges = new ArrayList<>();
 
-    public List<Edge> getNeighbors(String nodeCode) {
+    public List<Edge> getEdgesFrom(String nodeCode) {
         return edges.stream()
                 .filter(e -> e.from.code.equals(nodeCode))
                 .toList();

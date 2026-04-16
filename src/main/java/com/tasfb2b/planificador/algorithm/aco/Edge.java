@@ -5,8 +5,21 @@ public class Edge {
     public Node from;
     public Node to;
 
-    public double cost;      // tiempo o distancia
-    public double capacity;  // carga máxima
+    public double cost;
 
-    public double pheromone;
+    public int capacity;
+    public int usedCapacity = 0;
+
+    public String departureTime;
+    public String arrivalTime;
+
+    public double pheromone = 1.0;
+
+    public boolean hasCapacity(int demand) {
+        return (usedCapacity + demand) <= capacity;
+    }
+
+    public void useCapacity(int demand) {
+        this.usedCapacity += demand;
+    }
 }
