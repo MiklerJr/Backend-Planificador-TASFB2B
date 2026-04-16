@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.model;
 
 
 import java.util.ArrayList;
+import java.util.List;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -28,16 +29,15 @@ public class Aeropuerto {
     private Integer id;
 
     @NotBlank(message = "Al aeropuerto le corresponde una ciudad")
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String ciudad;
 
     @NotBlank(message = "Al aeropuerto le corresponde un país")
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String pais;
 
-    @NotBlank(message = "El aeropuerto debe tener un estado")
     @Column(nullable = false)
-    private String estado;
+    private boolean activo = true;
 
     @NotBlank(message = "Al aeropuerto le corresponde un continente")
     @Column(nullable = false)
@@ -51,26 +51,26 @@ public class Aeropuerto {
     @Column(nullable = false, unique = true)
     private String codigo;
 
-    @NotBlank(message = "El aeropuerto debe tener una offset de horario")
+    @NotNull(message = "El aeropuerto debe tener una offset de horario")
     @Column(nullable = false)
-    private String offsetHorario;
+    private Integer offsetHorario;
 
     @NotNull(message = "El aeropuerto debe tener registrado una capacidad de almacenaje")
     @Column(nullable = false)
     private Integer capacidad;
 
     @NotNull(message = "El aeropuerto debe indicar su latitud")
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private Double latitud;
 
     @NotNull(message = "El aeropuerto debe indicar su longitud")
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private Double longitud;
 
     @OneToMany(mappedBy = "aeropuertoOrigen")
-    private ArrayList<Vuelo> vuelosComoOrigen = new ArrayList<>();
+    private List<Vuelo> vuelosComoOrigen = new ArrayList<>();
 
     @OneToMany(mappedBy = "aeropuertoDestino")
-    private ArrayList<Vuelo> vuelosComoDestino = new ArrayList<>();
+    private List<Vuelo> vuelosComoDestino = new ArrayList<>();
 
 }
