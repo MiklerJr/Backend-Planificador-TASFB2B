@@ -1,19 +1,36 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public class Edge {
 
-    public String id; // ID del vuelo para poder rastrearlo
+    public String id; 
     public Node from;
     public Node to;
+    public double cost;      
+    
+    public int capacity;  
+    public int usedCapacity = 0;
 
-    public double cost;      // Podría ser el tiempo de vuelo en minutos
-    public double capacity;  // Capacidad máxima de maletas
-
-    // Nuevos campos vitales para el enrutamiento de vuelos
     public LocalDateTime departureTime;
     public LocalDateTime arrivalTime;
 
-    public double pheromone;
+    public double pheromone = 1.0;
+
+    public boolean hasCapacity(int demand) {
+        return (usedCapacity + demand) <= capacity;
+    }
+
+    public void useCapacity(int demand) {
+        this.usedCapacity += demand;
+    }
+
+    public String getDepartureTimeString() {
+        return departureTime != null ? departureTime.toString() : "";
+    }
+
+    public String getArrivalTimeString() {
+        return arrivalTime != null ? arrivalTime.toString() : "";
+    }
 }

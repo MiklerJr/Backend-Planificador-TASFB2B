@@ -1,11 +1,9 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.algorithm.aco.Graph;
-import com.tasfb2b.planificador.algorithm.alns.AlgorithmALNS;
-import com.tasfb2b.planificador.algorithm.alns.AlnsSolution;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algorithm.aco.*;
+import com.tasfb2b.planificador.algorithm.alns.*;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
 import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
@@ -13,11 +11,7 @@ import com.tasfb2b.planificador.util.DataLoader;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Slf4j
 @Service
@@ -25,127 +19,113 @@ public class PlanificadorService {
 
     private final DataLoader dataLoader;
     private final AlgorithmMapper mapper;
+    private SimulacionResponse ultimaSimulacion;
 
     public PlanificadorService(DataLoader dataLoader, AlgorithmMapper mapper) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
     }
 
-    public SimulacionResponse ejecutarAlgoritmo() {
-        log.info("Iniciando mapeo de grafos...");
+    /**
+     * MÉTODO PARA EL INITIALIZER (Carga el sistema al arrancar)
+     */
+    public void ejecutarPlanificacionCompleta() {
+        log.info("Sincronizando motores ALNS y ACO...");
+        this.ultimaSimulacion = ejecutarALNS();
+    }
+
+    public SimulacionResponse getUltimaSimulacion() {
+        return ultimaSimulacion;
+    }
+
+    // =========================================================
+    // LÓGICA 1: ALNS (Optimización de Carga y Red Global)
+    // =========================================================
+    public SimulacionResponse ejecutarALNS() {
+        log.info("Ejecutando ALNS para optimización de maletas...");
         Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
+        List<Maleta> maletas = dataLoader.getMaletas();
+        
+        // Muestra para evitar saturación de memoria
+        int limite = Math.min(100, maletas.size());
+        List<LuggageBatch> batches = mapper.mapToBatches(new ArrayList<>(maletas.subList(0, limite)));
+        batches.sort(Comparator.comparing(LuggageBatch::getReadyTime));
 
-        // --- OPTIMIZACIÓN DE MEMORIA EXTREMA ---
-        log.info("Obteniendo maletas de la base de datos virtual...");
-        List<Maleta> todasLasMaletas = dataLoader.getMaletas();
-        log.info("Se cargaron {} maletas en memoria cruda.", todasLasMaletas.size());
-
-        // 1. Tomamos solo una muestra manejable (ej. 100 para pruebas)
-        int limitePrueba = Math.min(100, todasLasMaletas.size());
-        List<Maleta> maletasPrueba = todasLasMaletas.subList(0, limitePrueba);
-
-        // 2. Mapeamos SOLO la muestra
-        List<LuggageBatch> testBatches = mapper.mapToBatches(maletasPrueba);
-
-        // 3. Destruimos la referencia a la lista gigante y forzamos la limpieza de RAM
-        todasLasMaletas = null;
-        System.gc(); // Llamamos al Garbage Collector
-        log.info("Memoria liberada. Trabajando solo con {} lotes.", testBatches.size());
-
-        // 4. Ordenar cronológicamente la muestra
-        testBatches.sort(Comparator.comparing(LuggageBatch::getReadyTime));
-        log.info("Datos ordenados. La primera maleta llega el: {}", testBatches.get(0).getReadyTime());
-
-        // --- SIMULAR EL TIEMPO REAL ---
-        AlnsSolution estadoDeLaRed = new AlnsSolution(new ArrayList<>());
+        AlnsSolution solucion = new AlnsSolution(new ArrayList<>());
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
 
-        int maletasEnrutadas = 0;
-        int sinRuta = 0;
-
-        log.info("Iniciando enrutamiento matemático...");
-        long startTime = System.currentTimeMillis();
-
-        for (LuggageBatch batchActual : testBatches) {
-            // Buscamos ruta
-            enrutador.repair(estadoDeLaRed, List.of(batchActual));
-
-            // Agregamos la maleta a la red
-            estadoDeLaRed.getBatches().add(batchActual);
-
-            if (batchActual.getAssignedRoute() != null && !batchActual.getAssignedRoute().isEmpty()) {
-                maletasEnrutadas++;
-            } else {
-                sinRuta++;
-            }
+        int enrutadas = 0;
+        for (LuggageBatch b : batches) {
+            enrutador.repair(solucion, List.of(b));
+            solucion.getBatches().add(b);
+            if (b.getAssignedRoute() != null) enrutadas++;
         }
 
-        long endTime = System.currentTimeMillis();
-        log.info("Enrutamiento finalizado en {} ms.", (endTime - startTime));
+        return construirRespuestaFront(batches, enrutadas, dataLoader.getVuelos());
+    }
 
-        // ---------------------------------------------------------
-        // ARMADO DEL JSON PARA EL FRONTEND (SimulacionResponse)
-        // ---------------------------------------------------------
-        SimulacionResponse respuesta = new SimulacionResponse();
+    // =========================================================
+    // LÓGICA 2: ACO (Enrutamiento específico por Hormigas)
+    // =========================================================
+    public String ejecutarACO(String origen, String destino) {
+        log.info("Ejecutando ACO para ruta específica: {} -> {}", origen, destino);
+        
+        // Reutilizamos el grafo del mapper para ACO
+        Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
+        
+        ConfigACO config = new ConfigACO();
+        config.antCount = 20;
+        config.iterations = 100;
 
-        // 1. Asignamos las métricas reales
-        SimulacionResponse.Metricas metricas = new SimulacionResponse.Metricas();
-        metricas.setProcesadas(testBatches.size());
-        metricas.setEnrutadas(maletasEnrutadas);
-        metricas.setSinRuta(sinRuta);
-        respuesta.setMetricas(metricas);
+        AlgorithmACO aco = new AlgorithmACO(graph, config);
+        aco.run(origen, destino);
 
-        // 2. Asignamos los vuelos reales y extraemos los aeropuertos
+        return "ACO completado: Mejor ruta encontrada para " + origen + "-" + destino;
+    }
+
+    // =========================================================
+    // UTILITARIOS: Mapeo de JSON para el Frontend
+    // =========================================================
+    private SimulacionResponse construirRespuestaFront(List<LuggageBatch> batches, int enrutadas, List<Vuelo> vuelosReales) {
+        SimulacionResponse res = new SimulacionResponse();
+        
+        // Métricas
+        SimulacionResponse.Metricas m = new SimulacionResponse.Metricas();
+        m.setProcesadas(batches.size());
+        m.setEnrutadas(enrutadas);
+        m.setSinRuta(batches.size() - enrutadas);
+        res.setMetricas(m);
+
+        // Vuelos y Aeropuertos (para que el mapa se dibuje)
         List<SimulacionResponse.VueloBackend> vuelosFront = new ArrayList<>();
-        Map<String, SimulacionResponse.AeropuertoDTO> infoAeropuertos = new HashMap<>();
-
-        // Iteramos los vuelos del DataLoader
-        List<Vuelo> vuelosReales = dataLoader.getVuelos();
+        Map<String, SimulacionResponse.AeropuertoDTO> infoAero = new HashMap<>();
 
         for(Vuelo v : vuelosReales) {
-            SimulacionResponse.VueloBackend vBackend = new SimulacionResponse.VueloBackend();
+            SimulacionResponse.VueloBackend vb = new SimulacionResponse.VueloBackend();
+            vb.setId(String.valueOf(v.getId()));
+            vb.setOrigen(v.getOrigen());
+            vb.setDestino(v.getDestino());
+            vb.setFechaSalida(v.getFechaHoraSalida().toString());
+            vb.setFechaLlegada(v.getFechaHoraLlegada().toString());
+            vuelosFront.add(vb);
 
-            // 1. Convertimos el Integer del ID a String
-            vBackend.setId(String.valueOf(v.getId()));
-
-            // 2. Origen y destino
-            vBackend.setOrigen(v.getOrigen());
-            vBackend.setDestino(v.getDestino());
-
-            // 3. Nombres correctos para las fechas
-            vBackend.setFechaSalida(v.getFechaHoraSalida().toString());
-            vBackend.setFechaLlegada(v.getFechaHoraLlegada().toString());
-
-            // 4. Nombre correcto de la capacidad
-            vBackend.setCapacidadMaxima(v.getCapacidad());
-            vBackend.setCargaAsignada(0);
-
-            vuelosFront.add(vBackend);
-
-            // --- NUEVO: EXTRAER COORDENADAS DE LOS AEROPUERTOS ---
-
-            // Origen
-            if (!infoAeropuertos.containsKey(v.getOrigen())) {
-                SimulacionResponse.AeropuertoDTO origenDto = new SimulacionResponse.AeropuertoDTO();
-                origenDto.setCodigo(v.getOrigen());
-                origenDto.setLatitud(v.getAeropuertoOrigen().getLatitud());
-                origenDto.setLongitud(v.getAeropuertoOrigen().getLongitud());
-                infoAeropuertos.put(v.getOrigen(), origenDto);
-            }
-
-            // Destino
-            if (!infoAeropuertos.containsKey(v.getDestino())) {
-                SimulacionResponse.AeropuertoDTO destinoDto = new SimulacionResponse.AeropuertoDTO();
-                destinoDto.setCodigo(v.getDestino());
-                destinoDto.setLatitud(v.getAeropuertoDestino().getLatitud());
-                destinoDto.setLongitud(v.getAeropuertoDestino().getLongitud());
-                infoAeropuertos.put(v.getDestino(), destinoDto);
-            }
+            // Guardamos coordenadas para el mapa de React
+            agregarInfoAeropuerto(infoAero, v.getOrigen(), v.getAeropuertoOrigen());
+            agregarInfoAeropuerto(infoAero, v.getDestino(), v.getAeropuertoDestino());
         }
 
-        respuesta.setVuelosPlaneados(vuelosFront);
-        respuesta.setAeropuertosInfo(infoAeropuertos); // Agregamos el mapa al JSON
+        res.setVuelosPlaneados(vuelosFront);
+        res.setAeropuertosInfo(infoAero);
+        return res;
+    }
 
-        return respuesta;
+    private void agregarInfoAeropuerto(Map<String, SimulacionResponse.AeropuertoDTO> map, String cod, Aeropuerto a) {
+        if (!map.containsKey(cod)) {
+            SimulacionResponse.AeropuertoDTO dto = new SimulacionResponse.AeropuertoDTO();
+            dto.setCodigo(cod);
+            dto.setLatitud(a.getLatitud());
+            dto.setLongitud(a.getLongitud());
+            map.put(cod, dto);
+        }
     }
 }
