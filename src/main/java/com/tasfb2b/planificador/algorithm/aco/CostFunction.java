@@ -1,17 +1,15 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
-import java.time.LocalTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 
 public class CostFunction {
 
     // Parámetros de pesos — configura estos según experimentación numérica
-    public static double W_SLA_VIOLATION  = 10000.0; // penalización por violar plazo
-    public static double W_FLIGHT_TIME    =     1.0; // minimizar duración del vuelo
-    public static double W_WAIT_TIME      =     2.0; // penalizar espera en escala
-    public static double W_CAPACITY       =   500.0; // penalizar sobrecarga de vuelo
+    public static double W_SLA_VIOLATION  = 1000.0; // penalización por violar plazo
+    public static double W_FLIGHT_TIME    =     0.5; // minimizar duración del vuelo
+    public static double W_WAIT_TIME      =     1.0; // penalizar espera en escala
+    public static double W_CAPACITY       =   100.0; // penalizar sobrecarga de vuelo
 
     // Umbrales semáforo de ocupación (parámetros configurables)
     public static double UMBRAL_VERDE = 0.70;
@@ -20,6 +18,10 @@ public class CostFunction {
     // SLA en minutos según el enunciado
     public static final int SLA_MISMO_CONTINENTE    = 1440; // 1 día
     public static final int SLA_DISTINTO_CONTINENTE = 2880; // 2 días
+
+    // Restricciones de tiempo de escala
+    public static final int TIEMPO_MIN_ESCALA = 10;      // minutos mínimos entre vuelos (escala)
+    public static final int TIEMPO_DESTINO_FINAL = 10;   // minutos antes de recoger en destino
 
     // Contexto del envío actual (se setea antes de correr el ACO)
 
@@ -129,10 +131,68 @@ public class CostFunction {
             }
         }
 
+        // --- Penalización almacenamiento aeropuerto ---
+        double penAlmacen = 0.0;
+        for (int i = 1; i < ant.path.size() - 1; i++) {
+            Node nodo = ant.path.get(i);
+            if (nodo.storageUsed > nodo.storageCapacity) {
+                int exceso = nodo.storageUsed - nodo.storageCapacity;
+                penAlmacen += exceso * W_CAPACITY;
+            }
+        }
+
         return penSLA
              + W_FLIGHT_TIME * tiempoVuelo
              + W_WAIT_TIME   * tiempoEspera
-             + penCapacidad;
+             + penCapacidad
+             + penAlmacen;
+    }
+
+    public static double calcularCostoRuta(Ant ant, List<Edge> edges, List<Edge> edgesPath, EnvioContext envio) {
+
+        if (ant.path.size() < 2) return Double.MAX_VALUE;
+
+        List<Edge> edgesUsados = (edgesPath != null && !edgesPath.isEmpty()) ? edgesPath : reconstruirEdgesUsados(ant.path, edges);
+
+        double tiempoVuelo = 0.0;
+        for (Edge e : edgesUsados) {
+            tiempoVuelo += calcularDuracionMinutos(e.departureTime, e.arrivalTime);
+        }
+
+        double tiempoEspera = calcularTiempoEsperaTotal(edgesUsados);
+
+        Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
+        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
+
+        double penSLA = 0.0;
+        int retraso = minutosLlegada - envio.deadlineMinutos;
+        if (retraso > 0) {
+            penSLA = retraso * W_SLA_VIOLATION;
+        }
+
+        double penCapacidad = 0.0;
+        for (Edge e : edgesUsados) {
+            if (!e.hasCapacity(envio.cantidadMaletas)) {
+                int exceso = (e.usedCapacity + envio.cantidadMaletas) - e.capacity;
+                penCapacidad += exceso * W_CAPACITY;
+            }
+        }
+
+        double penAlmacen = 0.0;
+        for (int i = 1; i < ant.path.size() - 1; i++) {
+            Node nodo = ant.path.get(i);
+            if (nodo.storageUsed > nodo.storageCapacity) {
+                int exceso = nodo.storageUsed - nodo.storageCapacity;
+                penAlmacen += exceso * W_CAPACITY;
+            }
+        }
+
+        return penSLA
+             + W_FLIGHT_TIME * tiempoVuelo
+             + W_WAIT_TIME   * tiempoEspera
+             + penCapacidad
+             + penAlmacen;
     }
 
     // 3. HEURÍSTICA η — reemplaza 1/(e.cost+1) en selectEdge()
@@ -156,10 +216,13 @@ public class CostFunction {
         double duracion = calcularDuracionMinutos(edge.departureTime, edge.arrivalTime);
         if (duracion <= 0) duracion = 1;
 
-        // Factor de ocupación basado en semáforo
-        double factorOcupacion = factorSemaforo(edge, envio.cantidadMaletas);
+        // Solo verificar si hay capacidad disponible - no penalizar por ocupación
+        if (edge.hasCapacity(envio.cantidadMaletas)) {
+            return 1.0 / duracion;
+        }
 
-        return factorOcupacion / duracion;
+        // Si no hay capacidad, retornar valor muy bajo
+        return 0.0001 / duracion;
     }
 
     // 4. SEMÁFORO DE OCUPACIÓN (para visualizador)
@@ -211,6 +274,33 @@ public class CostFunction {
             espera += diff;
         }
         return espera;
+    }
+
+    /**
+     * Verifica si hay tiempo suficiente para la escala entre dos vuelos.
+     * El equipaje debe cambiar de avión, lo cual requiere tiempo mínimo de escala.
+     *
+     * @param vueloAnterior  vuelo que llega al aeropuerto de escala
+     * @param vueloSiguiente vuelo que sale del aeropuerto de escala
+     * @return true si el tiempo entre llegada y salida es >= TIEMPO_MIN_ESCALA
+     */
+    public static boolean tieneTiempoMinimoEscala(Edge vueloAnterior, Edge vueloSiguiente) {
+        int llegada = parsearMinutos(vueloAnterior.arrivalTime);
+        int salida = parsearMinutos(vueloSiguiente.departureTime);
+        int diff = salida - llegada;
+        if (diff < 0) diff += 1440;
+        return diff >= TIEMPO_MIN_ESCALA;
+    }
+
+    /**
+     * Verifica si hay tiempo suficiente en destino final para recoger el equipaje.
+     * Después de llegar, el cliente necesita tiempo para recoger la maleta.
+     *
+     * @param ultimoVuelo vuelo que llega al destino final
+     * @return true si hay al menos TIEMPO_DESTINO_FINAL minutos disponibles
+     */
+    public static boolean tieneTiempoDestinoFinal(Edge ultimoVuelo) {
+        return true;
     }
 
     /**

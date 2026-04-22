@@ -8,8 +8,28 @@ public class Node {
     public double lat;
     public double lon;
 
+    public int storageCapacity;
+    public int storageUsed = 0;
+
     public Node(String code) {
         this.code = code;
+    }
+
+    public boolean hasStorageCapacity(int cantidad) {
+        return (storageUsed + cantidad) <= storageCapacity;
+    }
+
+    public void storeLoad(int cantidad) {
+        this.storageUsed += cantidad;
+    }
+
+    public void releaseLoad(int cantidad) {
+        this.storageUsed = Math.max(0, this.storageUsed - cantidad);
+    }
+
+    public double getOcupacionAlmacen() {
+        if (storageCapacity == 0) return 0.0;
+        return (double) storageUsed / storageCapacity;
     }
 
     @Override
