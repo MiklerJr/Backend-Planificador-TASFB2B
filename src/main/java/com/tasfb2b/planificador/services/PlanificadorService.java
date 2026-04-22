@@ -41,39 +41,36 @@ public class PlanificadorService {
         return procesarTodosLosOrigenesConLimite(Integer.MAX_VALUE);
     }
 
-public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePorOrigen) {
+    public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePorOrigen) {
         long startTime = System.currentTimeMillis();
 
         List<Aeropuerto> Aeropuertos = aeropuertoLoader.cargarAeropuertos();
         List<String> vuelos = cargarVuelos();
 
         ResumenPlanificacionGlobal resumen = new ResumenPlanificacionGlobal();
-        List<PlanificacionResultado> todosLosResultados = new ArrayList<>();
         Map<String, ResumenPlanificacionGlobal.EstadisticaOrigen> statsPorOrigen = new HashMap<>();
+        final int[] totalEnviosProcesados = {0};
+        final int[] totalEnviosExitosos = {0};
+        final int[] totalMaletas = {0};
+        final double[] costoTotalExitosos = {0.0};
 
         ConfigACO config = new ConfigACO();
         config.antCount = 10;
         config.iterations = 50;
 
         for (String origen : ORIGENES_DISPONIBLES) {
+            System.out.println("Procesando envíos desde origen: " + origen);
+
             Graph graph = graphBuilder.build(Aeropuertos, vuelos);
-
-            List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
-
-            if (envios.isEmpty()) {
-                continue;
-            }
 
             ResumenPlanificacionGlobal.EstadisticaOrigen statsOrigen =
                     new ResumenPlanificacionGlobal.EstadisticaOrigen();
             statsOrigen.origen = origen;
 
-            int count = 0;
-            for (EnvioDTO e : envios) {
-                if (count >= limitePorOrigen) break;
+            final int[] count = {0};
+            final int limite = (limitePorOrigen <= 0) ? Integer.MAX_VALUE : limitePorOrigen;
 
-                PlanificacionResultado resultado;
-
+            envioLoader.procesarEnvios(origen, limite, e -> {
                 try {
                     CostFunction.EnvioContext envio = new CostFunction.EnvioContext(
                             origen, e.destinoICAO, e.cantidadMaletas,
@@ -86,67 +83,49 @@ public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePo
                     Ant mejor = aco.getMejorAnt();
 
                     if (mejor != null && !mejor.path.isEmpty()) {
-                        List<String> ruta = mejor.path.stream()
-                                .map(n -> n.code)
-                                .toList();
-
-                        resultado = new PlanificacionResultado(
-                                e.id,
-                                origen,
-                                e.destinoICAO,
-                                e.cantidadMaletas,
-                                ruta,
-                                mejor.totalCost,
-                                true
-                        );
-
                         for (Edge edge : mejor.edgesPath) {
                             edge.useCapacity(e.cantidadMaletas);
                         }
 
                         statsOrigen.exitosos++;
-                        if (mejor.edgesPath.size() == 0) {
+                        if (mejor.edgesPath.isEmpty()) {
                             statsOrigen.rutasDirectas++;
                         } else {
                             statsOrigen.rutasConEscala++;
                         }
+
+                        costoTotalExitosos[0] += mejor.totalCost;
+                        totalEnviosExitosos[0]++;
                     } else {
-                        resultado = PlanificacionResultado.fallido(
-                                e.id, origen, e.destinoICAO,
-                                "No se encontró ruta válida"
-                        );
                         statsOrigen.fallidos++;
                     }
                 } catch (Exception ex) {
-                    resultado = PlanificacionResultado.fallido(
-                            e.id, origen, e.destinoICAO,
-                            ex.getMessage()
-                    );
                     statsOrigen.fallidos++;
                 }
 
-                todosLosResultados.add(resultado);
                 statsOrigen.totalEnvios++;
-                count++;
-            }
+                totalEnviosProcesados[0]++;
+                totalMaletas[0] += e.cantidadMaletas;
+                count[0]++;
+
+                if (count[0] % 10000 == 0) {
+                    System.out.println("Origen " + origen + ": procesados " + count[0] + " envíos...");
+                }
+            });
 
             statsPorOrigen.put(origen, statsOrigen);
-            System.out.println("Procesados " + count + " envíos desde " + origen);
+            System.out.println("Procesados " + count[0] + " envíos desde " + origen);
         }
 
-        resumen.totalEnviosProcesados = todosLosResultados.size();
-        resumen.totalEnviosExitosos = (int) todosLosResultados.stream().filter(r -> r.exitoso).count();
+        resumen.totalEnviosProcesados = totalEnviosProcesados[0];
+        resumen.totalEnviosExitosos = totalEnviosExitosos[0];
         resumen.totalEnviosFallidos = resumen.totalEnviosProcesados - resumen.totalEnviosExitosos;
-        resumen.totalMaletas = todosLosResultados.stream().mapToInt(r -> r.cantidadMaletas).sum();
+        resumen.totalMaletas = totalMaletas[0];
         resumen.tiempoEjecucionMs = System.currentTimeMillis() - startTime;
         resumen.estadisticasPorOrigen = statsPorOrigen;
 
-        double costoTotalExitosos = todosLosResultados.stream()
-                .filter(r -> r.exitoso)
-                .mapToDouble(r -> r.costoTotal)
-                .sum();
         resumen.costoPromedioExitosos = resumen.totalEnviosExitosos > 0
-                ? costoTotalExitosos / resumen.totalEnviosExitosos : 0;
+                ? costoTotalExitosos[0] / resumen.totalEnviosExitosos : 0;
 
         return resumen;
     }
