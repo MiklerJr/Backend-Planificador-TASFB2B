@@ -20,11 +20,9 @@ public class PlanificadorController {
 
         SimulacionResponse respuesta;
 
-        // Aquí evaluamos qué "zapato" usar según lo que pida el frontend
         if ("aco".equalsIgnoreCase(algoritmo)) {
             respuesta = service.ejecutarACO();
         } else {
-            // Por defecto (Zapato Rojo - ALNS)
             respuesta = service.getUltimaSimulacion();
             if (respuesta == null) {
                 respuesta = service.ejecutarALNS();
