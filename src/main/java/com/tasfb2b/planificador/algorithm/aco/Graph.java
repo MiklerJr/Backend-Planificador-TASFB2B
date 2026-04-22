@@ -27,4 +27,16 @@ public class Graph {
     public void addEdge(Edge edge) {
         edges.add(edge);
     }
+
+    public List<Edge> getNeighbors(String nodeId) {
+        List<Edge> neighbors = new ArrayList<>();
+
+        for (Edge edge : edges) {
+            // Buscamos si el vuelo sale del nodo que nos están preguntando
+            if (edge.from != null && edge.from.code.equals(nodeId)) {
+                neighbors.add(edge);
+            }
+        }
+        return neighbors;
+    }
 }
