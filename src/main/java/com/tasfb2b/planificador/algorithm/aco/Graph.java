@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
+import jakarta.validation.constraints.NotBlank;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -14,5 +15,16 @@ public class Graph {
         return edges.stream()
                 .filter(e -> e.from.code.equals(nodeCode))
                 .toList();
+    }
+
+    public void addNode(@NotBlank(message = "El aeropuerto debe tener un codigo de identificación") String codigo) {
+        // Solo lo agregamos si no existe previamente
+        if (!nodes.containsKey(codigo)) {
+            nodes.put(codigo, new Node(codigo));
+        }
+    }
+
+    public void addEdge(Edge edge) {
+        edges.add(edge);
     }
 }
