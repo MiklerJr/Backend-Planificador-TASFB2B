@@ -21,8 +21,9 @@ public class GraphBuilder {
         for (Aeropuerto a : aeropuertos) {
 
             Node node = new Node(a.getCodigo());
-            node.lat = a.getLatitud();
-            node.lon = a.getLongitud();
+            node.lat = a.getLatitud() != null ? a.getLatitud() : 0.0;
+            node.lon = a.getLongitud() != null ? a.getLongitud() : 0.0;
+            node.storageCapacity = a.getCapacidad() != null ? a.getCapacidad() : 500;
             graph.nodes.put(node.code, node);
         }
 
@@ -47,8 +48,6 @@ public class GraphBuilder {
             if (from == null || to == null) {
                 continue;
             }
-
-            double d = distance(from, to); // calculamos distancia entre aeropuertos
 
             Edge edge = new Edge();
             edge.from = from;
@@ -109,21 +108,5 @@ public class GraphBuilder {
         int m = Integer.parseInt(parts[1]);
 
         return h * 60 + m;
-    }
-
-
-    double distance(Node a, Node b) {
-        // Haversine formula
-        double R = 6371; // Earth radius in km
-        double dLat = Math.toRadians(b.lat - a.lat);
-        double dLon = Math.toRadians(b.lon - a.lon);
-        double lat1 = Math.toRadians(a.lat);
-        double lat2 = Math.toRadians(b.lat);
-
-        double haversine = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(lat1) * Math.cos(lat2) *
-                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-        return R * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
     }
 }
