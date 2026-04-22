@@ -9,12 +9,14 @@ public class AlgorithmACO {
 
     private Graph graph;
     private ConfigACO config;
+    private CostFunction.EnvioContext envioContext;
 
     private List<Ant> ants = new ArrayList<>();
 
-    public AlgorithmACO(Graph graph, ConfigACO config) {
+    public AlgorithmACO(Graph graph, ConfigACO config, CostFunction.EnvioContext envioContext) {
         this.graph = graph;
         this.config = config;
+        this.envioContext = envioContext;
 
         for (int i = 0; i < config.antCount; i++) {
             ants.add(new Ant());
@@ -52,7 +54,7 @@ public class AlgorithmACO {
 
             if (chosen == null) break;
 
-            if (!chosen.hasCapacity(1)) break;
+            if (!chosen.hasCapacity(envioContext.cantidadMaletas)) break;
 
             chosen.useCapacity(1);
 
@@ -61,6 +63,8 @@ public class AlgorithmACO {
             current = chosen.to;
             ant.path.add(current);
         }
+        
+        ant.totalCost = CostFunction.calcularCostoRuta(ant, graph.edges, envioContext);
     }
 
 
@@ -73,7 +77,7 @@ public class AlgorithmACO {
         for (Edge e : edges) {
 
             double pheromone = Math.pow(e.pheromone, config.alpha);
-            double heuristic = Math.pow(1.0 / (e.cost + 1), config.beta);
+            double heuristic = Math.pow(CostFunction.heuristica(e, envioContext), config.beta);
 
             double value = pheromone * heuristic;
 

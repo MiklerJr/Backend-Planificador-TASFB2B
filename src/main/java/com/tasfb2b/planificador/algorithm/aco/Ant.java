@@ -8,7 +8,7 @@ public class Ant {
     public List<Node> path = new ArrayList<>();
     public double totalCost = 0;
 
-    public int load; // 📦 paquetes que transporta
+    public int load; //  paquetes que transporta
 
     public void reset() {
         path.clear();

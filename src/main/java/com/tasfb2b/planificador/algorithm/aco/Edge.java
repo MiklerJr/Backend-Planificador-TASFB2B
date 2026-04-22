@@ -22,4 +22,7 @@ public class Edge {
     public void useCapacity(int demand) {
         this.usedCapacity += demand;
     }
+    public double getDuracionMinutos() {
+        return CostFunction.calcularDuracionMinutos(this.departureTime, this.arrivalTime);
+    }
 }

@@ -17,13 +17,13 @@ public class GraphBuilder {
 
         Graph graph = new Graph();
 
-        // 1. CREAR NODOS
+        // 1. CREAR NODOS - aeropuertos 
         for (Aeropuerto a : aeropuertos) {
 
             Node node = new Node(a.getCodigo());
-            graph.nodes.put(node.code, node);
             node.lat = a.getLatitud();
             node.lon = a.getLongitud();
+            graph.nodes.put(node.code, node);
         }
 
         // 2. CREAR ARISTAS (VUELOS)
@@ -31,32 +31,28 @@ public class GraphBuilder {
 
             if (line == null || line.isEmpty()) continue;
 
-            // limpiar formato tipo "//SKBO-SEQM-..."
-            line = line.replace("//", "").trim();
-
             String[] parts = line.split("-");
 
             if (parts.length < 5) continue;
 
-            String origin = parts[0];
-            String destination = parts[1];
-            String departure = parts[2];
-            String arrival = parts[3];
+            String origin = parts[0]; // codigio aeropuerto origen
+            String destination = parts[1]; // codigo aeropuerto destino
+            String departure = parts[2]; // hora salida : HH:MM
+            String arrival = parts[3];  // hora llegada : HH:MM
             int capacity = parseCapacity(parts[4]);
 
-            Node from = graph.nodes.get(origin);
+            Node from = graph.nodes.get(origin); // extraemos nodos del grafo por codigo
             Node to = graph.nodes.get(destination);
 
             if (from == null || to == null) {
                 continue;
             }
 
-            double d = distance(from, to);
+            double d = distance(from, to); // calculamos distancia entre aeropuertos
 
             Edge edge = new Edge();
             edge.from = from;
             edge.to = to;
-            edge.distance = d;
 
             edge.departureTime = departure;
             edge.arrivalTime = arrival;
@@ -69,7 +65,7 @@ public class GraphBuilder {
 
         return graph;
     }
-
+    
     // CAPACIDAD (#### o números)
     private int parseCapacity(String value) {
 
@@ -113,5 +109,21 @@ public class GraphBuilder {
         int m = Integer.parseInt(parts[1]);
 
         return h * 60 + m;
+    }
+
+
+    double distance(Node a, Node b) {
+        // Haversine formula
+        double R = 6371; // Earth radius in km
+        double dLat = Math.toRadians(b.lat - a.lat);
+        double dLon = Math.toRadians(b.lon - a.lon);
+        double lat1 = Math.toRadians(a.lat);
+        double lat2 = Math.toRadians(b.lat);
+
+        double haversine = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1) * Math.cos(lat2) *
+                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+        return R * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
     }
 }
