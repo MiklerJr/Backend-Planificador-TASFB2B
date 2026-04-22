@@ -1,3 +1,14 @@
 spring:
   application:
     name: planificador
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+data:
+  airports:
+    file: src/main/resources/data/c.1inf54.26.1.v1.Aeropuerto.husos.v1.20250818__estudiantes.txt
+  flights:
+    file: src/main/resources/data/planes_vuelo.txt
+  baggage:
+    dir: src/main/resources/data/_envios_preliminar_/
