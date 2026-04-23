@@ -2,7 +2,6 @@ package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.services.PlanificadorService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -11,24 +10,20 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/planificador")
 public class PlanificadorController {
 
-    @Autowired
-    private PlanificadorService service;
+    private final PlanificadorService service;
+
+    public PlanificadorController(PlanificadorService service) {
+        this.service = service;
+    }
 
     @GetMapping("/ejecutar")
-    public ResponseEntity<SimulacionResponse> obtenerPlanActual(
+    public ResponseEntity<SimulacionResponse> ejecutar(
             @RequestParam(defaultValue = "alns") String algoritmo) {
 
-        SimulacionResponse respuesta;
-
-        if ("aco".equalsIgnoreCase(algoritmo)) {
-            respuesta = service.ejecutarACO();
-        } else {
-            respuesta = service.getUltimaSimulacion();
-            if (respuesta == null) {
-                respuesta = service.ejecutarALNS();
-            }
-        }
-
-        return ResponseEntity.ok(respuesta);
+        return switch (algoritmo.toLowerCase()) {
+            case "alns" -> ResponseEntity.ok(service.ejecutarALNS());
+            case "aco"  -> ResponseEntity.ok(service.ejecutarACO());
+            default     -> ResponseEntity.badRequest().build();
+        };
     }
 }
