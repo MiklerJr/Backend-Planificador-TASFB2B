@@ -1,7 +1,5 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
-import java.time.LocalTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 
@@ -202,6 +200,10 @@ public class CostFunction {
             return false;
         }
         if (edgesPath == null || edgesPath.isEmpty()) {
+            return false;
+        }
+        Node ultimoNodo = ant.path.get(ant.path.size() - 1);
+        if (!envio.destinoICAO.equals(ultimoNodo.code)) {
             return false;
         }
 

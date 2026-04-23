@@ -6,7 +6,6 @@ import com.tasfb2b.planificador.model.Aeropuerto;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 class DiagnosticoRutasTest {
 

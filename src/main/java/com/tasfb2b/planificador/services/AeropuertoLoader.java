@@ -18,8 +18,8 @@ public class AeropuertoLoader {
         List<Aeropuerto> aeropuertos = new ArrayList<>();
 
         try {
-
-
+            System.out.println("================================");
+            System.out.println("Iniciando carga de aeropuertos...");
             InputStream is = getClass()
                     .getClassLoader()
                     .getResourceAsStream("data/c.1inf54.26.1.v1.Aeropuerto.husos.v1.20250818__estudiantes.txt");
@@ -60,6 +60,8 @@ public class AeropuertoLoader {
                     aeropuertos.add(a);
                 }
             }
+
+            System.out.println(aeropuertos.size() + " aeropuertos cargados correctamente.");
 
         } catch (Exception e) {
             throw new RuntimeException("Error cargando aeropuertos", e);
@@ -149,7 +151,6 @@ public class AeropuertoLoader {
             a.setContinente(continente);
             a.setActivo(true);
 
-            System.out.println("Aeropuerto cargado: " + a.getCodigo() + " | Continente: " + a.getContinente() );
 
             return a;
 
