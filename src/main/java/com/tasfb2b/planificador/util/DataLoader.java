@@ -4,16 +4,16 @@ import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
 import com.tasfb2b.planificador.model.Vuelo;
 import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import lombok.extern.slf4j.Slf4j; // <-- Importar
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -32,10 +32,9 @@ public class DataLoader {
     private String baggageDir;
 
     private final AeropuertoParser aeropuertoParser;
-    private final FlightParser      vueloParser;
-    private final BaggageParser     maletaParser;
+    private final FlightParser     vueloParser;
+    private final BaggageParser    maletaParser;
 
-    // Compilamos la expresión regular una sola vez
     private static final Pattern BAGGAGE_PATTERN = Pattern.compile("_([A-Z]{4})_");
 
     public DataLoader(AeropuertoParser aeropuertoParser,
@@ -48,7 +47,11 @@ public class DataLoader {
 
     private List<Aeropuerto> aeropuertos = new ArrayList<>();
     private List<Vuelo>      vuelos      = new ArrayList<>();
-    private List<Maleta>     maletas     = new ArrayList<>();
+
+    // Maletas indexadas por ventana de 10 min (TreeMap = ya ordenado por clave temporal).
+    // Cada ventana solo existe en RAM mientras su lista tiene referencias; al liberarse la
+    // lista desde el servicio, el GC puede reclamar esos objetos.
+    private final TreeMap<LocalDateTime, List<Maleta>> maletasPorVentana = new TreeMap<>();
 
     @PostConstruct
     public void load() throws IOException {
@@ -58,39 +61,66 @@ public class DataLoader {
 
         vuelos = vueloParser.parse(Path.of(flightsFile), aeropuertoMap);
 
+        int[] totalMaletas = {0};
         Files.list(Path.of(baggageDir))
-                .filter(p -> p.toString().toLowerCase().endsWith(".txt")) // Evita problemas con ".TXT"
+                .filter(p -> p.toString().toLowerCase().endsWith(".txt"))
                 .forEach(file -> {
                     String nombreArchivo = file.getFileName().toString();
                     Matcher matcher = BAGGAGE_PATTERN.matcher(nombreArchivo.toUpperCase());
-
                     if (!matcher.find()) return;
 
-                    String codigo = matcher.group(1);
-                    Aeropuerto origen = aeropuertoMap.get(codigo);
+                    Aeropuerto origen = aeropuertoMap.get(matcher.group(1));
+                    if (origen == null) return;
 
-                    if (origen != null) {
-                        try {
-                            maletas.addAll(maletaParser.parse(file, origen, aeropuertoMap));
-                        } catch (IOException e) {
-                            // Mejor usar Logger, pero esto es más seguro que System.err
-                            System.err.println("Error leyendo " + file + ": " + e.getMessage());
+                    try {
+                        List<Maleta> lote = maletaParser.parse(file, origen, aeropuertoMap);
+                        // Indexar cada maleta en su ventana de 10 min en una sola pasada,
+                        // sin crear una lista plana adicional.
+                        for (Maleta m : lote) {
+                            maletasPorVentana
+                                    .computeIfAbsent(claveVentana(m.getFechaHoraRegistro()), k -> new ArrayList<>())
+                                    .add(m);
                         }
+                        totalMaletas[0] += lote.size();
+                    } catch (IOException e) {
+                        log.error("Error leyendo {}: {}", file, e.getMessage());
                     }
                 });
 
-        System.out.printf("Cargados: %d aeropuertos, %d vuelos, %d maletas%n",
-                aeropuertos.size(), vuelos.size(), maletas.size());
+        log.info("=================================================");
+        log.info("RESUMEN DE DATOS CARGADOS EN MEMORIA");
+        log.info("Aeropuertos : {}", aeropuertos.size());
+        log.info("Vuelos      : {}", vuelos.size());
+        log.info("Maletas     : {} en {} ventanas de 10 min", totalMaletas[0], maletasPorVentana.size());
+        log.info("=================================================");
+    }
 
-        log.info("=================================================");
-        log.info("✈️ RESUMEN DE DATOS CARGADOS EN MEMORIA ✈️");
-        log.info("Aeropuertos: {}", aeropuertos.size());
-        log.info("Vuelos: {}", vuelos.size());
-        log.info("Maletas: {}", maletas.size());
-        log.info("=================================================");
+    // Ventanas disponibles en orden cronológico (TreeMap garantiza el orden).
+    public Set<LocalDateTime> getVentanas() {
+        return maletasPorVentana.keySet();
+    }
+
+    // Devuelve las maletas de una ventana sin eliminarlas (permite re-ejecución).
+    public List<Maleta> getMaletasVentana(LocalDateTime ventana) {
+        return maletasPorVentana.getOrDefault(ventana, Collections.emptyList());
+    }
+
+    // Muestra pequeña para ACO u otros usos que no requieren el dataset completo.
+    public List<Maleta> getMaletasMuestra(int limite) {
+        return maletasPorVentana.values().stream()
+                .flatMap(List::stream)
+                .limit(limite)
+                .collect(Collectors.toList());
+    }
+
+    public int getTotalMaletas() {
+        return maletasPorVentana.values().stream().mapToInt(List::size).sum();
     }
 
     public List<Aeropuerto> getAeropuertos() { return aeropuertos; }
     public List<Vuelo>      getVuelos()      { return vuelos; }
-    public List<Maleta>     getMaletas()     { return maletas; }
+
+    private LocalDateTime claveVentana(LocalDateTime t) {
+        return t.truncatedTo(ChronoUnit.HOURS).plusMinutes((t.getMinute() / 10) * 10L);
+    }
 }

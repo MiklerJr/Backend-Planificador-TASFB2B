@@ -18,7 +18,9 @@ public class FlightParser {
 
     public List<Vuelo> parse(Path file, Map<String, Aeropuerto> aeropuertoMap) throws IOException {
         List<Vuelo> result = new ArrayList<>();
-        LocalDate hoy = LocalDate.now(); // Precaución: Esto ancla los vuelos al día en que se ejecuta el código
+        // Fecha base neutra: solo importa la hora de salida/llegada.
+        // El Dijkstra calcula la próxima ocurrencia real del vuelo dado el readyTime de la maleta.
+        final LocalDate BASE = LocalDate.of(2026, 1, 1);
 
         for (String line : FileUtils.leerLineasSeguro(file)) {
             line = line.trim();
@@ -56,11 +58,11 @@ public class FlightParser {
                 int llegadaMinuto = Integer.parseInt(horaLlegadaStr[1]);
                 int capacidad     = Integer.parseInt(parts[4].trim());
 
-                LocalDateTime fechaSalida  = LocalDateTime.of(hoy, LocalTime.of(salidaHora, salidaMinuto));
-                LocalDateTime fechaLlegada = LocalDateTime.of(hoy, LocalTime.of(llegadaHora % 24, llegadaMinuto));
+                LocalDateTime fechaSalida  = LocalDateTime.of(BASE, LocalTime.of(salidaHora, salidaMinuto));
+                LocalDateTime fechaLlegada = LocalDateTime.of(BASE, LocalTime.of(llegadaHora % 24, llegadaMinuto));
 
                 if (fechaLlegada.isBefore(fechaSalida)) {
-                    fechaLlegada = fechaLlegada.plusDays(1);
+                    fechaLlegada = fechaLlegada.plusDays(1); // vuelo que cruza medianoche
                 }
 
                 Vuelo vuelo = new Vuelo();

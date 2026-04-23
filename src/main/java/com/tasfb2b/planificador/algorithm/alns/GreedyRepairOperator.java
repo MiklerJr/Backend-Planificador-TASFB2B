@@ -2,12 +2,19 @@ package com.tasfb2b.planificador.algorithm.alns;
 
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
+
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.*;
 
 public class GreedyRepairOperator implements RepairOperator {
 
-    private Graph graph;
+    private final Graph graph;
+
+    // Clave: flightId + "_" + fecha (ej. "SKBO-SPIM-06:00_2026-03-15")
+    // Cada día tiene su propia capacidad independiente, porque es una instancia distinta del vuelo.
+    private final Map<String, Integer> flightOccupancy = new HashMap<>();
 
     public GreedyRepairOperator(Graph graph) {
         this.graph = graph;
@@ -16,94 +23,107 @@ public class GreedyRepairOperator implements RepairOperator {
     @Override
     public void repair(AlnsSolution solution, List<LuggageBatch> unassigned) {
         for (LuggageBatch batch : unassigned) {
-            // Le pasamos 'solution' como segundo parámetro
-            List<Edge> bestRoute = findShortestPath(batch, solution);
-            batch.setAssignedRoute(bestRoute);
+            RouteResult result = findShortestPath(batch);
+            batch.setAssignedRoute(result.edges);
+            for (int i = 0; i < result.edges.size(); i++) {
+                String key = result.edges.get(i).id + "_" + result.actualDepartures.get(i).toLocalDate();
+                flightOccupancy.merge(key, batch.getQuantity(), Integer::sum);
+            }
         }
     }
 
-    // Agregamos 'AlnsSolution solution' a los parámetros que recibe el método
-    private List<Edge> findShortestPath(LuggageBatch batch, AlnsSolution solution) {
-        String startNode = batch.getOriginCode();
+    private RouteResult findShortestPath(LuggageBatch batch) {
+        String startNode  = batch.getOriginCode();
         String targetNode = batch.getDestCode();
         LocalDateTime readyTime = batch.getReadyTime();
 
-        // Cola de prioridad para explorar siempre el camino que llega más temprano
-        PriorityQueue<RouteState> pq = new PriorityQueue<>(Comparator.comparing(state -> state.currentTime));
-
-        // Mapa para evitar ciclos infinitos (guarda la hora más temprana en la que llegamos a un nodo)
+        PriorityQueue<RouteState> pq = new PriorityQueue<>(Comparator.comparing(s -> s.currentTime));
         Map<String, LocalDateTime> bestArrivalTimes = new HashMap<>();
 
-        // Estado inicial
-        pq.add(new RouteState(startNode, readyTime, new ArrayList<>()));
+        pq.add(new RouteState(startNode, readyTime, new ArrayList<>(), new ArrayList<>()));
         bestArrivalTimes.put(startNode, readyTime);
 
         while (!pq.isEmpty()) {
             RouteState current = pq.poll();
 
-            // Si llegamos al destino, retornamos la ruta
             if (current.nodeCode.equals(targetNode)) {
-                return current.route;
+                return new RouteResult(current.route, current.actualDepartures);
             }
 
-            // Explorar vuelos que salen desde el nodo actual
             for (Edge flight : graph.getNeighbors(current.nodeCode)) {
+                // Tiempo mínimo de espera: 0 min en el origen, 10 min de escala en conexiones
+                long minWait = current.route.isEmpty() ? 0L : 10L;
+                LocalDateTime minDeparture = current.currentTime.plusMinutes(minWait);
 
-                // Regla de tiempo: El vuelo debe salir al menos 10 minutos DESPUÉS del currentTime
-                // (Si es el primer vuelo desde el origen, el currentTime es el readyTime de la maleta)
-                boolean isFirstFlight = current.route.isEmpty();
-                long minWaitTime = isFirstFlight ? 0 : 10;
+                // Próxima ocurrencia diaria del vuelo a partir de minDeparture
+                LocalDateTime actualDeparture = nextDeparture(flight.departureTime.toLocalTime(), minDeparture);
+                LocalDateTime actualArrival   = actualDeparture.plus(flightDuration(flight));
 
-                // Solo consideramos el vuelo si hay espacio para TODO el lote
-                // (Ahora 'solution' es reconocida sin problemas)
-                if (getRemainingCapacity(flight, solution) < batch.getQuantity()) {
-                    continue;
-                }
+                // Capacidad por instancia diaria del vuelo
+                String capacityKey = flight.id + "_" + actualDeparture.toLocalDate();
+                if (getRemainingCapacity(flight, capacityKey) < batch.getQuantity()) continue;
 
-                LocalDateTime minDepartureAllowed = current.currentTime.plusMinutes(minWaitTime);
+                String nextNode = flight.to.code;
+                if (!bestArrivalTimes.containsKey(nextNode)
+                        || actualArrival.isBefore(bestArrivalTimes.get(nextNode))) {
 
-                if (!flight.departureTime.isBefore(minDepartureAllowed)) {
+                    bestArrivalTimes.put(nextNode, actualArrival);
 
-                    // Comprobar si este vuelo nos hace llegar al siguiente nodo más rápido que antes
-                    LocalDateTime arrivalAtNext = flight.arrivalTime;
-                    String nextNode = flight.to.code;
+                    List<Edge> newRoute       = new ArrayList<>(current.route);
+                    List<LocalDateTime> newDep = new ArrayList<>(current.actualDepartures);
+                    newRoute.add(flight);
+                    newDep.add(actualDeparture);
 
-                    if (!bestArrivalTimes.containsKey(nextNode) || arrivalAtNext.isBefore(bestArrivalTimes.get(nextNode))) {
-
-                        bestArrivalTimes.put(nextNode, arrivalAtNext);
-
-                        // Crear la nueva ruta agregando este vuelo
-                        List<Edge> newRoute = new ArrayList<>(current.route);
-                        newRoute.add(flight);
-
-                        pq.add(new RouteState(nextNode, arrivalAtNext, newRoute));
-                    }
+                    pq.add(new RouteState(nextNode, actualArrival, newRoute, newDep));
                 }
             }
         }
 
-        // Si la cola se vacía y no encontramos el targetNode, no hay ruta posible
-        return new ArrayList<>();
+        return RouteResult.EMPTY;
     }
 
-    // Clase auxiliar interna para manejar el estado de la búsqueda
-    private static class RouteState {
-        String nodeCode;
-        LocalDateTime currentTime;
-        List<Edge> route;
+    // Dado un horario de salida (hora:min) y el instante más temprano permitido,
+    // devuelve la próxima ocurrencia del vuelo: hoy si todavía no pasó, mañana si ya pasó.
+    private LocalDateTime nextDeparture(LocalTime flightTime, LocalDateTime earliest) {
+        LocalDateTime candidate = LocalDateTime.of(earliest.toLocalDate(), flightTime);
+        return candidate.isBefore(earliest) ? candidate.plusDays(1) : candidate;
+    }
 
-        public RouteState(String nodeCode, LocalDateTime currentTime, List<Edge> route) {
-            this.nodeCode = nodeCode;
-            this.currentTime = currentTime;
-            this.route = route;
+    // Duración real del vuelo a partir de las horas base almacenadas en el Edge.
+    // Si la llegada está antes que la salida (vuelo que cruza medianoche), suma un día.
+    private Duration flightDuration(Edge flight) {
+        Duration d = Duration.between(flight.departureTime, flight.arrivalTime);
+        return d.isNegative() ? d.plusDays(1) : d;
+    }
+
+    private int getRemainingCapacity(Edge flight, String capacityKey) {
+        return (int) flight.capacity - flightOccupancy.getOrDefault(capacityKey, 0);
+    }
+
+    private static class RouteState {
+        final String nodeCode;
+        final LocalDateTime currentTime;
+        final List<Edge> route;
+        final List<LocalDateTime> actualDepartures;
+
+        RouteState(String nodeCode, LocalDateTime currentTime,
+                   List<Edge> route, List<LocalDateTime> actualDepartures) {
+            this.nodeCode         = nodeCode;
+            this.currentTime      = currentTime;
+            this.route            = route;
+            this.actualDepartures = actualDepartures;
         }
     }
 
-    private int getRemainingCapacity(Edge flight, AlnsSolution solution) {
-        int occupied = solution.getBatches().stream()
-                .filter(b -> b.getAssignedRoute() != null && b.getAssignedRoute().contains(flight))
-                .mapToInt(LuggageBatch::getQuantity)
-                .sum();
-        return (int) flight.capacity - occupied;
+    private static class RouteResult {
+        final List<Edge> edges;
+        final List<LocalDateTime> actualDepartures;
+
+        static final RouteResult EMPTY = new RouteResult(Collections.emptyList(), Collections.emptyList());
+
+        RouteResult(List<Edge> edges, List<LocalDateTime> actualDepartures) {
+            this.edges            = edges;
+            this.actualDepartures = actualDepartures;
+        }
     }
 }

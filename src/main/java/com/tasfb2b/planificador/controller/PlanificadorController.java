@@ -26,4 +26,11 @@ public class PlanificadorController {
             default     -> ResponseEntity.badRequest().build();
         };
     }
+
+    @GetMapping("/bloque/{index}")
+    public ResponseEntity<SimulacionResponse.BloqueSimulacion> getBloque(@PathVariable int index) {
+        SimulacionResponse.BloqueSimulacion bloque = service.getBloque(index);
+        if (bloque == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(bloque);
+    }
 }

@@ -18,7 +18,7 @@ public class SimulacionInitializer implements CommandLineRunner {
         System.out.println("🚀 [SISTEMA] Arrancando motor ALNS de forma autónoma...");
         try {
             // Aquí llamas a tu lógica de inicialización y cálculo
-            planificadorService.ejecutarPlanificacionCompleta();
+            planificadorService.ejecutarALNS();
             System.out.println("✅ [SISTEMA] Planificación inicial completada y lista en memoria.");
         } catch (Exception e) {
             System.err.println("❌ [ERROR] Falló la ejecución inicial: " + e.getMessage());
