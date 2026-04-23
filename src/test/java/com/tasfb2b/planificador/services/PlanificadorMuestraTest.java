@@ -19,7 +19,7 @@ class PlanificadorMuestraTest {
     void testProcesarMuestra() {
         System.out.println("Iniciando procesamiento de muestra representativa...\n");
 
-        ResumenPlanificacionGlobal resumen = planificadorService.procesarTodosLosOrigenesConLimite(100);
+        ResumenPlanificacionGlobal resumen = planificadorService.procesarTodosLosOrigenesConLimite(100, 15);
 
         System.out.println("\n=== RESUMEN GLOBAL ===");
         System.out.println("Total envíos procesados: " + resumen.totalEnviosProcesados);

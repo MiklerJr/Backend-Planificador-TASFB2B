@@ -19,7 +19,7 @@ class PlanificadorGlobalTest {
     void testProcesarTodosLosOrigenes() {
         System.out.println("Iniciando procesamiento de TODOS los envíos de todos los orígenes...\n");
 
-        ResumenPlanificacionGlobal resumen = planificadorService.procesarTodosLosOrigenes();
+        ResumenPlanificacionGlobal resumen = planificadorService.procesarTodosLosOrigenesConLimite(Integer.MAX_VALUE, 5);
 
         System.out.println("\n=== RESUMEN GLOBAL ===");
         System.out.println("Total envíos procesados: " + resumen.totalEnviosProcesados);
