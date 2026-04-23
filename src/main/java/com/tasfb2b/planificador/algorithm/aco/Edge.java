@@ -1,6 +1,8 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 public class Edge {
@@ -15,6 +17,8 @@ public class Edge {
 
     public LocalDateTime departureTime;
     public LocalDateTime arrivalTime;
+    public Duration      duration;     // precomputado en AlgorithmMapper (maneja medianoche)
+    public LocalTime     departureLocalTime; // precomputado para evitar toLocalTime() en el bucle
 
     public double pheromone = 1.0;
 

@@ -7,12 +7,12 @@ public class Node {
     public String code;
     public double lat;
     public double lon;
+    public int capacity; // capacidad máxima de almacén del aeropuerto
 
     public Node(String code) {
         this.code = code;
     }
 
-    // Constructor completo para cuando tienes las coordenadas disponibles
     public Node(String code, double lat, double lon) {
         this.code = code;
         this.lat = lat;

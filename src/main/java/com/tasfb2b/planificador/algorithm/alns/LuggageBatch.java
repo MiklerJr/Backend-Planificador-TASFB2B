@@ -17,6 +17,7 @@ public class LuggageBatch {
     private LocalDateTime readyTime;
 
     private List<Edge> assignedRoute;
+    private boolean cumpleSLA;
 
     // Constructor actualizado para recibir los 6 parámetros
     public LuggageBatch(String id, int quantity, int slaLimitHours, String originCode, String destCode, LocalDateTime readyTime) {
@@ -27,6 +28,7 @@ public class LuggageBatch {
         this.destCode = destCode;
         this.readyTime = readyTime;
         this.assignedRoute = new ArrayList<>();
+        this.cumpleSLA = false;
     }
 
     public void setAssignedRoute(List<Edge> route) {
@@ -63,4 +65,6 @@ public class LuggageBatch {
     public String getDestCode() { return destCode; }
     public LocalDateTime getReadyTime() { return readyTime; }
     public List<Edge> getAssignedRoute() { return assignedRoute; }
+    public boolean isCumpleSLA() { return cumpleSLA; }
+    public void setCumpleSLA(boolean cumpleSLA) { this.cumpleSLA = cumpleSLA; }
 }

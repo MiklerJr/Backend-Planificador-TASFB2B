@@ -60,9 +60,14 @@ public class PlanificadorService {
         int intervaloReporte = Math.max(1, totalVentanas / 10); // log cada ~10% del total
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(totalVentanas);
-        int totalMaletas   = 0;
-        int totalEnrutadas = 0;
-        int bloqueActual   = 0;
+        // "ORIG->DEST" → [total, enrutadas]
+        Map<String, int[]> odStats = new HashMap<>();
+        int totalMaletas    = 0;
+        int totalEnrutadas  = 0;
+        int totalSinRuta    = 0;
+        int totalCumpleSLA  = 0;
+        int totalTardadas   = 0;
+        int bloqueActual    = 0;
 
         for (LocalDateTime vi : ventanas) {
             bloqueActual++;
@@ -74,58 +79,145 @@ public class PlanificadorService {
             List<Maleta> maletasVentana = dataLoader.getMaletasVentana(vi);
             List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
-            int enrutadasBloque = 0;
-            List<SimulacionResponse.AsignacionMaleta> asignaciones = new ArrayList<>(bloqueBatches.size());
-
+            // Fase 1: enrutamiento con prioridad EDD (Earliest Due Date).
+            // Las maletas intracontinentales (SLA=24h) se enrutan primero para que
+            // reclaimen capacidad antes que las intercontinentales (SLA=48h), que tienen
+            // más margen para tomar vuelos del día siguiente sin incumplir su plazo.
+            List<LuggageBatch> intra = new ArrayList<>();
+            List<LuggageBatch> inter = new ArrayList<>();
             for (LuggageBatch b : bloqueBatches) {
-                enrutador.repair(solucionDummy, List.of(b));
+                if (b.getSlaLimitHours() <= 24) intra.add(b); else inter.add(b);
+            }
+            intra.parallelStream().forEach(b -> enrutador.repair(solucionDummy, List.of(b)));
+            inter.parallelStream().forEach(b -> enrutador.repair(solucionDummy, List.of(b)));
 
-                boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
-                if (enrutada) enrutadasBloque++;
+            // Fase 2: construcción de DTOs (barato, secuencial para mantener orden).
+            List<SimulacionResponse.AsignacionMaleta> asignaciones = bloqueBatches.stream()
+                    .map(b -> {
+                        boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+                        SimulacionResponse.AsignacionMaleta asig = new SimulacionResponse.AsignacionMaleta();
+                        asig.setBatchId(b.getId());
+                        asig.setOrigen(b.getOriginCode());
+                        asig.setDestino(b.getDestCode());
+                        asig.setCantidad(b.getQuantity());
+                        asig.setEnrutada(enrutada);
+                        asig.setCumpleSLA(b.isCumpleSLA());
+                        asig.setRutaVuelos(enrutada
+                                ? b.getAssignedRoute().stream().map(e -> e.id).collect(Collectors.toList())
+                                : Collections.emptyList());
+                        return asig;
+                    })
+                    .collect(Collectors.toList());
 
-                SimulacionResponse.AsignacionMaleta asig = new SimulacionResponse.AsignacionMaleta();
-                asig.setBatchId(b.getId());
-                asig.setOrigen(b.getOriginCode());
-                asig.setDestino(b.getDestCode());
-                asig.setCantidad(b.getQuantity());
-                asig.setEnrutada(enrutada);
-                asig.setRutaVuelos(enrutada
-                        ? b.getAssignedRoute().stream().map(e -> e.id).collect(Collectors.toList())
-                        : Collections.emptyList());
-                asignaciones.add(asig);
+            int bloqueEnrutadas = (int) asignaciones.stream().filter(SimulacionResponse.AsignacionMaleta::isEnrutada).count();
+            int bloqueCumpleSLA = (int) asignaciones.stream().filter(a -> a.isEnrutada() && a.isCumpleSLA()).count();
+            int bloqueTardadas  = bloqueEnrutadas - bloqueCumpleSLA;
+
+            // Acumular estadísticas por par O→D para el diagnóstico final
+            for (SimulacionResponse.AsignacionMaleta a : asignaciones) {
+                int[] s = odStats.computeIfAbsent(a.getOrigen() + "->" + a.getDestino(), k -> new int[2]);
+                s[0]++;
+                if (a.isEnrutada()) s[1]++;
             }
 
             SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
             bloque.setHoraInicio(vi.toString());
             bloque.setHoraFin(vf.toString());
             bloque.setMaletasProcesadas(bloqueBatches.size());
-            bloque.setMaletasEnrutadas(enrutadasBloque);
+            bloque.setMaletasEnrutadas(bloqueEnrutadas);
             bloque.setAsignaciones(asignaciones);
             bloques.add(bloque);
 
             totalMaletas   += bloqueBatches.size();
-            totalEnrutadas += enrutadasBloque;
+            totalEnrutadas += bloqueEnrutadas;
+            totalSinRuta   += bloqueBatches.size() - bloqueEnrutadas;
+            totalCumpleSLA += bloqueCumpleSLA;
+            totalTardadas  += bloqueTardadas;
             // bloqueBatches sale de scope aquí → LuggageBatch + List<Edge> elegibles para GC
 
             if (bloqueActual % intervaloReporte == 0 || bloqueActual == totalVentanas) {
                 int pct = (int) Math.round((bloqueActual * 100.0) / totalVentanas);
-                log.info("Progreso ALNS: {}% — bloque {}/{} | maletas procesadas: {}",
-                        pct, bloqueActual, totalVentanas, totalMaletas);
+                log.info("Progreso ALNS: {}% — bloque {}/{} | procesadas: {} | enrutadas: {} | a tiempo: {} | tardadas: {} | sin ruta: {}",
+                        pct, bloqueActual, totalVentanas, totalMaletas, totalEnrutadas, totalCumpleSLA, totalTardadas, totalSinRuta);
             }
         }
 
         bloquesCacheados = bloques;
         long tiempoMs = System.currentTimeMillis() - inicio;
-        log.info("ALNS completado: {} bloques | {} enrutadas / {} maletas | {} ms",
-                bloques.size(), totalEnrutadas, totalMaletas, tiempoMs);
+        log.info("ALNS completado: {} bloques | {} maletas | {} enrutadas | {} a tiempo | {} tardadas | {} sin ruta | {} ms",
+                bloques.size(), totalMaletas, totalEnrutadas, totalCumpleSLA, totalTardadas, totalSinRuta, tiempoMs);
 
-        // Construimos las métricas globales con los totales acumulados.
+        logDiagnosticos(odStats, graph, enrutador);
+
         SimulacionResponse res = construirRespuestaFront(
                 Collections.emptyList(), 0, tiempoMs, dataLoader.getVuelos(), bloques.size());
         res.getMetricas().setProcesadas(totalMaletas);
         res.getMetricas().setEnrutadas(totalEnrutadas);
-        res.getMetricas().setSinRuta(totalMaletas - totalEnrutadas);
+        res.getMetricas().setSinRuta(totalSinRuta);
+        res.getMetricas().setCumpleSLA(totalCumpleSLA);
+        res.getMetricas().setTardadas(totalTardadas);
         return res;
+    }
+
+    // =========================================================
+    // Diagnóstico post-ALNS
+    // =========================================================
+    private void logDiagnosticos(Map<String, int[]> odStats, Graph graph, GreedyRepairOperator enrutador) {
+        log.info("=========================================================");
+        log.info("DIAGNÓSTICO ALNS");
+        log.info("=========================================================");
+
+        // 1. Top 25 pares O→D con más envíos sin ruta
+        log.info("--- Top 25 pares O→D con más envíos sin ruta ---");
+        odStats.entrySet().stream()
+                .sorted(Comparator.comparingInt((Map.Entry<String, int[]> e) ->
+                        e.getValue()[0] - e.getValue()[1]).reversed())
+                .limit(25)
+                .forEach(e -> {
+                    int total    = e.getValue()[0];
+                    int enrut    = e.getValue()[1];
+                    int sinRuta  = total - enrut;
+                    int pct      = total > 0 ? sinRuta * 100 / total : 0;
+                    log.info("  {} | total={} sinRuta={} ({}%)", e.getKey(), total, sinRuta, pct);
+                });
+
+        // 2. Agregado por aeropuerto origen — cuáles acumulan más fallos
+        log.info("--- Aeropuertos con más envíos sin ruta (por origen) ---");
+        Map<String, int[]> porOrigen = new HashMap<>();
+        for (Map.Entry<String, int[]> e : odStats.entrySet()) {
+            String orig = e.getKey().split("->")[0];
+            int[] s = porOrigen.computeIfAbsent(orig, k -> new int[2]);
+            s[0] += e.getValue()[0];
+            s[1] += e.getValue()[1];
+        }
+        porOrigen.entrySet().stream()
+                .sorted(Comparator.comparingInt((Map.Entry<String, int[]> e) ->
+                        e.getValue()[0] - e.getValue()[1]).reversed())
+                .forEach(e -> {
+                    int total   = e.getValue()[0];
+                    int sinRuta = total - e.getValue()[1];
+                    int pct     = total > 0 ? sinRuta * 100 / total : 0;
+                    log.info("  {} | total={} sinRuta={} ({}%)", e.getKey(), total, sinRuta, pct);
+                });
+
+        // 3. Conectividad del grafo
+        log.info("--- Conectividad del grafo (vuelos de salida por aeropuerto) ---");
+        int sinSalida = 0;
+        for (String code : graph.nodes.keySet()) {
+            int salidas = graph.getNeighbors(code).size();
+            if (salidas == 0) {
+                log.warn("  AISLADO (sin salidas): {}", code);
+                sinSalida++;
+            } else {
+                log.info("  {} → {} vuelos de salida", code, salidas);
+            }
+        }
+        if (sinSalida == 0) log.info("  Todos los aeropuertos tienen al menos 1 vuelo de salida.");
+
+        // 4. Utilización de capacidad de vuelos
+        enrutador.logEstadisticasCapacidad();
+
+        log.info("=========================================================");
     }
 
     // =========================================================

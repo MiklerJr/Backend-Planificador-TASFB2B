@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.algorithm.aco.Edge;
+import java.time.Duration;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.model.Aeropuerto;
@@ -23,8 +24,8 @@ public class AlgorithmMapper {
 
         // 1. Mapear Nodos (Aeropuertos)
         for (Aeropuerto a : aeropuertos) {
-            // Asumiendo que tu Graph tiene un método para añadir nodos por código
             graph.addNode(a.getCodigo());
+            graph.nodes.get(a.getCodigo()).capacity = a.getCapacidad();
         }
 
         // 2. Mapear Aristas (Vuelos)
@@ -47,10 +48,13 @@ public class AlgorithmMapper {
 
             edge.capacity = v.getCapacidad();
             edge.departureTime = v.getFechaHoraSalida();
-            edge.arrivalTime = v.getFechaHoraLlegada();
+            edge.arrivalTime   = v.getFechaHoraLlegada();
 
-            // Calcular el 'cost' en minutos de este vuelo
-            edge.cost = java.time.Duration.between(edge.departureTime, edge.arrivalTime).toMinutes();
+            // Duración real (maneja vuelos que cruzan medianoche)
+            Duration dur = Duration.between(edge.departureTime, edge.arrivalTime);
+            edge.duration          = dur.isNegative() ? dur.plusDays(1) : dur;
+            edge.cost              = edge.duration.toMinutes();
+            edge.departureLocalTime = edge.departureTime.toLocalTime();
 
             graph.addEdge(edge);
         }

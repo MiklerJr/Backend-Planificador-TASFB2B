@@ -17,6 +17,8 @@ public class SimulacionResponse {
         private int procesadas;
         private int enrutadas;
         private int sinRuta;
+        private int cumpleSLA;
+        private int tardadas;
         private long tiempoEjecucionMs;
     }
 
@@ -54,6 +56,7 @@ public class SimulacionResponse {
         private String destino;
         private int cantidad;
         private boolean enrutada;
+        private boolean cumpleSLA;
         private List<String> rutaVuelos;
     }
 }
