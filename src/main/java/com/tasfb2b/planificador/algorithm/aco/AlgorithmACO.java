@@ -12,6 +12,8 @@ public class AlgorithmACO {
     private CostFunction.EnvioContext envioContext;
 
     private List<Ant> ants = new ArrayList<>();
+    private Ant mejorGlobal = null;
+    private double mejorCostoGlobal = Double.MAX_VALUE;
 
     public AlgorithmACO(Graph graph, ConfigACO config, CostFunction.EnvioContext envioContext) {
         this.graph = graph;
@@ -27,15 +29,32 @@ public class AlgorithmACO {
 
         Node startNode = graph.nodes.get(start);
         Node endNode = graph.nodes.get(end);
+        inicializarFeromonas();
+
+        int sinMejora = 0;
 
         for (int it = 0; it < config.iterations; it++) {
 
             for (Ant ant : ants) {
                 ant.reset();
                 buildSolution(ant, startNode, endNode);
+
+                if (CostFunction.cumpleRestriccionesDuras(ant, ant.edgesPath, envioContext)
+                        && ant.totalCost < mejorCostoGlobal) {
+                    mejorCostoGlobal = ant.totalCost;
+                    mejorGlobal = copiarAnt(ant);
+                    sinMejora = 0;
+                }
             }
 
             updatePheromones();
+
+            if (config.maxNoImprovement > 0) {
+                sinMejora++;
+                if (sinMejora >= config.maxNoImprovement) {
+                    break;
+                }
+            }
         }
 
         Ant mejor = getMejorAnt();
@@ -44,6 +63,14 @@ public class AlgorithmACO {
         }
 
         buscarRutaGreedy(startNode, endNode);
+
+        Ant mejorPostGreedy = getMejorAnt();
+        if (mejorPostGreedy != null
+                && CostFunction.cumpleRestriccionesDuras(mejorPostGreedy, mejorPostGreedy.edgesPath, envioContext)
+                && mejorPostGreedy.totalCost < mejorCostoGlobal) {
+            mejorCostoGlobal = mejorPostGreedy.totalCost;
+            mejorGlobal = copiarAnt(mejorPostGreedy);
+        }
     }
 
     private void buscarRutaGreedy(Node start, Node end) {
@@ -82,6 +109,9 @@ public class AlgorithmACO {
                 if (ant.edgesPath.isEmpty()) {
                     break;
                 }
+                ant.edgesPath.add(mejor);
+                ant.path.add(mejor.to);
+                current = mejor.to;
                 current.releaseLoad(envioContext.cantidadMaletas);
                 break;
             }
@@ -106,11 +136,17 @@ public class AlgorithmACO {
     }
 
     public Ant getMejorAnt() {
+        if (mejorGlobal != null) {
+            return mejorGlobal;
+        }
+
         Ant mejor = null;
         double mejorCosto = Double.MAX_VALUE;
 
         for (Ant ant : ants) {
-            if (!ant.path.isEmpty() && ant.totalCost < mejorCosto) {
+            boolean llegaDestino = !ant.path.isEmpty()
+                    && ant.path.get(ant.path.size() - 1).code.equals(envioContext.destinoICAO);
+            if (llegaDestino && ant.totalCost < mejorCosto) {
                 mejorCosto = ant.totalCost;
                 mejor = ant;
             }
@@ -159,9 +195,11 @@ public class AlgorithmACO {
 
             if (chosen.to.equals(end)) {
                 if (escalas == 0) {
-                    ant.path.remove(ant.path.size() - 1);
                     break;
                 }
+                ant.edgesPath.add(chosen);
+                ant.path.add(chosen.to);
+                current = chosen.to;
                 llego = true;
                 break;
             }
@@ -227,19 +265,28 @@ public class AlgorithmACO {
 
         // refuerzo
         for (Ant ant : ants) {
+            if (!CostFunction.cumpleRestriccionesDuras(ant, ant.edgesPath, envioContext)) {
+                continue;
+            }
 
-            for (int i = 0; i < ant.path.size() - 1; i++) {
-
-                Node from = ant.path.get(i);
-                Node to = ant.path.get(i + 1);
-
-                for (Edge e : graph.edges) {
-
-                    if (e.from.equals(from) && e.to.equals(to)) {
-                        e.pheromone += 1.0 / (ant.totalCost + 1);
-                    }
-                }
+            double deltaTau = config.q / (ant.totalCost + 1.0);
+            for (Edge edge : ant.edgesPath) {
+                edge.pheromone += deltaTau;
             }
         }
+    }
+
+    private void inicializarFeromonas() {
+        for (Edge e : graph.edges) {
+            e.pheromone = config.initialPheromone;
+        }
+    }
+
+    private Ant copiarAnt(Ant original) {
+        Ant copia = new Ant();
+        copia.path = new ArrayList<>(original.path);
+        copia.edgesPath = new ArrayList<>(original.edgesPath);
+        copia.totalCost = original.totalCost;
+        return copia;
     }
 }

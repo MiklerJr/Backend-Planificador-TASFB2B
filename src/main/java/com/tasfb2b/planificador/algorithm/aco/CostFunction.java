@@ -1,15 +1,17 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 
 public class CostFunction {
 
     // Parámetros de pesos — configura estos según experimentación numérica
-    public static double W_SLA_VIOLATION  = 1000.0; // penalización por violar plazo
-    public static double W_FLIGHT_TIME    =     0.5; // minimizar duración del vuelo
-    public static double W_WAIT_TIME      =     1.0; // penalizar espera en escala
-    public static double W_CAPACITY       =   100.0; // penalizar sobrecarga de vuelo
+    public static double W_SLA_VIOLATION  = 10000.0; // penalización por violar plazo
+    public static double W_FLIGHT_TIME    =     1.0; // minimizar duración del vuelo
+    public static double W_WAIT_TIME      =     2.0; // penalizar espera en escala
+    public static double W_CAPACITY       =   500.0; // penalizar sobrecarga de vuelo
 
     // Umbrales semáforo de ocupación (parámetros configurables)
     public static double UMBRAL_VERDE = 0.70;
@@ -195,6 +197,34 @@ public class CostFunction {
              + penAlmacen;
     }
 
+    public static boolean cumpleRestriccionesDuras(Ant ant, List<Edge> edgesPath, EnvioContext envio) {
+        if (ant == null || ant.path == null || ant.path.size() < 2) {
+            return false;
+        }
+        if (edgesPath == null || edgesPath.isEmpty()) {
+            return false;
+        }
+
+        for (Edge e : edgesPath) {
+            if (!e.hasCapacity(envio.cantidadMaletas)) {
+                return false;
+            }
+        }
+
+        for (int i = 1; i < ant.path.size() - 1; i++) {
+            Node nodo = ant.path.get(i);
+            if (nodo.storageUsed > nodo.storageCapacity) {
+                return false;
+            }
+        }
+
+        Edge ultimoVuelo = edgesPath.get(edgesPath.size() - 1);
+        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        minutosLlegada += calcularDiasRuta(edgesPath) * 1440;
+
+        return minutosLlegada <= envio.deadlineMinutos;
+    }
+
     // 3. HEURÍSTICA η — reemplaza 1/(e.cost+1) en selectEdge()
 
     /**
@@ -216,13 +246,10 @@ public class CostFunction {
         double duracion = calcularDuracionMinutos(edge.departureTime, edge.arrivalTime);
         if (duracion <= 0) duracion = 1;
 
-        // Solo verificar si hay capacidad disponible - no penalizar por ocupación
-        if (edge.hasCapacity(envio.cantidadMaletas)) {
-            return 1.0 / duracion;
-        }
+        // Factor de ocupación basado en semáforo
+        double factorOcupacion = factorSemaforo(edge, envio.cantidadMaletas);
 
-        // Si no hay capacidad, retornar valor muy bajo
-        return 0.0001 / duracion;
+        return factorOcupacion / duracion;
     }
 
     // 4. SEMÁFORO DE OCUPACIÓN (para visualizador)

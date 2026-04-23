@@ -4,7 +4,10 @@ public class ConfigACO {
     public double alpha = 1.0;   // feromona
     public double beta = 2.0;    // heurística
     public double evaporation = 0.5;
+    public double initialPheromone = 1.0;
+    public double q = 100.0;
 
     public int antCount = 20;
     public int iterations = 100;
+    public int maxNoImprovement = 0; // 0 = desactivado
 }

@@ -1,6 +1,12 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.algorithm.aco.*;
+import com.tasfb2b.planificador.algorithm.aco.AlgorithmACO;
+import com.tasfb2b.planificador.algorithm.aco.Ant;
+import com.tasfb2b.planificador.algorithm.aco.ConfigACO;
+import com.tasfb2b.planificador.algorithm.aco.CostFunction;
+import com.tasfb2b.planificador.algorithm.aco.Edge;
+import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.PlanificacionResultado;
 import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
@@ -13,10 +19,12 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Set;
 
 @Service
 public class PlanificadorService {
@@ -24,6 +32,8 @@ public class PlanificadorService {
     private final AeropuertoLoader aeropuertoLoader;
     private final GraphBuilder graphBuilder;
     private final EnvioLoader envioLoader;
+
+    private static final int DEFAULT_TICK_MINUTES = 5;
 
     private static final String[] ORIGENES_DISPONIBLES = {
             "SKBO", "SEQM", "SVMI", "SBBR", "SPIM", "SLLP", "SCEL", "SABE",
@@ -41,56 +51,80 @@ public class PlanificadorService {
     }
 
     public ResumenPlanificacionGlobal procesarTodosLosOrigenes() {
-        return procesarTodosLosOrigenesConLimite(Integer.MAX_VALUE, 5);
+        return procesarTodosLosOrigenesConLimite(Integer.MAX_VALUE, DEFAULT_TICK_MINUTES);
     }
 
     public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePorOrigen) {
-        return procesarTodosLosOrigenesConLimite(limitePorOrigen, 5);
+        return procesarTodosLosOrigenesConLimite(limitePorOrigen, DEFAULT_TICK_MINUTES);
     }
 
     public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePorOrigen, int tickMinutosSimulacion) {
-        long startTime = System.currentTimeMillis();
-        int tick = Math.max(1, tickMinutosSimulacion);
+        PlanRequest request = PlanRequest.todos(limitePorOrigen, tickMinutosSimulacion);
+        return procesarBase(request);
+    }
 
-        List<Aeropuerto> Aeropuertos = aeropuertoLoader.cargarAeropuertos();
+    public List<PlanificacionResultado> procesarTodosLosEnvios(String origen) {
+        PlanRequest request = PlanRequest.unOrigen(origen, Integer.MAX_VALUE, DEFAULT_TICK_MINUTES);
+        return procesarBaseConResultados(request).resultados;
+    }
+
+    public List<PlanificacionResultado> procesarConLimite(String origen, int limite) {
+        PlanRequest request = PlanRequest.unOrigen(origen, limite, DEFAULT_TICK_MINUTES);
+        return procesarBaseConResultados(request).resultados;
+    }
+
+    public String ejecutarACOporEnvio(String origen, int limite) {
+        PlanRequest request = PlanRequest.unOrigen(origen, limite, DEFAULT_TICK_MINUTES);
+        ResumenPlanificacionGlobal resumen = procesarBase(request);
+        return "ACO ejecutado para " + resumen.totalEnviosProcesados + " envíos desde " + origen;
+    }
+
+    public List<PlanificacionResultado> procesarTodosLosOrigenesConResultados(int limitePorOrigen, int tickMinutosSimulacion) {
+        PlanRequest request = PlanRequest.todos(limitePorOrigen, tickMinutosSimulacion);
+        return procesarBaseConResultados(request).resultados;
+    }
+
+    private ResumenPlanificacionGlobal procesarBase(PlanRequest request) {
+        return procesarBaseConResultados(request).resumen;
+    }
+
+    private BaseRunResult procesarBaseConResultados(PlanRequest request) {
+        long startTime = System.currentTimeMillis();
+
+        int tick = Math.max(1, request.tickMinutosSimulacion);
+        int limite = (request.limitePorOrigen <= 0) ? Integer.MAX_VALUE : request.limitePorOrigen;
+
+        List<Aeropuerto> aeropuertos = aeropuertoLoader.cargarAeropuertos();
         List<String> vuelos = cargarVuelos();
 
         ResumenPlanificacionGlobal resumen = new ResumenPlanificacionGlobal();
-        Map<String, ResumenPlanificacionGlobal.EstadisticaOrigen> statsPorOrigen = new HashMap<>();
-        final int[] totalEnviosProcesados = {0};
-        final int[] totalEnviosExitosos = {0};
-        final int[] totalMaletas = {0};
-        final double[] costoTotalExitosos = {0.0};
+        resumen.estadisticasPorOrigen = new HashMap<>();
+        List<PlanificacionResultado> resultados = new ArrayList<>();
 
         ConfigACO config = new ConfigACO();
         config.antCount = 10;
         config.iterations = 50;
 
-        for (String origen : ORIGENES_DISPONIBLES) {
-            System.out.println("Procesando envíos desde origen: " + origen + " (tick=" + tick + " min)");
-
-            Graph graph = graphBuilder.build(Aeropuertos, vuelos);
+        for (String origen : request.origenes) {
+            Graph graph = graphBuilder.build(aeropuertos, vuelos);
             List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
             if (envios.isEmpty()) {
                 continue;
             }
 
-            int limite = (limitePorOrigen <= 0) ? Integer.MAX_VALUE : limitePorOrigen;
             if (envios.size() > limite) {
                 envios = envios.subList(0, limite);
             }
             envios = new ArrayList<>(envios);
             envios.sort(Comparator.comparingInt(e -> (e.horaRegistro * 60) + e.minutoRegistro));
 
-            ResumenPlanificacionGlobal.EstadisticaOrigen statsOrigen =
-                    new ResumenPlanificacionGlobal.EstadisticaOrigen();
-            statsOrigen.origen = origen;
+            ResumenPlanificacionGlobal.EstadisticaOrigen stats = new ResumenPlanificacionGlobal.EstadisticaOrigen();
+            stats.origen = origen;
 
             PriorityQueue<ScheduledEvent> eventos = new PriorityQueue<>(Comparator.comparingInt(ev -> ev.minute));
             List<EnvioDTO> pendientes = new ArrayList<>();
 
             int idxSiguiente = 0;
-            int procesadosOrigen = 0;
             int tiempoActual = envios.get(0).horaRegistro * 60 + envios.get(0).minutoRegistro;
 
             while (idxSiguiente < envios.size() || !pendientes.isEmpty() || !eventos.isEmpty()) {
@@ -108,120 +142,118 @@ public class PlanificadorService {
                     idxSiguiente++;
                 }
 
-                Iterator<EnvioDTO> itPendientes = pendientes.iterator();
-                while (itPendientes.hasNext()) {
-                    EnvioDTO e = itPendientes.next();
+                Iterator<EnvioDTO> it = pendientes.iterator();
+                while (it.hasNext()) {
+                    EnvioDTO envio = it.next();
 
-                    int registroMin = e.horaRegistro * 60 + e.minutoRegistro;
-                    CostFunction.EnvioContext envio = new CostFunction.EnvioContext(
-                            origen, e.destinoICAO, e.cantidadMaletas,
-                            e.horaRegistro, e.minutoRegistro
+                    if (request.destinosPermitidos != null
+                            && !request.destinosPermitidos.contains(envio.destinoICAO)) {
+                        continue;
+                    }
+
+                    PlanificacionResultado resultado = intentarPlanificarEnvio(
+                            origen, envio, graph, config, eventos, tiempoActual, tick
                     );
 
-                    if (tiempoActual > envio.deadlineMinutos) {
-                        statsOrigen.fallidos++;
-                        statsOrigen.totalEnvios++;
-                        totalEnviosProcesados[0]++;
-                        totalMaletas[0] += e.cantidadMaletas;
-                        procesadosOrigen++;
-                        itPendientes.remove();
+                    if (resultado == null) {
                         continue;
                     }
 
-                    if (registroMin > tiempoActual) {
-                        continue;
-                    }
+                    resultados.add(resultado);
+                    stats.totalEnvios++;
+                    resumen.totalEnviosProcesados++;
+                    resumen.totalMaletas += envio.cantidadMaletas;
 
-                    try {
-                    AlgorithmACO aco = new AlgorithmACO(graph, config, envio);
-                    aco.run(origen, e.destinoICAO);
-
-                    Ant mejor = aco.getMejorAnt();
-
-                    if (mejor != null && !mejor.path.isEmpty() && !mejor.edgesPath.isEmpty()) {
-                        Node destinoFinal = graph.nodes.get(e.destinoICAO);
-                        if (destinoFinal == null || !destinoFinal.hasStorageCapacity(e.cantidadMaletas)) {
-                            statsOrigen.fallidos++;
-                            statsOrigen.totalEnvios++;
-                            totalEnviosProcesados[0]++;
-                            totalMaletas[0] += e.cantidadMaletas;
-                            procesadosOrigen++;
-                            itPendientes.remove();
-                            continue;
-                        }
-
-                        destinoFinal.storeLoad(e.cantidadMaletas);
-                        int minutosRuta = estimarMinutosRuta(mejor.edgesPath);
-                        int liberarDestinoEn = tiempoActual + minutosRuta + CostFunction.TIEMPO_DESTINO_FINAL;
-                        eventos.add(new ScheduledEvent(liberarDestinoEn,
-                                () -> destinoFinal.releaseLoad(e.cantidadMaletas)));
-
-                        int minutosAcumulados = 0;
-                        for (Edge edge : mejor.edgesPath) {
-                            edge.useCapacity(e.cantidadMaletas);
-
-                            minutosAcumulados += (int) Math.max(1, Math.round(
-                                    CostFunction.calcularDuracionMinutos(edge.departureTime, edge.arrivalTime)
-                            ));
-                            int liberarEn = tiempoActual + minutosAcumulados;
-                            eventos.add(new ScheduledEvent(liberarEn,
-                                    () -> edge.usedCapacity = Math.max(0, edge.usedCapacity - e.cantidadMaletas)));
-                            minutosAcumulados += CostFunction.TIEMPO_MIN_ESCALA;
-                        }
-
-                        statsOrigen.exitosos++;
-                        statsOrigen.rutasConEscala++;
-
-                        costoTotalExitosos[0] += mejor.totalCost;
-                        totalEnviosExitosos[0]++;
-
-                        statsOrigen.totalEnvios++;
-                        totalEnviosProcesados[0]++;
-                        totalMaletas[0] += e.cantidadMaletas;
-                        procesadosOrigen++;
-                        itPendientes.remove();
+                    if (resultado.exitoso) {
+                        stats.exitosos++;
+                        stats.rutasConEscala++;
+                        resumen.totalEnviosExitosos++;
+                        resumen.costoPromedioExitosos += resultado.costoTotal;
                     } else {
-                        if (tiempoActual + tick > envio.deadlineMinutos) {
-                            statsOrigen.fallidos++;
-                            statsOrigen.totalEnvios++;
-                            totalEnviosProcesados[0]++;
-                            totalMaletas[0] += e.cantidadMaletas;
-                            procesadosOrigen++;
-                            itPendientes.remove();
-                        }
+                        stats.fallidos++;
                     }
-                } catch (Exception ex) {
-                    statsOrigen.fallidos++;
-                    statsOrigen.totalEnvios++;
-                    totalEnviosProcesados[0]++;
-                    totalMaletas[0] += e.cantidadMaletas;
-                    procesadosOrigen++;
-                    itPendientes.remove();
-                }
-                }
 
-                if (procesadosOrigen % 10000 == 0 && procesadosOrigen > 0) {
-                    System.out.println("Origen " + origen + ": procesados " + procesadosOrigen + " envíos...");
+                    it.remove();
                 }
 
                 tiempoActual += tick;
             }
 
-            statsPorOrigen.put(origen, statsOrigen);
-            System.out.println("Procesados " + procesadosOrigen + " envíos desde " + origen);
+            resumen.estadisticasPorOrigen.put(origen, stats);
         }
 
-        resumen.totalEnviosProcesados = totalEnviosProcesados[0];
-        resumen.totalEnviosExitosos = totalEnviosExitosos[0];
         resumen.totalEnviosFallidos = resumen.totalEnviosProcesados - resumen.totalEnviosExitosos;
-        resumen.totalMaletas = totalMaletas[0];
         resumen.tiempoEjecucionMs = System.currentTimeMillis() - startTime;
-        resumen.estadisticasPorOrigen = statsPorOrigen;
+        if (resumen.totalEnviosExitosos > 0) {
+            resumen.costoPromedioExitosos = resumen.costoPromedioExitosos / resumen.totalEnviosExitosos;
+        }
 
-        resumen.costoPromedioExitosos = resumen.totalEnviosExitosos > 0
-                ? costoTotalExitosos[0] / resumen.totalEnviosExitosos : 0;
+        return new BaseRunResult(resumen, resultados);
+    }
 
-        return resumen;
+    private PlanificacionResultado intentarPlanificarEnvio(
+            String origen,
+            EnvioDTO e,
+            Graph graph,
+            ConfigACO config,
+            PriorityQueue<ScheduledEvent> eventos,
+            int tiempoActual,
+            int tick
+    ) {
+        CostFunction.EnvioContext ctx = new CostFunction.EnvioContext(
+                origen, e.destinoICAO, e.cantidadMaletas, e.horaRegistro, e.minutoRegistro
+        );
+
+        if (tiempoActual > ctx.deadlineMinutos) {
+            return PlanificacionResultado.fallido(e.id, origen, e.destinoICAO, "Deadline excedido");
+        }
+
+        try {
+            AlgorithmACO aco = new AlgorithmACO(graph, config, ctx);
+            aco.run(origen, e.destinoICAO);
+            Ant mejor = aco.getMejorAnt();
+
+            if (mejor != null && !mejor.path.isEmpty() && !mejor.edgesPath.isEmpty()) {
+                Node destinoFinal = graph.nodes.get(e.destinoICAO);
+                if (destinoFinal == null || !destinoFinal.hasStorageCapacity(e.cantidadMaletas)) {
+                    return PlanificacionResultado.fallido(
+                            e.id, origen, e.destinoICAO, "Sin capacidad de almacenamiento en destino"
+                    );
+                }
+
+                destinoFinal.storeLoad(e.cantidadMaletas);
+                int minutosRuta = estimarMinutosRuta(mejor.edgesPath);
+                int liberarDestinoEn = tiempoActual + minutosRuta + CostFunction.TIEMPO_DESTINO_FINAL;
+                eventos.add(new ScheduledEvent(liberarDestinoEn,
+                        () -> destinoFinal.releaseLoad(e.cantidadMaletas)));
+
+                int minutosAcumulados = 0;
+                for (Edge edge : mejor.edgesPath) {
+                    edge.useCapacity(e.cantidadMaletas);
+
+                    minutosAcumulados += (int) Math.max(1, Math.round(
+                            CostFunction.calcularDuracionMinutos(edge.departureTime, edge.arrivalTime)
+                    ));
+                    int liberarEn = tiempoActual + minutosAcumulados;
+                    eventos.add(new ScheduledEvent(liberarEn,
+                            () -> edge.usedCapacity = Math.max(0, edge.usedCapacity - e.cantidadMaletas)));
+                    minutosAcumulados += CostFunction.TIEMPO_MIN_ESCALA;
+                }
+
+                List<String> ruta = mejor.path.stream().map(n -> n.code).toList();
+                return new PlanificacionResultado(
+                        e.id, origen, e.destinoICAO, e.cantidadMaletas, ruta, mejor.totalCost, true
+                );
+            }
+
+            if (tiempoActual + tick > ctx.deadlineMinutos) {
+                return PlanificacionResultado.fallido(e.id, origen, e.destinoICAO, "No se encontró ruta válida");
+            }
+
+            return null;
+        } catch (Exception ex) {
+            return PlanificacionResultado.fallido(e.id, origen, e.destinoICAO, ex.getMessage());
+        }
     }
 
     private int estimarMinutosRuta(List<Edge> edgesPath) {
@@ -239,117 +271,6 @@ public class PlanificadorService {
             }
         }
         return total;
-    }
-
-    private static class ScheduledEvent {
-        final int minute;
-        final Runnable action;
-
-        ScheduledEvent(int minute, Runnable action) {
-            this.minute = minute;
-            this.action = action;
-        }
-    }
-
-    public List<PlanificacionResultado> procesarTodosLosEnvios(String origen) {
-        return procesarConLimite(origen, Integer.MAX_VALUE);
-    }
-
-    public List<PlanificacionResultado> procesarConLimite(String origen, int limite) {
-        List<Aeropuerto> aeropuertos = aeropuertoLoader.cargarAeropuertos();
-        List<String> vuelos = cargarVuelos();
-        Graph graph = graphBuilder.build(aeropuertos, vuelos);
-
-        List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
-        List<PlanificacionResultado> resultados = new ArrayList<>();
-
-        ConfigACO config = new ConfigACO();
-        config.antCount = 10;
-        config.iterations = 50;
-
-        int count = 0;
-        for (EnvioDTO e : envios) {
-            if (count >= limite) break;
-            count++;
-            PlanificacionResultado resultado;
-
-            try {
-                CostFunction.EnvioContext envio = new CostFunction.EnvioContext(
-                        origen, e.destinoICAO, e.cantidadMaletas,
-                        e.horaRegistro, e.minutoRegistro
-                );
-
-                AlgorithmACO aco = new AlgorithmACO(graph, config, envio);
-                aco.run(origen, e.destinoICAO);
-
-                Ant mejor = aco.getMejorAnt();
-
-                if (mejor != null && !mejor.path.isEmpty()) {
-                    List<String> ruta = mejor.path.stream()
-                            .map(n -> n.code)
-                            .toList();
-
-                    resultado = new PlanificacionResultado(
-                            e.id,
-                            origen,
-                            e.destinoICAO,
-                            e.cantidadMaletas,
-                            ruta,
-                            mejor.totalCost,
-                            true
-                    );
-
-                    for (Edge edge : mejor.edgesPath) {
-                        edge.useCapacity(e.cantidadMaletas);
-                    }
-                } else {
-                    resultado = PlanificacionResultado.fallido(
-                            e.id, origen, e.destinoICAO,
-                            "No se encontró ruta válida"
-                    );
-                }
-            } catch (Exception ex) {
-                resultado = PlanificacionResultado.fallido(
-                        e.id, origen, e.destinoICAO,
-                        ex.getMessage()
-                );
-            }
-
-            resultados.add(resultado);
-        }
-
-        return resultados;
-    }
-
-    public String ejecutarACOporEnvio(String origen, int limite) {
-        List<Aeropuerto> aeropuertos = aeropuertoLoader.cargarAeropuertos();
-        List<String> vuelos = cargarVuelos();
-        Graph graph = graphBuilder.build(aeropuertos, vuelos);
-
-        List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
-
-        int count = 0;
-        for (EnvioDTO e : envios) {
-            if (count >= limite) break;
-
-ConfigACO config = new ConfigACO();
-        config.antCount = 15;
-        config.iterations = 30;
-        config.alpha = 1.0;
-        config.beta = 2.0;
-
-            CostFunction.EnvioContext envio = new CostFunction.EnvioContext(
-                    origen, e.destinoICAO, e.cantidadMaletas,
-                    e.horaRegistro, e.minutoRegistro
-            );
-
-            AlgorithmACO aco = new AlgorithmACO(graph, config, envio);
-            aco.run(origen, e.destinoICAO);
-
-            count++;
-        }
-
-        return "ACO ejecutado para " + count + " envíos desde " + origen;
     }
 
     private List<String> cargarVuelos() {
@@ -379,5 +300,55 @@ ConfigACO config = new ConfigACO();
         }
 
         return vuelos;
+    }
+
+    private static class PlanRequest {
+        final List<String> origenes;
+        final int limitePorOrigen;
+        final int tickMinutosSimulacion;
+        final Set<String> destinosPermitidos;
+
+        private PlanRequest(List<String> origenes,
+                            int limitePorOrigen,
+                            int tickMinutosSimulacion,
+                            Set<String> destinosPermitidos) {
+            this.origenes = origenes;
+            this.limitePorOrigen = limitePorOrigen;
+            this.tickMinutosSimulacion = tickMinutosSimulacion;
+            this.destinosPermitidos = destinosPermitidos;
+        }
+
+        static PlanRequest todos(int limitePorOrigen, int tickMinutosSimulacion) {
+            return new PlanRequest(List.of(ORIGENES_DISPONIBLES), limitePorOrigen, tickMinutosSimulacion, null);
+        }
+
+        static PlanRequest unOrigen(String origen, int limitePorOrigen, int tickMinutosSimulacion) {
+            return new PlanRequest(List.of(origen), limitePorOrigen, tickMinutosSimulacion, null);
+        }
+
+        static PlanRequest unDestino(String destino, int limitePorOrigen, int tickMinutosSimulacion) {
+            return new PlanRequest(List.of(ORIGENES_DISPONIBLES), limitePorOrigen, tickMinutosSimulacion,
+                    new HashSet<>(Set.of(destino)));
+        }
+    }
+
+    private static class ScheduledEvent {
+        final int minute;
+        final Runnable action;
+
+        ScheduledEvent(int minute, Runnable action) {
+            this.minute = minute;
+            this.action = action;
+        }
+    }
+
+    private static class BaseRunResult {
+        final ResumenPlanificacionGlobal resumen;
+        final List<PlanificacionResultado> resultados;
+
+        BaseRunResult(ResumenPlanificacionGlobal resumen, List<PlanificacionResultado> resultados) {
+            this.resumen = resumen;
+            this.resultados = resultados;
+        }
     }
 }
