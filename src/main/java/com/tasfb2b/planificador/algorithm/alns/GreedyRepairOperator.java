@@ -15,10 +15,8 @@ public class GreedyRepairOperator implements RepairOperator {
     private static final long CONNECTION_MIN   = 10L;
     private static final long DEST_STORAGE_MIN = 10L;
     private static final long MAX_HORIZON_MIN  = 3 * 24 * 60L;
-    private static final long DAY_MIN          = 24 * 60L;
-
-    private static final int  DAY_BITS = 20;
-    private static final long DAY_MASK = (1L << DAY_BITS) - 1;
+    private static final long DAY_MIN          = FlightKeyEncoder.DAY_MIN;
+    private static final int  DAY_BITS         = FlightKeyEncoder.DAY_BITS;
 
     private final Graph graph;
 
@@ -33,6 +31,9 @@ public class GreedyRepairOperator implements RepairOperator {
     // Solo se escribe mediante commitBlock(); lecturas concurrentes desde Dijkstra son seguras.
     private final ConcurrentHashMap<Long, Integer> flightOccupancy  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> airportOccupancy = new ConcurrentHashMap<>();
+
+    // Vuelos cancelados: flightKeys con capacidad efectiva = 0.
+    private Set<Long> cancelledFlightDays = Collections.emptySet();
 
     public GreedyRepairOperator(Graph graph) {
         this.graph = graph;
@@ -101,9 +102,23 @@ public class GreedyRepairOperator implements RepairOperator {
             blockFlight.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
-            if (!esFinalLeg && e.to.idx >= 0)
+            if (!esFinalLeg && e.to.idx >= 0) {
+                long arrDay     = arrMin / DAY_MIN;
+                long nextDepMin = deps.get(i + 1);
+                long depDay     = nextDepMin / DAY_MIN;
+                for (long day = arrDay; day <= depDay; day++) {
+                    blockAirport.merge(airportKey(e.to.idx, day * DAY_MIN),
+                            -batch.getQuantity(), Integer::sum);
+                }
+            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
                 blockAirport.merge(airportKey(e.to.idx, arrMin), -batch.getQuantity(), Integer::sum);
+            }
         }
+    }
+
+    /** Registra qué vuelo-días están cancelados (capacidad efectiva = 0). */
+    public void setCancelledFlights(Set<Long> cancelled) {
+        this.cancelledFlightDays = cancelled == null ? Collections.emptySet() : cancelled;
     }
 
     /** Confirma los mapas del bloque en la ocupación global al finalizar el bloque. */
@@ -175,14 +190,24 @@ public class GreedyRepairOperator implements RepairOperator {
                 // Capacidad del vuelo (global + bloque)
                 if (remainingFlight(flight, actualDep, blockFlight) < batch.getQuantity()) continue;
 
-                // Capacidad de almacén (solo escalas intermedias)
+                // Capacidad de almacén: todas las maletas ingresan al almacén al aterrizar,
+                // sea escala o destino final (enunciado: "Sea que hagan escala o sea que
+                // esté en su destino final").
                 int nextIdx = flight.to.idx;
                 if (nextIdx < 0) continue;
-                if (nextIdx != targetNodeIdx && flight.to.capacity > 0) {
+                if (flight.to.capacity > 0) {
+                    int qty = batch.getQuantity();
+                    int cap = flight.to.capacity;
                     long ak = airportKey(nextIdx, actualArr);
-                    int ocupado = airportOccupancy.getOrDefault(ak, 0)
-                                + blockAirport.getOrDefault(ak, 0);
-                    if (ocupado + batch.getQuantity() > flight.to.capacity) continue;
+                    if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty > cap)
+                        continue;
+                    // Escala intermedia: verificar también el día siguiente (estadía overnight).
+                    // Destino final: la maleta sale en DEST_STORAGE_MIN (10 min) → no overnight.
+                    if (nextIdx != targetNodeIdx) {
+                        long akD1 = airportKey(nextIdx, actualArr + DAY_MIN);
+                        if (airportOccupancy.getOrDefault(akD1, 0) + blockAirport.getOrDefault(akD1, 0) + qty > cap)
+                            continue;
+                    }
                 }
 
                 int cell = nextIdx * DAY_SLOTS + (int)dayOffset;
@@ -210,8 +235,18 @@ public class GreedyRepairOperator implements RepairOperator {
             blockFlight.merge(flightKey(e.idx, depMin), batch.getQuantity(), Integer::sum);
 
             boolean esFinalLeg = (i == result.edges.size() - 1);
-            if (!esFinalLeg && e.to.idx >= 0)
+            if (!esFinalLeg && e.to.idx >= 0) {
+                long arrDay     = arrMin / DAY_MIN;
+                long nextDepMin = result.actualDepartures.get(i + 1);
+                long depDay     = nextDepMin / DAY_MIN;
+                for (long day = arrDay; day <= depDay; day++) {
+                    blockAirport.merge(airportKey(e.to.idx, day * DAY_MIN),
+                            batch.getQuantity(), Integer::sum);
+                }
+            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
+                // Destino final: la maleta entra al almacén al aterrizar (10 min, mismo día).
                 blockAirport.merge(airportKey(e.to.idx, arrMin), batch.getQuantity(), Integer::sum);
+            }
         }
     }
 
@@ -223,17 +258,18 @@ public class GreedyRepairOperator implements RepairOperator {
 
     private int remainingFlight(Edge flight, long depMin, Map<Long, Integer> blockFlight) {
         long key = flightKey(flight.idx, depMin);
+        if (cancelledFlightDays.contains(key)) return 0;  // vuelo cancelado ese día
         return flight.capacity
              - flightOccupancy.getOrDefault(key, 0)
              - blockFlight.getOrDefault(key, 0);
     }
 
     private static long flightKey(int edgeIdx, long epochMin) {
-        return ((long) edgeIdx << DAY_BITS) | ((epochMin / DAY_MIN) & DAY_MASK);
+        return FlightKeyEncoder.flightKey(edgeIdx, epochMin);
     }
 
     private static long airportKey(int nodeIdx, long epochMin) {
-        return ((long) nodeIdx << DAY_BITS) | ((epochMin / DAY_MIN) & DAY_MASK);
+        return FlightKeyEncoder.airportKey(nodeIdx, epochMin);
     }
 
     private static long toEpochMin(LocalDateTime dt) {

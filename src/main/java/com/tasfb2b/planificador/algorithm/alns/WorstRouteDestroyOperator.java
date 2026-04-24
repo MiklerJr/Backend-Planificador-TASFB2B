@@ -20,13 +20,12 @@ public class WorstRouteDestroyOperator implements DestroyOperator {
         List<LuggageBatch> all    = solution.getBatches();
         int                target = Math.max(1, (int)(all.size() * factor));
 
-        List<LuggageBatch> removed = all.stream()
+        // No limpia las rutas aquí: AlgorithmALNS llama releaseFromBlock() primero,
+        // luego clearRoute(), para que la liberación de capacidad funcione correctamente.
+        return all.stream()
                 .filter(b -> b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty())
                 .sorted(Comparator.comparingDouble(LuggageBatch::getTotalTransitTimeMins).reversed())
                 .limit(target)
                 .collect(Collectors.toList());
-
-        removed.forEach(LuggageBatch::clearRoute);
-        return removed;
     }
 }

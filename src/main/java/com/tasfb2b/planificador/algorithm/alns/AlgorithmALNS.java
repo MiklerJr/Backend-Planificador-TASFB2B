@@ -123,12 +123,16 @@ public class AlgorithmALNS {
             Map<Long,Integer> cAirport = new HashMap<>(currentAirport);
 
             // ── 3. Destrucción ────────────────────────────────────────────────
+            // destroy() devuelve los lotes seleccionados con sus rutas INTACTAS.
+            // Liberamos la capacidad primero (la ruta debe estar presente),
+            // luego limpiamos la ruta para que repair pueda asignar una nueva.
             List<LuggageBatch> unassigned =
                     destroyOps.get(selectedIdx).destroy(candidate, destroyFactor);
 
-            // Liberar la capacidad de los lotes destruidos
-            for (LuggageBatch b : unassigned)
+            for (LuggageBatch b : unassigned) {
                 enrutador.releaseFromBlock(b, cFlight, cAirport);
+                b.clearRoute();
+            }
 
             // ── 4. Reparación ─────────────────────────────────────────────────
             enrutador.repair(candidate, unassigned, cFlight, cAirport);
