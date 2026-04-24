@@ -8,6 +8,7 @@ public class Node {
     public double lat;
     public double lon;
     public int capacity; // capacidad máxima de almacén del aeropuerto
+    public int idx = -1; // índice entero asignado por GreedyRepairOperator (evita lookups HashMap)
 
     public Node(String code) {
         this.code = code;

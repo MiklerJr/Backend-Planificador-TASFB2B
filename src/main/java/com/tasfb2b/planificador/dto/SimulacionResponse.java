@@ -12,6 +12,11 @@ public class SimulacionResponse {
     private List<VueloBackend> vuelosPlaneados;
     private Map<String, AeropuertoDTO> aeropuertosInfo;
 
+    // Parámetros de simulación para el frontend
+    // Sc = k * saMinutos → cuántos minutos de datos consume el frontend por tick visual
+    private int k;           // factor de aceleración (K=1 día-a-día, K=14 sim-3días, K=75 colapso)
+    private int saMinutos;   // tamaño de ventana del planificador (Sa)
+
     @Data
     public static class Metricas {
         private int procesadas;

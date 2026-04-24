@@ -1,33 +1,55 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-import com.tasfb2b.planificador.algorithm.alns.AlnsSolution;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.algorithm.aco.Graph; // Se reutiliza el grafo
+import com.tasfb2b.planificador.algorithm.aco.Graph;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class CapacityDestroyOperator implements DestroyOperator {
 
-    private Graph graph;
+    public CapacityDestroyOperator(Graph graph) { }
 
-    public CapacityDestroyOperator(Graph graph) {
-        this.graph = graph;
-    }
-
+    /**
+     * Selecciona lotes para destruir siguiendo esta prioridad:
+     *  1. Lotes tardados (SLA incumplido) — siempre se destruyen para intentar mejorarlos.
+     *  2. Selección aleatoria del resto hasta alcanzar (factor × total).
+     *
+     * Solo desasigna la ruta del lote; la liberación de capacidad la realiza AlgorithmALNS
+     * antes de llamar al operador de reparación.
+     */
     @Override
     public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
+        List<LuggageBatch> all     = solution.getBatches();
         List<LuggageBatch> removed = new ArrayList<>();
-        int amountToRemove = (int) (solution.getBatches().size() * factor);
+        int target = Math.max(1, (int)(all.size() * factor));
 
-        // Lógica de Destrucción:
-        // 1. Identificar aeropuertos cuya ocupación > 90% (Límites 500-800)
-        // 2. Remover las rutas de los lotes que pasan por ahí
-
-        for (int i = 0; i < amountToRemove; i++) {
-            LuggageBatch batch = solution.getBatches().get(i);
-            batch.clearRoute(); // Se desasigna la ruta
-            removed.add(batch);
+        // Prioridad 1: tardadas — siempre destruir para intentar mejorar
+        for (LuggageBatch b : all) {
+            if (!b.isCumpleSLA() && hasRoute(b)) {
+                b.clearRoute();
+                removed.add(b);
+            }
         }
+
+        // Prioridad 2: completar con selección aleatoria de lotes enrutados
+        if (removed.size() < target) {
+            List<LuggageBatch> candidatos = new ArrayList<>();
+            for (LuggageBatch b : all) {
+                if (hasRoute(b) && !removed.contains(b)) candidatos.add(b);
+            }
+            Collections.shuffle(candidatos);
+            for (LuggageBatch b : candidatos) {
+                if (removed.size() >= target) break;
+                b.clearRoute();
+                removed.add(b);
+            }
+        }
+
         return removed;
+    }
+
+    private boolean hasRoute(LuggageBatch b) {
+        return b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
     }
 }

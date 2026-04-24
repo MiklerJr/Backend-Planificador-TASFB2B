@@ -1,6 +1,5 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,60 +10,78 @@ public class LuggageBatch {
     private int quantity;
     private int slaLimitHours;
 
-    // Nuevos campos agregados
     private String originCode;
     private String destCode;
     private LocalDateTime readyTime;
 
     private List<Edge> assignedRoute;
+    private List<Long> assignedDepartures; // epoch-minutes, paralelo a assignedRoute
     private boolean cumpleSLA;
 
-    // Constructor actualizado para recibir los 6 parámetros
-    public LuggageBatch(String id, int quantity, int slaLimitHours, String originCode, String destCode, LocalDateTime readyTime) {
-        this.id = id;
-        this.quantity = quantity;
+    public LuggageBatch(String id, int quantity, int slaLimitHours,
+                        String originCode, String destCode, LocalDateTime readyTime) {
+        this.id            = id;
+        this.quantity      = quantity;
         this.slaLimitHours = slaLimitHours;
-        this.originCode = originCode;
-        this.destCode = destCode;
-        this.readyTime = readyTime;
+        this.originCode    = originCode;
+        this.destCode      = destCode;
+        this.readyTime     = readyTime;
         this.assignedRoute = new ArrayList<>();
-        this.cumpleSLA = false;
+        this.cumpleSLA     = false;
     }
 
     public void setAssignedRoute(List<Edge> route) {
         this.assignedRoute = route;
     }
 
-    public void clearRoute() {
-        this.assignedRoute.clear();
+    public void setAssignedDepartures(List<Long> deps) {
+        this.assignedDepartures = deps;
     }
 
-    public double getTotalTransitTimeMins() {
-        if (assignedRoute == null || assignedRoute.isEmpty()) {
-            // Penalización alta si no tiene ruta (para que el algoritmo prefiera asignarlas)
-            return 10000.0;
-        }
+    public void clearRoute() {
+        this.assignedRoute = new ArrayList<>();
+        this.assignedDepartures = null;
+    }
 
-        // El tiempo total es desde que la maleta está lista hasta que llega el último vuelo
-        LocalDateTime arrivalTime = assignedRoute.get(assignedRoute.size() - 1).arrivalTime;
-        return Duration.between(readyTime, arrivalTime).toMinutes();
+    // Tiempo de tránsito real usando los departures reales si están disponibles.
+    // Usado por AlnsSolution.calculateCost() como función objetivo.
+    public double getTotalTransitTimeMins() {
+        if (assignedRoute == null || assignedRoute.isEmpty()) return 10000.0;
+
+        if (assignedDepartures != null && !assignedDepartures.isEmpty()) {
+            long readyMin = toEpochMin(readyTime);
+            int  lastIdx  = assignedRoute.size() - 1;
+            long arrLast  = assignedDepartures.get(lastIdx)
+                          + assignedRoute.get(lastIdx).durationMinutes;
+            return arrLast - readyMin;
+        }
+        // fallback: usa la hora estática de la arista
+        return java.time.Duration.between(readyTime,
+                assignedRoute.get(assignedRoute.size() - 1).arrivalTime).toMinutes();
     }
 
     public LuggageBatch cloneBatch() {
-        // El clon ahora también copia los nuevos atributos
-        LuggageBatch clone = new LuggageBatch(this.id, this.quantity, this.slaLimitHours, this.originCode, this.destCode, this.readyTime);
+        LuggageBatch clone = new LuggageBatch(id, quantity, slaLimitHours,
+                                               originCode, destCode, readyTime);
         clone.setAssignedRoute(new ArrayList<>(this.assignedRoute));
+        clone.setAssignedDepartures(
+                assignedDepartures != null ? new ArrayList<>(assignedDepartures) : null);
+        clone.setCumpleSLA(this.cumpleSLA);
         return clone;
     }
 
-    // Getters necesarios para que el algoritmo pueda leer los datos
-    public String getId() { return id; }
-    public int getQuantity() { return quantity; }
-    public int getSlaLimitHours() { return slaLimitHours; }
-    public String getOriginCode() { return originCode; }
-    public String getDestCode() { return destCode; }
-    public LocalDateTime getReadyTime() { return readyTime; }
-    public List<Edge> getAssignedRoute() { return assignedRoute; }
-    public boolean isCumpleSLA() { return cumpleSLA; }
-    public void setCumpleSLA(boolean cumpleSLA) { this.cumpleSLA = cumpleSLA; }
+    private static long toEpochMin(LocalDateTime dt) {
+        return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
+    }
+
+    public String getId()                     { return id; }
+    public int getQuantity()                  { return quantity; }
+    public int getSlaLimitHours()             { return slaLimitHours; }
+    public String getOriginCode()             { return originCode; }
+    public String getDestCode()               { return destCode; }
+    public LocalDateTime getReadyTime()       { return readyTime; }
+    public List<Edge> getAssignedRoute()      { return assignedRoute; }
+    public List<Long> getAssignedDepartures() { return assignedDepartures; }
+    public boolean isCumpleSLA()              { return cumpleSLA; }
+    public void setCumpleSLA(boolean v)       { this.cumpleSLA = v; }
 }

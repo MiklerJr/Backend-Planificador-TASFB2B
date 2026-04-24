@@ -29,6 +29,7 @@ public class AlgorithmMapper {
         }
 
         // 2. Mapear Aristas (Vuelos)
+        int edgeIdx = 0;
         for (Vuelo v : vuelos) {
             Edge edge = new Edge();
 
@@ -52,9 +53,13 @@ public class AlgorithmMapper {
 
             // Duración real (maneja vuelos que cruzan medianoche)
             Duration dur = Duration.between(edge.departureTime, edge.arrivalTime);
-            edge.duration          = dur.isNegative() ? dur.plusDays(1) : dur;
-            edge.cost              = edge.duration.toMinutes();
+            edge.duration           = dur.isNegative() ? dur.plusDays(1) : dur;
+            edge.cost               = edge.duration.toMinutes();
             edge.departureLocalTime = edge.departureTime.toLocalTime();
+            edge.durationMinutes    = (int) edge.duration.toMinutes();
+            edge.depMinuteOfDay     = edge.departureLocalTime.getHour() * 60
+                                    + edge.departureLocalTime.getMinute();
+            edge.idx                = edgeIdx++;
 
             graph.addEdge(edge);
         }
