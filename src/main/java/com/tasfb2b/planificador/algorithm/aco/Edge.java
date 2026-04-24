@@ -12,7 +12,8 @@ public class Edge {
     public Node to;
     public double cost;      
     
-    public int capacity;  
+    public int capacity;
+    // Usado exclusivamente por AlgorithmACO. El ALNS usa flightOccupancy (HashMap en GreedyRepairOperator).
     public int usedCapacity = 0;
 
     public LocalDateTime departureTime;
