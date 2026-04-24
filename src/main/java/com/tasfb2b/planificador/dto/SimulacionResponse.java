@@ -19,12 +19,16 @@ public class SimulacionResponse {
 
     @Data
     public static class Metricas {
-        private int procesadas;
-        private int enrutadas;
-        private int sinRuta;
-        private int cumpleSLA;
-        private int tardadas;
+        private int  procesadas;           // número de envíos (LuggageBatch)
+        private int  enrutadas;            // envíos con ruta asignada
+        private int  sinRuta;              // envíos sin ruta
+        private int  cumpleSLA;            // envíos enrutados dentro del plazo
+        private int  tardadas;             // envíos enrutados fuera del plazo
+        private long maletasIndividuales;  // suma de cantidades físicas (bag count real)
+        private int  vuelosCancelados;     // número de combinaciones vuelo-día canceladas
         private long tiempoEjecucionMs;
+        private boolean collapsoDetectado; // escenario 3: true si se detectó colapso
+        private int     bloqueColapso;     // escenario 3: índice del bloque donde ocurrió (-1 si no)
     }
 
     @Data
@@ -63,5 +67,16 @@ public class SimulacionResponse {
         private boolean enrutada;
         private boolean cumpleSLA;
         private List<String> rutaVuelos;
+        /** Tramos con tiempos reales UTC; permite al frontend rastrear dónde está la maleta. */
+        private List<TramoRuta> tramos;
+    }
+
+    @Data
+    public static class TramoRuta {
+        private String vueloId;
+        private String origen;
+        private String destino;
+        private String salidaUtc;   // ISO datetime UTC del despegue real de este tramo
+        private String llegadaUtc;  // ISO datetime UTC del aterrizaje real de este tramo
     }
 }
