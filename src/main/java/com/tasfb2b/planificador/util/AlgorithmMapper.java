@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.model.Aeropuerto;
@@ -48,18 +49,28 @@ public class AlgorithmMapper {
             edge.to = graph.nodes.get(v.getAeropuertoDestino().getCodigo());
 
             edge.capacity = v.getCapacidad();
-            edge.departureTime = v.getFechaHoraSalida();
-            edge.arrivalTime   = v.getFechaHoraLlegada();
 
-            // Duración real (maneja vuelos que cruzan medianoche)
-            Duration dur = Duration.between(edge.departureTime, edge.arrivalTime);
-            edge.duration           = dur.isNegative() ? dur.plusDays(1) : dur;
-            edge.cost               = edge.duration.toMinutes();
-            edge.departureLocalTime = edge.departureTime.toLocalTime();
-            edge.durationMinutes    = (int) edge.duration.toMinutes();
-            edge.depMinuteOfDay     = edge.departureLocalTime.getHour() * 60
-                                    + edge.departureLocalTime.getMinute();
-            edge.idx                = edgeIdx++;
+            // Normalizar salida y llegada a UTC restando el offset de cada aeropuerto.
+            // Los archivos de datos usan hora LOCAL en cada aeropuerto; para que el Dijkstra
+            // compare tiempos de forma coherente entre continentes todo debe estar en UTC.
+            // minusHours(offset): para GMT-5 → minus(-5) = +5h; para GMT+2 → minus(+2) = -2h.
+            int originOffset = v.getAeropuertoOrigen().getOffsetHorario();
+            int destOffset   = v.getAeropuertoDestino().getOffsetHorario();
+
+            LocalDateTime depUtc = v.getFechaHoraSalida().minusHours(originOffset);
+            LocalDateTime arrUtc = v.getFechaHoraLlegada().minusHours(destOffset);
+
+            Duration utcDur = Duration.between(depUtc, arrUtc);
+            if (utcDur.isNegative() || utcDur.isZero()) utcDur = utcDur.plusDays(1);
+
+            edge.departureTime     = depUtc;
+            edge.arrivalTime       = arrUtc;
+            edge.duration          = utcDur;
+            edge.cost              = utcDur.toMinutes();
+            edge.departureLocalTime = depUtc.toLocalTime();
+            edge.durationMinutes   = (int) utcDur.toMinutes();
+            edge.depMinuteOfDay    = depUtc.getHour() * 60 + depUtc.getMinute();
+            edge.idx               = edgeIdx++;
 
             graph.addEdge(edge);
         }
@@ -72,13 +83,17 @@ public class AlgorithmMapper {
      */
     public List<LuggageBatch> mapToBatches(List<Maleta> maletas) {
         return maletas.stream().map(m -> {
+            // Normalizar readyTime a UTC restando el offset del aeropuerto origen.
+            // Los archivos de envíos usan hora local; el Dijkstra opera en UTC.
+            int offset = m.getAeropuertoOrigen().getOffsetHorario();
+            LocalDateTime readyTimeUtc = m.getFechaHoraRegistro().minusHours(offset);
             return new LuggageBatch(
                     m.getIdEnvio(),
-                    m.getCantidad(), // Usamos el campo cantidad que agregamos antes
+                    m.getCantidad(),
                     m.getPlazo(),
                     m.getAeropuertoOrigen().getCodigo(),
                     m.getAeropuertoDestino().getCodigo(),
-                    m.getFechaHoraRegistro()
+                    readyTimeUtc
             );
         }).collect(Collectors.toList());
     }

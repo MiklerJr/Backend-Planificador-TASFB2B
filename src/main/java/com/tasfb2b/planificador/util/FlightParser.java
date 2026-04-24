@@ -16,11 +16,12 @@ import java.util.Map;
 @Component
 public class FlightParser {
 
+    /** Fecha base usada al parsear los vuelos (solo hora local, sin timezone). */
+    public static final LocalDate FLIGHT_BASE_DATE = LocalDate.of(2026, 1, 1);
+
     public List<Vuelo> parse(Path file, Map<String, Aeropuerto> aeropuertoMap) throws IOException {
         List<Vuelo> result = new ArrayList<>();
-        // Fecha base neutra: solo importa la hora de salida/llegada.
-        // El Dijkstra calcula la próxima ocurrencia real del vuelo dado el readyTime de la maleta.
-        final LocalDate BASE = LocalDate.of(2026, 1, 1);
+        final LocalDate BASE = FLIGHT_BASE_DATE;
 
         for (String line : FileUtils.leerLineasSeguro(file)) {
             line = line.trim();

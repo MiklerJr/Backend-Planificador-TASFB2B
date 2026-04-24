@@ -31,39 +31,22 @@ public class AeropuertoParser {
     );
 
     public List<Aeropuerto> parse(Path file) throws IOException {
-        List<String> lineas = FileUtils.leerLineasSeguro(file);  // solo una vez
-
-        System.out.println(">>> Archivo: " + file.toAbsolutePath());
-        System.out.println(">>> Total líneas: " + lineas.size());
+        List<String> lineas = FileUtils.leerLineasSeguro(file);
 
         List<Aeropuerto> result = new ArrayList<>();
-        String continenteActual = "UNKNOWN";
 
-        for (String line : lineas) {  // usar la variable, no leerLineas() de nuevo
-
-            // Debug para Dubai y Riad
-            if (line.contains("Dubai") || line.contains("Riad")) {
-                System.out.println(">>> LINEA PROBLEMATICA: |" + line + "|");
-                for (char c : line.toCharArray()) {
-                    System.out.printf("'%c' = %d  ", c, (int) c);
-                }
-                System.out.println();
-            }
-
-            if (line.contains("America")) continenteActual = "AM";
-            else if (line.contains("Europa")) continenteActual = "EU";
-            else if (line.contains("Asia"))   continenteActual = "AS";
-
+        for (String line : lineas) {
             Matcher m = LINE.matcher(line);
             if (m.find()) {
+                String codigo = m.group(2).trim();
                 Aeropuerto a = new Aeropuerto();
-                a.setCodigo(m.group(2).trim());
+                a.setCodigo(codigo);
                 a.setCiudad(m.group(3).trim());
                 a.setPais(m.group(4).trim());
                 a.setAbreviatura(m.group(5).trim());
                 a.setOffsetHorario(Integer.parseInt(m.group(6)));
                 a.setCapacidad(Integer.parseInt(m.group(7)));
-                a.setContinente(continenteActual);
+                a.setContinente(continentePorIcao(codigo));
                 a.setActivo(true);
                 a.setLatitud(parseLatitud(m.group(8).trim()));
                 a.setLongitud(parseLongitud(m.group(9).trim()));
@@ -71,6 +54,23 @@ public class AeropuertoParser {
             }
         }
         return result;
+    }
+
+    /**
+     * Deriva el continente a partir del primer carácter del código ICAO.
+     * Prefijos presentes en este dataset:
+     *   S → Sudamérica (AM)
+     *   E, L, U → Europa / Europa del Este (EU)
+     *   O, V → Oriente Medio / Asia del Sur (AS)
+     */
+    private static String continentePorIcao(String code) {
+        if (code == null || code.isEmpty()) return "UNKNOWN";
+        return switch (code.charAt(0)) {
+            case 'S'            -> "AM";
+            case 'E', 'L', 'U' -> "EU";
+            case 'O', 'V'       -> "AS";
+            default             -> "UNKNOWN";
+        };
     }
     // Convierte "12° 01' 19\" S" a -12.0219 (negativo si es S)
     private Double parseLatitud(String raw) {
