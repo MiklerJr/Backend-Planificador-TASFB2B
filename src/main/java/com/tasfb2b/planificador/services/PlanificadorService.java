@@ -228,7 +228,8 @@ public class PlanificadorService {
             "totalEnrutadas",sc1Enrutadas,
             "totalSinRuta",  sc1SinRuta,
             "totalCumpleSLA",sc1CumpleSLA,
-            "totalTardadas", sc1Tardadas
+            "totalTardadas", sc1Tardadas,
+            "totalMaletas",  sc1Maletas
         );
     }
 
