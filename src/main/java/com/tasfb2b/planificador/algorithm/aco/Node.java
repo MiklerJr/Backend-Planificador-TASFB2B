@@ -21,6 +21,7 @@ public class Node {
         this.code = code;
         this.lat = lat;
         this.lon = lon;
+    }
 
     public boolean hasStorageCapacity(int cantidad) {
         return (storageUsed + cantidad) <= storageCapacity;

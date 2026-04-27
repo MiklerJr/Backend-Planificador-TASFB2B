@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 public class AlgorithmACO {
 
@@ -14,6 +15,8 @@ public class AlgorithmACO {
     private List<Ant> ants = new ArrayList<>();
     private Ant mejorGlobal = null;
     private double mejorCostoGlobal = Double.MAX_VALUE;
+    /** Fuente de aleatoriedad — reproducible si se setea con un seed explícito. */
+    private Random rng = new Random();
 
     public AlgorithmACO(Graph graph, ConfigACO config, CostFunction.EnvioContext envioContext) {
         this.graph = graph;
@@ -23,6 +26,10 @@ public class AlgorithmACO {
         for (int i = 0; i < config.antCount; i++) {
             ants.add(new Ant());
         }
+    }
+
+    public void setRandom(Random rng) {
+        if (rng != null) this.rng = rng;
     }
 
     public void run(String start, String end) {
@@ -240,7 +247,7 @@ public class AlgorithmACO {
             sum += value;
         }
 
-        double rand = Math.random() * sum;
+        double rand = rng.nextDouble() * sum;
         double acc = 0;
 
         for (Map.Entry<Edge, Double> entry : probs.entrySet()) {

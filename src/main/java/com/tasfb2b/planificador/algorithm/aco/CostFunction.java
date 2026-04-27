@@ -66,7 +66,7 @@ public class CostFunction {
     public static double calcularCostoEdge(Edge edge, EnvioContext envio) {
 
         // --- Duración real del vuelo en minutos ---
-        double duracion = calcularDuracionMinutos(edge.departureTime, edge.arrivalTime);
+        double duracion = calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString());
 
         // --- Penalización por falta de capacidad ---
         double penCapacidad = 0.0;
@@ -103,7 +103,7 @@ public class CostFunction {
         // --- Tiempo total de vuelo (ya en ant.totalCost, pero lo recalculamos limpio) ---
         double tiempoVuelo = 0.0;
         for (Edge e : edgesUsados) {
-            tiempoVuelo += calcularDuracionMinutos(e.departureTime, e.arrivalTime);
+            tiempoVuelo += calcularDuracionMinutos(e.departureTime.toString(), e.arrivalTime.toString());
         }
 
         // --- Tiempo de espera entre conexiones ---
@@ -111,7 +111,7 @@ public class CostFunction {
 
         // --- Tiempo de llegada al destino final (en minutos desde 00:00) ---
         Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
-        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime.toString());
         // Si la ruta tiene escalas que cruzan días, acumular días completos
         minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
 
@@ -156,13 +156,13 @@ public class CostFunction {
 
         double tiempoVuelo = 0.0;
         for (Edge e : edgesUsados) {
-            tiempoVuelo += calcularDuracionMinutos(e.departureTime, e.arrivalTime);
+            tiempoVuelo += calcularDuracionMinutos(e.departureTime.toString(), e.arrivalTime.toString());
         }
 
         double tiempoEspera = calcularTiempoEsperaTotal(edgesUsados);
 
         Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
-        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime.toString());
         minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
 
         double penSLA = 0.0;
@@ -221,7 +221,7 @@ public class CostFunction {
         }
 
         Edge ultimoVuelo = edgesPath.get(edgesPath.size() - 1);
-        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime.toString());
         minutosLlegada += calcularDiasRuta(edgesPath) * 1440;
 
         return minutosLlegada <= envio.deadlineMinutos;
@@ -245,7 +245,7 @@ public class CostFunction {
      */
     public static double heuristica(Edge edge, EnvioContext envio) {
 
-        double duracion = calcularDuracionMinutos(edge.departureTime, edge.arrivalTime);
+        double duracion = calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString());
         if (duracion <= 0) duracion = 1;
 
         // Factor de ocupación basado en semáforo
@@ -270,10 +270,18 @@ public class CostFunction {
 
     // Helpers privados
     /**
-     * Parsea "HH:MM" a minutos totales desde 00:00.
+     * Parsea "HH:MM" o "yyyy-MM-ddTHH:MM[:ss]" a minutos totales desde 00:00.
+     * Acepta el {@code toString()} de un {@code LocalDateTime} para permitir
+     * que los edges del flujo ALNS (con fecha real) y los del flujo ACO
+     * (solo hora) se procesen con la misma función.
      */
     private static int parsearMinutos(String horaStr) {
-        String[] partes = horaStr.split(":");
+        if (horaStr == null) return 0;
+        // Si viene de LocalDateTime.toString() ("2026-01-01T19:00") tomar la parte
+        // después de la 'T' para quedarnos con "HH:MM".
+        int t = horaStr.indexOf('T');
+        String hhmm = t >= 0 ? horaStr.substring(t + 1) : horaStr;
+        String[] partes = hhmm.split(":");
         return Integer.parseInt(partes[0]) * 60 + Integer.parseInt(partes[1]);
     }
 
@@ -290,14 +298,22 @@ public class CostFunction {
     }
 
     /**
+     * Versión pública de {@link #parsearMinutos(String)} para que otros componentes
+     * (ej. {@code PlanificadorService}) puedan parsear de forma consistente.
+     */
+    public static int hhmmAMinutos(String horaStr) {
+        return parsearMinutos(horaStr);
+    }
+
+    /**
      * Suma los tiempos de espera entre vuelos consecutivos de la ruta.
      * Si la conexión cruza medianoche, suma correctamente.
      */
     private static double calcularTiempoEsperaTotal(List<Edge> edgesRuta) {
         double espera = 0.0;
         for (int i = 0; i < edgesRuta.size() - 1; i++) {
-            int llegada = parsearMinutos(edgesRuta.get(i).arrivalTime);
-            int salida  = parsearMinutos(edgesRuta.get(i + 1).departureTime);
+            int llegada = parsearMinutos(edgesRuta.get(i).arrivalTime.toString());
+            int salida  = parsearMinutos(edgesRuta.get(i + 1).departureTime.toString());
             int diff = salida - llegada;
             if (diff < 0) diff += 1440;
             espera += diff;
@@ -314,8 +330,8 @@ public class CostFunction {
      * @return true si el tiempo entre llegada y salida es >= TIEMPO_MIN_ESCALA
      */
     public static boolean tieneTiempoMinimoEscala(Edge vueloAnterior, Edge vueloSiguiente) {
-        int llegada = parsearMinutos(vueloAnterior.arrivalTime);
-        int salida = parsearMinutos(vueloSiguiente.departureTime);
+        int llegada = parsearMinutos(vueloAnterior.arrivalTime.toString());
+        int salida = parsearMinutos(vueloSiguiente.departureTime.toString());
         int diff = salida - llegada;
         if (diff < 0) diff += 1440;
         return diff >= TIEMPO_MIN_ESCALA;
@@ -339,10 +355,10 @@ public class CostFunction {
      */
     private static int calcularDiasRuta(List<Edge> edgesRuta) {
         int dias = 0;
-        int minutosActuales = parsearMinutos(edgesRuta.get(0).departureTime);
+        int minutosActuales = parsearMinutos(edgesRuta.get(0).departureTime.toString());
         for (Edge e : edgesRuta) {
-            int salida  = parsearMinutos(e.departureTime);
-            int llegada = parsearMinutos(e.arrivalTime);
+            int salida  = parsearMinutos(e.departureTime.toString());
+            int llegada = parsearMinutos(e.arrivalTime.toString());
             if (salida < minutosActuales) dias++; // cruzó medianoche esperando
             if (llegada < salida) dias++;          // cruzó medianoche volando
             minutosActuales = llegada;
