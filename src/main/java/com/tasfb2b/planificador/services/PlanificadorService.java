@@ -26,6 +26,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -350,20 +351,15 @@ public class PlanificadorService {
     private int calcularTiempoEsperaMin(List<Edge> edgesPath) {
         int espera = 0;
         for (int i = 0; i < edgesPath.size() - 1; i++) {
-            int llegada = parsearMinutos(edgesPath.get(i).arrivalTime);
-            int salida = parsearMinutos(edgesPath.get(i + 1).departureTime);
-            int diff = salida - llegada;
+            Edge anterior = edgesPath.get(i);
+            Edge siguiente = edgesPath.get(i + 1);
+            long diff = Duration.between(anterior.arrivalTime, siguiente.departureTime).toMinutes();
             if (diff < 0) {
                 diff += 1440;
             }
             espera += diff;
         }
         return espera;
-    }
-
-    private int parsearMinutos(String hhmm) {
-        String[] p = hhmm.split(":");
-        return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
     }
 
     private boolean sinCiclos(List<Node> path) {

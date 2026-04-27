@@ -1,5 +1,7 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 
 
@@ -111,7 +113,7 @@ public class CostFunction {
 
         // --- Tiempo de llegada al destino final (en minutos desde 00:00) ---
         Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
-        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        int minutosLlegada = getMinutosLlegada(ultimoVuelo);
         // Si la ruta tiene escalas que cruzan días, acumular días completos
         minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
 
@@ -162,7 +164,7 @@ public class CostFunction {
         double tiempoEspera = calcularTiempoEsperaTotal(edgesUsados);
 
         Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
-        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        int minutosLlegada = getMinutosLlegada(ultimoVuelo);
         minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
 
         double penSLA = 0.0;
@@ -221,7 +223,7 @@ public class CostFunction {
         }
 
         Edge ultimoVuelo = edgesPath.get(edgesPath.size() - 1);
-        int minutosLlegada = parsearMinutos(ultimoVuelo.arrivalTime);
+        int minutosLlegada = getMinutosLlegada(ultimoVuelo);
         minutosLlegada += calcularDiasRuta(edgesPath) * 1440;
 
         return minutosLlegada <= envio.deadlineMinutos;
@@ -289,6 +291,14 @@ public class CostFunction {
         return diff < 0 ? diff + 1440 : diff;
     }
 
+    public static double calcularDuracionMinutos(LocalDateTime salida, LocalDateTime llegada) {
+        Duration d = Duration.between(salida, llegada);
+        if (d.isNegative() || d.isZero()) {
+            d = d.plusDays(1);
+        }
+        return d.toMinutes();
+    }
+
     /**
      * Suma los tiempos de espera entre vuelos consecutivos de la ruta.
      * Si la conexión cruza medianoche, suma correctamente.
@@ -296,55 +306,47 @@ public class CostFunction {
     private static double calcularTiempoEsperaTotal(List<Edge> edgesRuta) {
         double espera = 0.0;
         for (int i = 0; i < edgesRuta.size() - 1; i++) {
-            int llegada = parsearMinutos(edgesRuta.get(i).arrivalTime);
-            int salida  = parsearMinutos(edgesRuta.get(i + 1).departureTime);
-            int diff = salida - llegada;
+            double llegada = calcularDuracionMinutos(edgesRuta.get(i).arrivalTime, edgesRuta.get(i).arrivalTime);
+            double salida  = calcularDuracionMinutos(edgesRuta.get(i + 1).departureTime, edgesRuta.get(i + 1).departureTime);
+            Edge anterior = edgesRuta.get(i);
+            Edge siguiente = edgesRuta.get(i + 1);
+            long diff = Duration.between(anterior.arrivalTime, siguiente.departureTime).toMinutes();
             if (diff < 0) diff += 1440;
             espera += diff;
         }
         return espera;
     }
 
-    /**
-     * Verifica si hay tiempo suficiente para la escala entre dos vuelos.
-     * El equipaje debe cambiar de avión, lo cual requiere tiempo mínimo de escala.
-     *
-     * @param vueloAnterior  vuelo que llega al aeropuerto de escala
-     * @param vueloSiguiente vuelo que sale del aeropuerto de escala
-     * @return true si el tiempo entre llegada y salida es >= TIEMPO_MIN_ESCALA
-     */
+    public static int calcularTiempoEsperaMinutos(Edge anterior, Edge siguiente) {
+        long diff = Duration.between(anterior.arrivalTime, siguiente.departureTime).toMinutes();
+        if (diff < 0) diff += 1440;
+        return (int) diff;
+    }
+
+    // Métodos que usan arrivalTime/departureTime como LocalDateTime
+    public static int getMinutosLlegada(Edge ultimoVuelo) {
+        LocalDateTime arrival = ultimoVuelo.arrivalTime;
+        return arrival.getHour() * 60 + arrival.getMinute();
+    }
+
     public static boolean tieneTiempoMinimoEscala(Edge vueloAnterior, Edge vueloSiguiente) {
-        int llegada = parsearMinutos(vueloAnterior.arrivalTime);
-        int salida = parsearMinutos(vueloSiguiente.departureTime);
-        int diff = salida - llegada;
+        long diff = Duration.between(vueloAnterior.arrivalTime, vueloSiguiente.departureTime).toMinutes();
         if (diff < 0) diff += 1440;
         return diff >= TIEMPO_MIN_ESCALA;
     }
 
-    /**
-     * Verifica si hay tiempo suficiente en destino final para recoger el equipaje.
-     * Después de llegar, el cliente necesita tiempo para recoger la maleta.
-     *
-     * @param ultimoVuelo vuelo que llega al destino final
-     * @return true si hay al menos TIEMPO_DESTINO_FINAL minutos disponibles
-     */
-    public static boolean tieneTiempoDestinoFinal(Edge ultimoVuelo) {
-        return true;
+    public static int getMinutosDesdeMednight(LocalDateTime dt) {
+        return dt.getHour() * 60 + dt.getMinute();
     }
 
-    /**
-     * Estima cuántos días completos adicionales acumula la ruta (para el SLA).
-     * Cada vez que la hora de salida de un tramo es menor a la llegada del anterior,
-     * se cruzó un día.
-     */
     private static int calcularDiasRuta(List<Edge> edgesRuta) {
         int dias = 0;
-        int minutosActuales = parsearMinutos(edgesRuta.get(0).departureTime);
+        int minutosActuales = getMinutosDesdeMednight(edgesRuta.get(0).departureTime);
         for (Edge e : edgesRuta) {
-            int salida  = parsearMinutos(e.departureTime);
-            int llegada = parsearMinutos(e.arrivalTime);
-            if (salida < minutosActuales) dias++; // cruzó medianoche esperando
-            if (llegada < salida) dias++;          // cruzó medianoche volando
+            int salida  = getMinutosDesdeMednight(e.departureTime);
+            int llegada = getMinutosDesdeMednight(e.arrivalTime);
+            if (salida < minutosActuales) dias++;
+            if (llegada < salida) dias++;
             minutosActuales = llegada;
         }
         return dias;
