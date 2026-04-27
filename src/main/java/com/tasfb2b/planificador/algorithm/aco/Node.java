@@ -5,14 +5,13 @@ import java.util.Objects;
 public class Node {
 
     public String code;
-    public double lat;
-    public double lon;
 
     public int storageCapacity;
     public int storageUsed = 0;
 
-    public Node(String code) {
+    public Node(String code, double lat, double lon, int storageCapacity) {
         this.code = code;
+        this.storageCapacity = storageCapacity;
     }
 
     public boolean hasStorageCapacity(int cantidad) {
