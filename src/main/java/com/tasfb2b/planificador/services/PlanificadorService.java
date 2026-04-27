@@ -11,6 +11,13 @@ import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.PlanificacionResultado;
 import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
 import com.tasfb2b.planificador.model.Aeropuerto;
+import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.util.AlgorithmMapper;
+import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.util.FlightCancellationSimulator;
+import com.tasfb2b.planificador.util.FlightParser;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
@@ -30,6 +37,7 @@ import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Set;
 
+@Slf4j
 @Service
 public class PlanificadorService {
 

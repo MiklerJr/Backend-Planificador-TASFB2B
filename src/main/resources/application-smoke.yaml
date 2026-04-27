@@ -1,0 +1,9 @@
+# Perfil "smoke": verificación rápida sin sleep entre bloques.
+# Usar con: mvn spring-boot:run -Dspring-boot.run.profiles=smoke
+# Override solo de los flags relevantes; el resto se hereda de application.yaml.
+planificador:
+  scenario:
+    simular-tiempo-real-2: false       # sin sleep → escenario 2 corre en ~2-5 min
+    simular-tiempo-real-3: false
+  alns:
+    iteraciones-base: 3                # menos iteraciones → más rápido para verificar
