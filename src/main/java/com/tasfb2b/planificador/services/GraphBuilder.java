@@ -20,11 +20,12 @@ public class GraphBuilder {
 
         Graph graph = new Graph();
 
-        // 1. CREAR NODOS
+        // 1. CREAR NODOS - aeropuertos 
         for (Aeropuerto a : aeropuertos) {
             Node node = new Node(a.getCodigo());
-            node.lat = a.getLatitud();
-            node.lon = a.getLongitud();
+            node.lat = a.getLatitud() != null ? a.getLatitud() : 0.0;
+            node.lon = a.getLongitud() != null ? a.getLongitud() : 0.0;
+            node.storageCapacity = a.getCapacidad() != null ? a.getCapacidad() : 500;
             graph.nodes.put(node.code, node);
         }
 
@@ -38,20 +39,18 @@ public class GraphBuilder {
 
             if (parts.length < 5) continue;
 
-            String origin = parts[0];
-            String destination = parts[1];
-            String departure = parts[2];
-            String arrival = parts[3];
+            String origin = parts[0]; // codigio aeropuerto origen
+            String destination = parts[1]; // codigo aeropuerto destino
+            String departure = parts[2]; // hora salida : HH:MM
+            String arrival = parts[3];  // hora llegada : HH:MM
             int capacity = parseCapacity(parts[4]);
 
-            Node from = graph.nodes.get(origin);
+            Node from = graph.nodes.get(origin); // extraemos nodos del grafo por codigo
             Node to = graph.nodes.get(destination);
 
             if (from == null || to == null) {
                 continue;
             }
-
-            double d = distance(from, to);
 
             Edge edge = new Edge();
             edge.from = from;
