@@ -19,9 +19,20 @@ public class SimulacionInitializer implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        Scanner sc = new Scanner(System.in);
         imprimirBanner();
 
+        // Modo "rest-only": salta el menú y deja solo el servidor REST activo.
+        // Útil para validación con curl o para evitar bloqueo en stdin.
+        for (String a : args) {
+            if ("--rest-only".equalsIgnoreCase(a) || "rest-only".equalsIgnoreCase(a)) {
+                System.out.println("  Modo REST-only: el menú interactivo está deshabilitado.");
+                System.out.println("  Usa los endpoints /api/planificador/... para lanzar simulaciones.");
+                System.out.println();
+                return;
+            }
+        }
+
+        Scanner sc = new Scanner(System.in);
         int    escenario  = leerEscenario(sc);
         double cancelProb = leerCancelProb(sc);
 

@@ -100,9 +100,49 @@ public class DataLoader {
         return maletasPorVentana.keySet();
     }
 
+    /** Primera ventana cargada (la más antigua). Null si no hay datos. */
+    public LocalDateTime getPrimeraVentana() {
+        return maletasPorVentana.isEmpty() ? null : maletasPorVentana.firstKey();
+    }
+
+    /** Última ventana cargada (la más reciente). Null si no hay datos. */
+    public LocalDateTime getUltimaVentana() {
+        return maletasPorVentana.isEmpty() ? null : maletasPorVentana.lastKey();
+    }
+
     // Devuelve las maletas de una ventana sin eliminarlas (permite re-ejecución).
     public List<Maleta> getMaletasVentana(LocalDateTime ventana) {
         return maletasPorVentana.getOrDefault(ventana, Collections.emptyList());
+    }
+
+    /**
+     * Devuelve las maletas registradas en {@code [desde, hasta)} (eje de datos).
+     *
+     * <p>Usado por el modelo de planificación programada fija para consumir
+     * Sc = K*Sa minutos por ejecución. Las claves del TreeMap están alineadas
+     * a múltiplos de 10 min ({@link #claveVentana}); para evitar pérdidas o
+     * duplicados, los argumentos {@code desde} y {@code hasta} también deben
+     * estar alineados (Sa debe ser múltiplo de 10).
+     *
+     * @param desde inicio del rango (inclusive)
+     * @param hasta fin del rango (exclusivo)
+     */
+    public List<Maleta> getMaletasEnRango(LocalDateTime desde, LocalDateTime hasta) {
+        if (desde == null || hasta == null || !desde.isBefore(hasta))
+            return Collections.emptyList();
+
+        // subMap([desde, hasta)) sobre el TreeMap es O(log n) + iteración del rango.
+        java.util.NavigableMap<LocalDateTime, List<Maleta>> sub =
+                maletasPorVentana.subMap(desde, true, hasta, false);
+
+        if (sub.isEmpty()) return Collections.emptyList();
+
+        // Tamaño esperado: estimación de la suma de tamaños.
+        int total = 0;
+        for (List<Maleta> l : sub.values()) total += l.size();
+        List<Maleta> result = new ArrayList<>(total);
+        for (List<Maleta> l : sub.values()) result.addAll(l);
+        return result;
     }
 
     // Muestra pequeña para ACO u otros usos que no requieren el dataset completo.
