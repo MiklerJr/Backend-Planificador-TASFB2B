@@ -6,7 +6,9 @@ import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 
 @Component
@@ -56,8 +58,11 @@ public class GraphBuilder {
             edge.from = from;
             edge.to = to;
 
-            edge.departureTime = LocalDateTime.parse(departure);
-            edge.arrivalTime = LocalDateTime.parse(arrival);
+            // Los archivos de vuelos traen solo HH:MM. Como Edge.departureTime es LocalDateTime
+            // (compatibilidad con AlgorithmMapper del flujo ALNS), combinamos con una fecha base.
+            LocalDate fechaBase = LocalDate.of(2026, 1, 1);
+            edge.departureTime = LocalDateTime.of(fechaBase, LocalTime.parse(departure));
+            edge.arrivalTime = LocalDateTime.of(fechaBase, LocalTime.parse(arrival));
             edge.capacity = capacity;
 
             edge.cost = calculateCost(departure, arrival);

@@ -33,9 +33,26 @@ public class JobState {
     public volatile SimulacionResponse resultado;
     /** Mensaje de error cuando estado = "error". */
     public volatile String error;
+    /**
+     * CSV de auditoría por envío (23 columnas). Generado al terminar el job y
+     * descargable vía {@code GET /api/planificador/jobs/{jobId}/auditoria.csv}.
+     */
+    public volatile String auditoriaCsv;
+    /** Tamaño en filas de la auditoría (sin contar la cabecera). */
+    public volatile int auditoriaFilas;
 
     public final LocalDateTime inicio = LocalDateTime.now();
     public volatile LocalDateTime fin;
+
+    /** Motor utilizado: "alns" o "aco". */
+    public volatile String algoritmo = "alns";
+
+    /**
+     * Seed efectivo de la corrida. Si el cliente no pasa uno, se genera uno aleatorio
+     * y se reporta aquí — cualquier valor reportado garantiza reproducibilidad si se
+     * vuelve a invocar con el mismo seed, motor, k y cancelProb.
+     */
+    public volatile long seed = 0L;
 
     public JobState(String jobId, String escenario, int k) {
         this.jobId     = jobId;
