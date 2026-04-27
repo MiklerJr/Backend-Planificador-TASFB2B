@@ -60,6 +60,23 @@ public class LuggageBatch {
                 assignedRoute.get(assignedRoute.size() - 1).arrivalTime).toMinutes();
     }
 
+    /**
+     * Devuelve el ratio de holgura SLA: {@code (slaLimit - transitTime) / slaLimit}.
+     * <ul>
+     *   <li>1.0 = entrega instantánea (todo el SLA disponible)</li>
+     *   <li>0.0 = al límite del SLA</li>
+     *   <li>negativo = ya tarde (incumplió SLA)</li>
+     * </ul>
+     * Usado por el {@link BacklogManager} para detectar batches "próximos a tardar"
+     * que ameriten replanificación preventiva (umbral típico 0.10).
+     */
+    public double getSlaSlackRatio() {
+        if (assignedRoute == null || assignedRoute.isEmpty()) return -1.0;
+        double slaMin = slaLimitHours * 60.0;
+        double transitMin = getTotalTransitTimeMins();
+        return (slaMin - transitMin) / slaMin;
+    }
+
     public LuggageBatch cloneBatch() {
         LuggageBatch clone = new LuggageBatch(id, quantity, slaLimitHours,
                                                originCode, destCode, readyTime);

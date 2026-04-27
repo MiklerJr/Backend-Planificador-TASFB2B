@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
 import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.config.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Arrays;
@@ -37,6 +38,14 @@ public class AlgorithmALNS {
     public int    minBlockSize  = 3;      // bloques menores no ejecutan ALNS
     public int    segmentLength = 3;      // iters entre actualizaciones de pesos
 
+    /**
+     * Presupuesto de tiempo máximo para {@link #run(int)}. Si el algoritmo
+     * supera este límite, aborta antes de completar las iteraciones.
+     * Sirve para garantizar Ta &lt; Sa en bloques grandes (cerca del colapso).
+     * Por defecto sin límite ({@link Long#MAX_VALUE}).
+     */
+    public long   tiempoLimiteMs = Long.MAX_VALUE;
+
     // ── Parámetros adaptativos (Ropke & Pisinger 2006) ───────────────────────
     private static final double REWARD_NEW_BEST    = 3.0;
     private static final double REWARD_IMPROVEMENT = 2.0;
@@ -65,6 +74,8 @@ public class AlgorithmALNS {
     // ────────────────────────────────────────────────────────────────────────
 
     /**
+     * Constructor heredado: usa los hiperparámetros default hardcoded en los campos.
+     *
      * @param graph         grafo aeropuertos/vuelos
      * @param enrutador     repair operator compartido (contiene ocupación global)
      * @param batches       lotes ya enrutados por la fase greedy inicial
@@ -76,15 +87,45 @@ public class AlgorithmALNS {
                           List<LuggageBatch> batches,
                           Map<Long,Integer> blockFlight,
                           Map<Long,Integer> blockAirport) {
-        this.graph    = graph;
-        this.enrutador = enrutador;
+        this(graph, enrutador, batches, blockFlight, blockAirport, null);
+    }
+
+    /**
+     * Constructor con configuración externalizada. Si {@code props} no es null,
+     * sobrescribe los hiperparámetros default y los pesos del objetivo en la solución.
+     */
+    public AlgorithmALNS(Graph graph,
+                          GreedyRepairOperator enrutador,
+                          List<LuggageBatch> batches,
+                          Map<Long,Integer> blockFlight,
+                          Map<Long,Integer> blockAirport,
+                          PlanificadorProperties props) {
+        // 1. Aplicar config externa si está disponible (antes de usar initialTemp).
+        if (props != null) {
+            PlanificadorProperties.Alns a = props.getAlns();
+            this.destroyFactor  = a.getDestroyFactor();
+            this.initialTemp    = a.getInitialTemp();
+            this.coolingRate    = a.getCoolingRate();
+            this.minTemp        = a.getMinTemp();
+            this.minBlockSize   = a.getMinBlockSize();
+            this.segmentLength  = a.getSegmentLength();
+        }
+
+        this.graph       = graph;
+        this.enrutador   = enrutador;
         this.temperature = initialTemp;
 
-        // Dos operadores de destroy — el adaptativo decide cuál usar en cada iter
-        this.destroyOps = List.of(
-                new CapacityDestroyOperator(graph),    // idx 0
-                new WorstRouteDestroyOperator(graph)   // idx 1
-        );
+        // Lista de operadores destroy: dinámica desde props si está disponible,
+        // o el conjunto heredado por defecto (capacity + worst-route).
+        if (props != null && props.getAlns().getOperadoresDestroy() != null
+                && !props.getAlns().getOperadoresDestroy().isEmpty()) {
+            this.destroyOps = construirOperadoresDestroy(props.getAlns().getOperadoresDestroy(), graph);
+        } else {
+            this.destroyOps = List.of(
+                    new CapacityDestroyOperator(graph),
+                    new WorstRouteDestroyOperator(graph)
+            );
+        }
 
         int n = destroyOps.size();
         this.weights = new double[n];
@@ -92,8 +133,15 @@ public class AlgorithmALNS {
         this.uses    = new int[n];
         Arrays.fill(weights, 1.0); // pesos iniciales iguales → selección equiprobable
 
-        // Solución inicial = resultado de la fase greedy
-        this.currentSolution = new AlnsSolution(batches);
+        // Solución inicial = resultado de la fase greedy. Aplicar pesos del objetivo si procede.
+        if (props != null) {
+            this.currentSolution = new AlnsSolution(batches,
+                    props.getObjetivo().getPesoTransit(),
+                    props.getObjetivo().getPesoTarde(),
+                    props.getObjetivo().getPesoUsoAlmacen());
+        } else {
+            this.currentSolution = new AlnsSolution(batches);
+        }
         this.currentFlight   = new HashMap<>(blockFlight);
         this.currentAirport  = new HashMap<>(blockAirport);
 
@@ -110,8 +158,20 @@ public class AlgorithmALNS {
 
         double bestCost    = bestSolution.calculateCost();
         double currentCost = bestCost;
+        long   tInicio     = System.nanoTime();
 
         for (int iter = 0; iter < maxIterations && temperature > minTemp; iter++) {
+
+            // Presupuesto de tiempo: aborta si excede tiempoLimiteMs.
+            if (tiempoLimiteMs < Long.MAX_VALUE) {
+                long elapsedMs = (System.nanoTime() - tInicio) / 1_000_000;
+                if (elapsedMs > tiempoLimiteMs) {
+                    log.warn("ALNS abortado por presupuesto de tiempo: iter {}/{} ({}ms > {}ms)",
+                            iter, maxIterations, elapsedMs, tiempoLimiteMs);
+                    break;
+                }
+            }
+
 
             // ── 1. Selección adaptativa (ruleta proporcional a pesos) ────────
             int selectedIdx = selectDestroyOp();
@@ -211,4 +271,34 @@ public class AlgorithmALNS {
     public AlnsSolution      getBestSolution()     { return bestSolution; }
     public Map<Long,Integer> getBestBlockFlight()  { return bestFlight;   }
     public Map<Long,Integer> getBestBlockAirport() { return bestAirport;  }
+
+    /**
+     * Construye la lista de operadores destroy a partir de los nombres en
+     * {@code application.yaml}. Los nombres soportados son:
+     * <ul>
+     *   <li>{@code "capacity"} → {@link CapacityDestroyOperator}</li>
+     *   <li>{@code "worst-route"} → {@link WorstRouteDestroyOperator}</li>
+     *   <li>{@code "random"} → {@link RandomDestroyOperator}</li>
+     *   <li>{@code "airport-congestion"} → {@link AirportCongestionDestroyOperator}</li>
+     * </ul>
+     * Nombres desconocidos se ignoran con un WARNING.
+     */
+    private static List<DestroyOperator> construirOperadoresDestroy(List<String> nombres, Graph graph) {
+        java.util.ArrayList<DestroyOperator> ops = new java.util.ArrayList<>(nombres.size());
+        for (String n : nombres) {
+            switch (n.toLowerCase().trim()) {
+                case "capacity"           -> ops.add(new CapacityDestroyOperator(graph));
+                case "worst-route"        -> ops.add(new WorstRouteDestroyOperator(graph));
+                case "random"             -> ops.add(new RandomDestroyOperator(graph));
+                case "airport-congestion" -> ops.add(new AirportCongestionDestroyOperator(graph));
+                default -> log.warn("Operador destroy desconocido en config: '{}' (ignorado)", n);
+            }
+        }
+        if (ops.isEmpty()) {
+            log.warn("Lista de operadores destroy vacía tras parseo — usando defaults");
+            ops.add(new CapacityDestroyOperator(graph));
+            ops.add(new WorstRouteDestroyOperator(graph));
+        }
+        return ops;
+    }
 }

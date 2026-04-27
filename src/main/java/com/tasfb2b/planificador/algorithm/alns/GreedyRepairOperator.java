@@ -131,6 +131,42 @@ public class GreedyRepairOperator implements RepairOperator {
         });
     }
 
+    /**
+     * Libera la capacidad ocupada por un batch en los mapas <b>globales</b>
+     * (no del bloque actual). Usado cuando el {@link BacklogManager} reintenta
+     * la ruta de un batch ya commiteado en bloques anteriores.
+     *
+     * <p>El llamador es responsable de invocar {@link LuggageBatch#clearRoute()}
+     * después si va a reasignar inmediatamente.
+     */
+    public void releaseFromGlobal(LuggageBatch batch) {
+        List<Edge> route = batch.getAssignedRoute();
+        List<Long> deps  = batch.getAssignedDepartures();
+        if (route == null || route.isEmpty() || deps == null || deps.isEmpty()) return;
+
+        for (int i = 0; i < route.size(); i++) {
+            Edge e      = route.get(i);
+            long depMin = deps.get(i);
+            long arrMin = depMin + e.durationMinutes;
+
+            flightOccupancy.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
+
+            boolean esFinalLeg = (i == route.size() - 1);
+            if (!esFinalLeg && e.to.idx >= 0) {
+                long arrDay     = arrMin / DAY_MIN;
+                long nextDepMin = deps.get(i + 1);
+                long depDay     = nextDepMin / DAY_MIN;
+                for (long day = arrDay; day <= depDay; day++) {
+                    airportOccupancy.merge(airportKey(e.to.idx, day * DAY_MIN),
+                            -batch.getQuantity(), Integer::sum);
+                }
+            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
+                airportOccupancy.merge(airportKey(e.to.idx, arrMin),
+                        -batch.getQuantity(), Integer::sum);
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Dijkstra earliest-arrival con capacidad global + bloque
     // -----------------------------------------------------------------------
