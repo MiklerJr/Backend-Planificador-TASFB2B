@@ -29,6 +29,26 @@ public class SimulacionResponse {
         private long tiempoEjecucionMs;
         private boolean collapsoDetectado; // escenario 3: true si se detectó colapso
         private int     bloqueColapso;     // escenario 3: índice del bloque donde ocurrió (-1 si no)
+
+        // ── Métricas de calibración (modelo Ta/Sa) ─────────────────────────
+        /** Ta mínimo observado en algún bloque (ms). */
+        private long taMinMs;
+        /** Ta máximo observado en algún bloque (ms). */
+        private long taMaxMs;
+        /** Ta promedio sobre todos los bloques procesados (ms). */
+        private long taPromedioMs;
+        /** Tiempo total dedicado al algoritmo (suma de Ta de todos los bloques, ms). */
+        private long tiempoTotalAlgMs;
+        /** Si Ta excedió 0.9 * Sa en algún bloque → la simulación necesita recalibrar K. */
+        private boolean advertenciaCalibracion;
+
+        // ── Métricas del backlog acumulativo ───────────────────────────────
+        /** Tamaño del backlog al final de la simulación (sinRuta + replanificables). */
+        private int backlogActual;
+        /** Pico histórico del backlog durante la simulación. */
+        private int backlogPico;
+        /** Batches descartados definitivamente (SLA vencido o tope excedido). */
+        private int sinRutaDefinitivo;
     }
 
     @Data
@@ -51,11 +71,21 @@ public class SimulacionResponse {
 
     @Data
     public static class BloqueSimulacion {
+        /** Inicio del rango de datos consumidos (eje de datos = scStart). */
         private String horaInicio;
+        /** Fin del rango de datos consumidos (eje de datos = scEnd). */
         private String horaFin;
         private int maletasProcesadas;
         private int maletasEnrutadas;
         private List<AsignacionMaleta> asignaciones;
+
+        // ── Modelo Ta/Sa: campos del eje real ──────────────────────────────
+        /** Índice 0-based de este bloque en la simulación. */
+        private int    bloqueIdx;
+        /** {@code Ta} = duración real del procesamiento de este bloque, en ms. */
+        private long   taMs;
+        /** Cantidad de minutos de datos consumidos (Sc = K * Sa). */
+        private int    scMinutos;
     }
 
     @Data
