@@ -270,7 +270,7 @@ public class PlanificadorService {
                 int tiempoTotalMin = tiempoVueloMin + tiempoEsperaMin;
                 int llegadaMin = ctx.minutosRegistro + tiempoTotalMin;
                 int slack = ctx.deadlineMinutos - llegadaMin;
-                boolean sinDirecto = mejor.edgesPath.size() > 1;
+                boolean sinDirecto = mejor.edgesPath.size() >= 1;
                 boolean sinCiclos = sinCiclos(mejor.path);
                 boolean capacidadVuelosOk = mejor.edgesPath.stream().allMatch(ed -> ed.hasCapacity(e.cantidadMaletas));
                 boolean cumpleSLA = llegadaMin <= ctx.deadlineMinutos;
@@ -320,6 +320,7 @@ public class PlanificadorService {
     }
 
     private boolean cumpleEscalaMinima(List<Edge> edgesPath) {
+        if (edgesPath.size() <= 1) return true;
         for (int i = 0; i < edgesPath.size() - 1; i++) {
             if (!CostFunction.tieneTiempoMinimoEscala(edgesPath.get(i), edgesPath.get(i + 1))) {
                 return false;
@@ -519,6 +520,7 @@ public class PlanificadorService {
         return vuelos;
     }
 
+    /* CLASES UTILES */
     private static class PlanRequest {
         final List<String> origenes;
         final int limitePorOrigen;
@@ -538,17 +540,14 @@ public class PlanificadorService {
         static PlanRequest todos(int limitePorOrigen, int tickMinutosSimulacion) {
             return new PlanRequest(List.of(ORIGENES_DISPONIBLES), limitePorOrigen, tickMinutosSimulacion, null);
         }
-
         static PlanRequest unOrigen(String origen, int limitePorOrigen, int tickMinutosSimulacion) {
             return new PlanRequest(List.of(origen), limitePorOrigen, tickMinutosSimulacion, null);
         }
-
         static PlanRequest unDestino(String destino, int limitePorOrigen, int tickMinutosSimulacion) {
             return new PlanRequest(List.of(ORIGENES_DISPONIBLES), limitePorOrigen, tickMinutosSimulacion,
                     new HashSet<>(Set.of(destino)));
         }
     }
-
     private static class ScheduledEvent {
         final int minute;
         final Runnable action;
@@ -558,7 +557,6 @@ public class PlanificadorService {
             this.action = action;
         }
     }
-
     private static class BaseRunResult {
         final ResumenPlanificacionGlobal resumen;
         final List<PlanificacionResultado> resultados;
@@ -572,7 +570,6 @@ public class PlanificadorService {
             this.auditoria = auditoria;
         }
     }
-
     private static class AttemptResult {
         final PlanificacionResultado resultado;
         final AuditRecord auditRecord;
@@ -582,7 +579,6 @@ public class PlanificadorService {
             this.auditRecord = auditRecord;
         }
     }
-
     private static class AuditRecord {
         final String idEnvio;
         final String origen;
