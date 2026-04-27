@@ -1,10 +1,12 @@
 package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @CrossOrigin(origins = {"http://localhost:5173", "http://localhost:3000"})
@@ -99,5 +101,73 @@ public class PlanificadorController {
         SimulacionResponse.BloqueSimulacion bloque = service.getBloqueEsc1(index);
         if (bloque == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(bloque);
+    }
+
+    // ── Escenarios 2/3 asíncronos ────────────────────────────────────────────
+    // Soportan ejecuciones largas (30-90 min con sleep activo) sin bloquear el HTTP.
+
+    @PostMapping("/escenario2/iniciar")
+    public ResponseEntity<Map<String, Object>> iniciarEsc2(
+            @RequestParam(defaultValue = "14")  int    k,
+            @RequestParam(defaultValue = "0.0") double cancelProb) {
+        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
+        JobState job = service.iniciarEscenario2Async(k, cancelProb);
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId",     job.getJobId(),
+                "escenario", "2",
+                "k",         k,
+                "estado",    job.estado
+        ));
+    }
+
+    @PostMapping("/escenario3/iniciar")
+    public ResponseEntity<Map<String, Object>> iniciarEsc3(
+            @RequestParam(defaultValue = "75")   int    k,
+            @RequestParam(defaultValue = "0.1")  double cancelProb,
+            @RequestParam(defaultValue = "0.20") double umbralColapso) {
+        cancelProb    = Math.max(0.0, Math.min(1.0, cancelProb));
+        umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
+        JobState job = service.iniciarEscenario3Async(k, cancelProb, umbralColapso);
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId",         job.getJobId(),
+                "escenario",     "3",
+                "k",             k,
+                "umbralColapso", umbralColapso,
+                "estado",        job.estado
+        ));
+    }
+
+    @GetMapping("/jobs/{jobId}/estado")
+    public ResponseEntity<Map<String, Object>> estadoJob(@PathVariable String jobId) {
+        JobState job = service.getJob(jobId);
+        if (job == null) return ResponseEntity.notFound().build();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("jobId",         job.getJobId());
+        body.put("escenario",     job.getEscenario());
+        body.put("k",             job.getK());
+        body.put("estado",        job.estado);
+        body.put("bloqueActual",  job.bloqueActual);
+        body.put("totalBloques",  job.totalBloques);
+        body.put("progreso",      job.getProgreso());
+        body.put("taPromedioMs",  job.taPromedioMs);
+        body.put("inicio",        job.inicio.toString());
+        if (job.fin != null) body.put("fin", job.fin.toString());
+        if (job.error != null) body.put("error", job.error);
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/resultado")
+    public ResponseEntity<SimulacionResponse> resultadoJob(@PathVariable String jobId) {
+        JobState job = service.getJob(jobId);
+        if (job == null)             return ResponseEntity.notFound().build();
+        if (job.resultado == null)   return ResponseEntity.noContent().build(); // 204 = aún ejecutando
+        return ResponseEntity.ok(job.resultado);
+    }
+
+    @PostMapping("/jobs/{jobId}/cancelar")
+    public ResponseEntity<Map<String, Object>> cancelarJob(@PathVariable String jobId) {
+        boolean ok = service.cancelarJob(jobId);
+        return ResponseEntity.ok(Map.of("jobId", jobId, "cancelado", ok));
     }
 }
