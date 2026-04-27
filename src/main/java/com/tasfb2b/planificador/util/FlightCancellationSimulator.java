@@ -34,11 +34,22 @@ public class FlightCancellationSimulator {
     public static Set<Long> generate(List<Edge> edges,
                                      long startEpochDay, long endEpochDay,
                                      double prob) {
+        return generate(edges, startEpochDay, endEpochDay, prob, new Random());
+    }
+
+    /**
+     * Variante reproducible: el cliente pasa el {@link Random} (típicamente
+     * derivado de un seed explícito) para que dos corridas con el mismo seed
+     * produzcan exactamente el mismo conjunto de cancelaciones.
+     */
+    public static Set<Long> generate(List<Edge> edges,
+                                     long startEpochDay, long endEpochDay,
+                                     double prob,
+                                     Random rng) {
         if (prob <= 0.0 || edges.isEmpty()) return Collections.emptySet();
+        if (rng == null) rng = new Random();
 
         Set<Long> cancelled = new HashSet<>();
-        Random rng = new Random();
-
         for (Edge e : edges) {
             for (long day = startEpochDay; day <= endEpochDay; day++) {
                 if (rng.nextDouble() < prob) {
