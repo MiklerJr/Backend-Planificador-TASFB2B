@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.List;
 
-@Component // <-- VITAL para que PlanificadorService pueda inyectarlo
+@Component
 public class GraphBuilder {
 
     /**

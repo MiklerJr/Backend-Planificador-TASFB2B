@@ -29,7 +29,7 @@ public class FlightParser {
 
             String[] parts = line.split("-");
             if (parts.length < 5) {
-                System.out.println("❌ Vuelo ignorado (Formato incorrecto): " + line);
+                System.out.println("Vuelo ignorado (Formato incorrecto): " + line);
                 continue;
             }
 
@@ -40,7 +40,7 @@ public class FlightParser {
             Aeropuerto destino = aeropuertoMap.get(destCodigo);
 
             if (origen == null || destino == null) {
-                System.out.println("❌ Vuelo ignorado (Aeropuerto no existe en el Map): " + origenCodigo + " o " + destCodigo);
+                System.out.println("Vuelo ignorado (Aeropuerto no existe en el Map): " + origenCodigo + " o " + destCodigo);
                 continue;
             }
 
@@ -48,7 +48,7 @@ public class FlightParser {
             String[] horaLlegadaStr = parts[3].split(":");
 
             if (horaSalidaStr.length < 2 || horaLlegadaStr.length < 2) {
-                System.out.println("❌ Vuelo ignorado (Hora incorrecta): " + parts[2] + " o " + parts[3]);
+                System.out.println("Vuelo ignorado (Hora incorrecta): " + parts[2] + " o " + parts[3]);
                 continue;
             }
 
@@ -77,7 +77,7 @@ public class FlightParser {
                 result.add(vuelo);
 
             } catch (Exception e) {
-                System.out.println("❌ Vuelo ignorado (Error procesando datos numéricos): " + line + " -> " + e.getMessage());
+                System.out.println("Vuelo ignorado (Error procesando datos numéricos): " + line + " -> " + e.getMessage());
             }
         }
         return result;
