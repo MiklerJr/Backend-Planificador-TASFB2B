@@ -4,9 +4,12 @@ import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.model.Aeropuerto;
+import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
+@Component
 public class GraphBuilder {
 
     /**
@@ -19,7 +22,6 @@ public class GraphBuilder {
 
         // 1. CREAR NODOS - aeropuertos 
         for (Aeropuerto a : aeropuertos) {
-
             Node node = new Node(a.getCodigo());
             node.lat = a.getLatitud() != null ? a.getLatitud() : 0.0;
             node.lon = a.getLongitud() != null ? a.getLongitud() : 0.0;
@@ -29,7 +31,6 @@ public class GraphBuilder {
 
         // 2. CREAR ARISTAS (VUELOS)
         for (String line : flightLines) {
-
             if (line == null || line.isEmpty()) continue;
 
             String[] parts = line.split("-");
@@ -53,8 +54,8 @@ public class GraphBuilder {
             edge.from = from;
             edge.to = to;
 
-            edge.departureTime = departure;
-            edge.arrivalTime = arrival;
+            edge.departureTime = LocalDateTime.parse(departure);
+            edge.arrivalTime = LocalDateTime.parse(arrival);
             edge.capacity = capacity;
 
             edge.cost = calculateCost(departure, arrival);
@@ -67,13 +68,9 @@ public class GraphBuilder {
     
     // CAPACIDAD (#### o números)
     private int parseCapacity(String value) {
-
         if (value == null) return 0;
-
         value = value.replace("#", "").trim();
-
         if (value.isEmpty()) return 0;
-
         try {
             return Integer.parseInt(value);
         } catch (Exception e) {
@@ -83,30 +80,23 @@ public class GraphBuilder {
 
     // COSTO BASADO EN TIEMPO
     private double calculateCost(String dep, String arr) {
-
         int depMin = toMinutes(dep);
         int arrMin = toMinutes(arr);
-
         int diff = arrMin - depMin;
 
         // si cruza medianoche
         if (diff < 0) {
             diff += 24 * 60;
         }
-
         return diff;
     }
 
     // HH:MM → minutos
     private int toMinutes(String time) {
-
         if (time == null || !time.contains(":")) return 0;
-
         String[] parts = time.split(":");
-
         int h = Integer.parseInt(parts[0]);
         int m = Integer.parseInt(parts[1]);
-
         return h * 60 + m;
     }
 }
