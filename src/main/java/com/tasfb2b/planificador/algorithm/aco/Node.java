@@ -10,14 +10,33 @@ public class Node {
     public int capacity; // capacidad máxima de almacén del aeropuerto
     public int idx = -1; // índice entero asignado por GreedyRepairOperator (evita lookups HashMap)
 
+    public int storageCapacity;
+    public int storageUsed = 0;
+
     public Node(String code) {
         this.code = code;
     }
 
-    public Node(String code, double lat, double lon) {
+    public Node(String code, double lat, double lon, int storageCapacity) {
         this.code = code;
-        this.lat = lat;
-        this.lon = lon;
+        this.storageCapacity = storageCapacity;
+    }
+
+    public boolean hasStorageCapacity(int cantidad) {
+        return (storageUsed + cantidad) <= storageCapacity;
+    }
+
+    public void storeLoad(int cantidad) {
+        this.storageUsed += cantidad;
+    }
+
+    public void releaseLoad(int cantidad) {
+        this.storageUsed = Math.max(0, this.storageUsed - cantidad);
+    }
+
+    public double getOcupacionAlmacen() {
+        if (storageCapacity == 0) return 0.0;
+        return (double) storageUsed / storageCapacity;
     }
 
     @Override
