@@ -13,9 +13,9 @@ import java.util.List;
 @Component
 public class AeropuertoLoader {
 
-    public List<Aeropuerto> cargarAeropuertos() {
+    List<Aeropuerto> aeropuertos = new ArrayList<>();
 
-        List<Aeropuerto> aeropuertos = new ArrayList<>();
+    public List<Aeropuerto> cargarAeropuertos() {
 
         try {
             System.out.println("================================");
@@ -158,5 +158,13 @@ public class AeropuertoLoader {
             System.out.println("Error parseando línea: " + linea);
             return null;
         }
+    }
+
+    public List<String> listarAeropuertosPorCodigo(){
+        List<String> codigos = new ArrayList<>();
+        for (Aeropuerto a : aeropuertos) {
+            codigos.add(a.getCodigo());
+        }
+        return codigos;
     }
 }

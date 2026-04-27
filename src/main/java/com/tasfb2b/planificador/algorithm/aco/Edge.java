@@ -34,6 +34,10 @@ public class Edge {
         this.usedCapacity += demand;
     }
 
+    public double getDuracionMinutos() {
+        return CostFunction.calcularDuracionMinutos(this.departureTime, this.arrivalTime);
+    }
+    
     public String getDepartureTimeString() {
         return departureTime != null ? departureTime.toString() : "";
     }

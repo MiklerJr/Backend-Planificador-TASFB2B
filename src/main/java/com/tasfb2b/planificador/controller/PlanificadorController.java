@@ -17,9 +17,9 @@ import java.util.Map;
 @RequestMapping("/api/planificador")
 public class PlanificadorController {
 
-    private final PlanificadorService service;
+    private final PlanificadorServiceACO service;
 
-    public PlanificadorController(PlanificadorService service) {
+    public PlanificadorController(PlanificadorServiceACO service) {
         this.service = service;
     }
 
