@@ -5,9 +5,15 @@ import java.util.Objects;
 public class Node {
 
     public String code;
+    public double lat;
+    public double lon;
 
     public int storageCapacity;
     public int storageUsed = 0;
+
+    public Node(String code) {
+        this.code = code;
+    }
 
     public Node(String code, double lat, double lon, int storageCapacity) {
         this.code = code;
