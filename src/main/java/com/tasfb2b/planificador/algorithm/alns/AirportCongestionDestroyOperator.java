@@ -9,6 +9,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -30,7 +31,14 @@ public class AirportCongestionDestroyOperator implements DestroyOperator {
     /** Cuántos aeropuertos congestionados considerar. */
     private static final int TOP_AIRPORTS = 5;
 
+    private Random rng = new Random();
+
     public AirportCongestionDestroyOperator(Graph graph) { }
+
+    @Override
+    public void setRandom(Random rng) {
+        if (rng != null) this.rng = rng;
+    }
 
     @Override
     public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
@@ -74,7 +82,7 @@ public class AirportCongestionDestroyOperator implements DestroyOperator {
         if (candidatos.isEmpty()) return List.of();
 
         // 4. Aleatorizar dentro de los candidatos para no destruir siempre los mismos.
-        Collections.shuffle(candidatos);
+        Collections.shuffle(candidatos, rng);
         return candidatos.subList(0, Math.min(target, candidatos.size()));
     }
 }

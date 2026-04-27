@@ -5,6 +5,7 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 /**
  * Operador de destrucción puramente aleatorio. No toma en cuenta calidad ni
@@ -17,7 +18,14 @@ import java.util.List;
  */
 public class RandomDestroyOperator implements DestroyOperator {
 
+    private Random rng = new Random();
+
     public RandomDestroyOperator(Graph graph) { }
+
+    @Override
+    public void setRandom(Random rng) {
+        if (rng != null) this.rng = rng;
+    }
 
     @Override
     public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
@@ -30,7 +38,7 @@ public class RandomDestroyOperator implements DestroyOperator {
                 candidatos.add(b);
             }
         }
-        Collections.shuffle(candidatos);
+        Collections.shuffle(candidatos, rng);
         return candidatos.subList(0, Math.min(target, candidatos.size()));
     }
 }

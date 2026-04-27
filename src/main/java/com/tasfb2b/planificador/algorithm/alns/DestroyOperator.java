@@ -1,8 +1,7 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-import com.tasfb2b.planificador.algorithm.alns.AlnsSolution;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import java.util.List;
+import java.util.Random;
 
 public interface DestroyOperator {
     /**
@@ -12,4 +11,10 @@ public interface DestroyOperator {
      * @return Lista de lotes de maletas que se quedaron sin ruta.
      */
     List<LuggageBatch> destroy(AlnsSolution solution, double factor);
+
+    /**
+     * Inyecta una fuente de aleatoriedad (para reproducibilidad cuando se fija un seed).
+     * Implementación por defecto: no-op (operadores deterministas pueden ignorarla).
+     */
+    default void setRandom(Random rng) {}
 }
