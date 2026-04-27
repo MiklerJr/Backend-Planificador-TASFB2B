@@ -2,7 +2,7 @@ package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.services.JobState;
-import com.tasfb2b.planificador.services.PlanificadorService;
+import com.tasfb2b.planificador.services.PlanificadorServiceACO;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,9 +14,9 @@ import java.util.Map;
 @RequestMapping("/api/planificador")
 public class PlanificadorController {
 
-    private final PlanificadorService service;
+    private final PlanificadorServiceACO service;
 
-    public PlanificadorController(PlanificadorService service) {
+    public PlanificadorController(PlanificadorServiceACO service) {
         this.service = service;
     }
 

@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.time.LocalDateTime;
+
 class AlgorithmACOTest {
 
     private Graph graph;
@@ -146,8 +148,8 @@ class AlgorithmACOTest {
         Edge e = new Edge();
         e.from = from;
         e.to = to;
-        e.departureTime = dep;
-        e.arrivalTime = arr;
+        e.departureTime = LocalDateTime.parse(dep);
+        e.arrivalTime = LocalDateTime.parse(arr);
         e.capacity = cap;
         e.cost = CostFunction.calcularDuracionMinutos(dep, arr);
         graph.edges.add(e);
