@@ -11,12 +11,6 @@ import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.PlanificacionResultado;
 import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Maleta;
-import com.tasfb2b.planificador.model.Vuelo;
-import com.tasfb2b.planificador.util.AlgorithmMapper;
-import com.tasfb2b.planificador.util.DataLoader;
-import com.tasfb2b.planificador.util.FlightCancellationSimulator;
-import com.tasfb2b.planificador.util.FlightParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -40,7 +34,7 @@ import java.util.Set;
 
 @Slf4j
 @Service
-public class PlanificadorService {
+public class PlanificadorServiceACO {
 
     private final AeropuertoLoader aeropuertoLoader;
     private final GraphBuilder graphBuilder;
@@ -55,7 +49,7 @@ public class PlanificadorService {
             "OAKB", "OOMS", "OYSN", "OPKC", "OJAI", "UBBB"
     };
 
-    public PlanificadorService(AeropuertoLoader aeropuertoLoader,
+    public PlanificadorServiceACO(AeropuertoLoader aeropuertoLoader,
                                GraphBuilder graphBuilder,
                                EnvioLoader envioLoader) {
         this.aeropuertoLoader = aeropuertoLoader;

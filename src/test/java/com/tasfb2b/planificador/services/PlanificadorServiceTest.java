@@ -12,8 +12,8 @@ class PlanificadorServiceTest {
     private final AeropuertoLoader aeropuertoLoader = new AeropuertoLoader();
     private final GraphBuilder graphBuilder = new GraphBuilder();
     private final EnvioLoader envioLoader = new EnvioLoader();
-    private final PlanificadorService planificadorService =
-            new PlanificadorService(aeropuertoLoader, graphBuilder, envioLoader);
+    private final PlanificadorServiceACO planificadorService =
+            new PlanificadorServiceACO(aeropuertoLoader, graphBuilder, envioLoader);
 
     @Test
     void testProcesarPrimerosEnvios() {
