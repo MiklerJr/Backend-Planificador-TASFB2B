@@ -45,8 +45,4 @@ public class Edge {
     public String getArrivalTimeString() {
         return arrivalTime != null ? arrivalTime.toString() : "";
     }
-
-    public double getDuracionMinutos() {
-        return CostFunction.calcularDuracionMinutos(this.departureTime.toString(), this.arrivalTime.toString());
-    }
 }

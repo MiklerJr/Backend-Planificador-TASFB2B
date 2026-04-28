@@ -49,31 +49,71 @@ public class AcoBlockEngine {
                          List<LuggageBatch> batches,
                          Map<Long, Integer> blockFlight,
                          Map<Long, Integer> blockAirport) {
-        return procesar(graph, enrutador, batches, blockFlight, blockAirport, null);
+        return procesar(graph, enrutador, batches, blockFlight, blockAirport, null, 0L);
     }
 
-    /**
-     * Variante reproducible: usa el {@link Random} provisto para todas las
-     * decisiones aleatorias de cada {@link AlgorithmACO}. Si {@code rng} es
-     * null, se usa un {@link Random} sin seed (no reproducible).
-     */
     public int procesar(Graph graph,
                          GreedyRepairOperator enrutador,
                          List<LuggageBatch> batches,
                          Map<Long, Integer> blockFlight,
                          Map<Long, Integer> blockAirport,
                          Random rng) {
+        return procesar(graph, enrutador, batches, blockFlight, blockAirport, rng, 0L);
+    }
+
+    /**
+     * Variante con cota dura de tiempo (Ta). Si {@code tiempoLimiteMs > 0} y se
+     * excede mientras se procesan batches, el bucle aborta y los restantes
+     * quedan {@code clearRoute() + cumpleSLA=false} — equivalente al
+     * comportamiento del {@code AlgorithmALNS.tiempoLimiteMs}, garantizando
+     * Ta &lt; Sa también en el motor ACO.
+     *
+     * <p>Si {@code rng} es null se usa un {@link Random} sin seed (no reproducible).
+     */
+    public int procesar(Graph graph,
+                         GreedyRepairOperator enrutador,
+                         List<LuggageBatch> batches,
+                         Map<Long, Integer> blockFlight,
+                         Map<Long, Integer> blockAirport,
+                         Random rng,
+                         long tiempoLimiteMs) {
         if (batches == null || batches.isEmpty()) return 0;
 
         ConfigACO cfg = configurar();
         int enrutados = 0;
+        long tInicio = System.nanoTime();
+        boolean abortado = false;
+        int procesados = 0;
+
         for (LuggageBatch batch : batches) {
+            // Cota dura de tiempo: si Ta se excede, abortar el bucle.
+            if (tiempoLimiteMs > 0) {
+                long elapsedMs = (System.nanoTime() - tInicio) / 1_000_000L;
+                if (elapsedMs > tiempoLimiteMs) {
+                    log.warn("ACO abortado por presupuesto Ta: {}/{} batches procesados ({}ms > {}ms)",
+                            procesados, batches.size(), elapsedMs, tiempoLimiteMs);
+                    abortado = true;
+                    break;
+                }
+            }
+
             if (intentarBatch(graph, enrutador, batch, blockFlight, blockAirport, cfg, rng)) {
                 enrutador.aplicarAsignacionBloque(batch, blockFlight, blockAirport);
                 enrutados++;
             } else {
                 batch.clearRoute();
                 batch.setCumpleSLA(false);
+            }
+            procesados++;
+        }
+
+        // Batches que no alcanzaron a procesarse → marcar sinRuta para mantener
+        // el invariante "todo batch del bloque tiene su asignación final decidida".
+        if (abortado) {
+            for (int i = procesados; i < batches.size(); i++) {
+                LuggageBatch b = batches.get(i);
+                b.clearRoute();
+                b.setCumpleSLA(false);
             }
         }
         return enrutados;

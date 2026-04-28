@@ -21,6 +21,7 @@ public class Node {
         this.code = code;
         this.lat = lat;
         this.lon = lon;
+    }
 
     public Node(String code, double lat, double lon, int storageCapacity) {
         this.code = code;
