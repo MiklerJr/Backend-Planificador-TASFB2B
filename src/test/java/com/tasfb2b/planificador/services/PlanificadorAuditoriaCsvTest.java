@@ -20,7 +20,7 @@ class PlanificadorAuditoriaCsvTest {
     private final GraphBuilder graphBuilder = new GraphBuilder();
     private final EnvioLoader envioLoader = new EnvioLoader();
     private final PlanificadorService planificadorService =
-            new PlanificadorService(null, null, null, null, aeropuertoLoader, graphBuilder, envioLoader, null, null);
+            new PlanificadorService(null, null, null, null, aeropuertoLoader, graphBuilder, envioLoader, null, null, null);
 
     @Test
     void exportaCsvAuditoria() throws Exception {
