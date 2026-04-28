@@ -1,7 +1,8 @@
 spring:
   profiles:
     # Activamos "smoke" para ignorar los sleeps y bajar las iteraciones
-    active: "smoke"
+    # active: "smoke"
+    active: "default"
   application:
     name: planificador
   autoconfigure:
@@ -20,18 +21,25 @@ data:
 # ── Planificador: hiperparámetros del ALNS y de los 3 escenarios ────────────
 planificador:
   scenario:
-    sa-minutos: 10                       # Salto del algoritmo (10 min)
+    sa-minutos: 5                       # Salto del algoritmo (Sa, en min)
+    ta-segundos: 30                     # Tiempo de algoritmo (Ta) FIJO por bloque. Debe ser < Sa·60.
+                                        # Cada bloque corre Ta segundos y duerme (Sa·60 - Ta) → wall-clock = Sa.
 
-    # --- NUEVA PROPIEDAD PARA LA OPCIÓN B ---
-    # Limita la simulación a 5 días (5 días * 144 ventanas/día = 720)
-    # Debes usar esta variable en tu bucle for/while del PlanificadorService
-    max-ventanas: 52560
+    # Acota la simulación a un número máximo de ventanas de Sa minutos.
+    # 0 = procesar todo el dataset cargado.
+    # 144 ventanas/día con Sa=10. Ejemplos:
+    #   432    →  3 días
+    #   720    →  5 días
+    #   1008   →  7 días
+    #   4320   → 30 días
+    #   52560  → 365 días
+    max-ventanas: 720
 
     k-default-1: 1
-    k-default-2: 14
+    k-default-2: 5
     k-default-3: 75
-    umbral-colapso: 0.20
-    umbral-colapso-backlog: 8000
+    umbral-colapso: 0.01
+    umbral-colapso-backlog: 1000
     simular-tiempo-real-2: true          # El perfil smoke pondrá esto en false
     simular-tiempo-real-3: false
 

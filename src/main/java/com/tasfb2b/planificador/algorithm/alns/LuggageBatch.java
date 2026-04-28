@@ -14,6 +14,9 @@ public class LuggageBatch {
     private String destCode;
     private LocalDateTime readyTime;
 
+    /** Identificador del cliente que originó el envío (puede ser null si no se propaga). */
+    private Integer clienteId;
+
     private List<Edge> assignedRoute;
     private List<Long> assignedDepartures; // epoch-minutes, paralelo a assignedRoute
     private boolean cumpleSLA;
@@ -80,6 +83,7 @@ public class LuggageBatch {
     public LuggageBatch cloneBatch() {
         LuggageBatch clone = new LuggageBatch(id, quantity, slaLimitHours,
                                                originCode, destCode, readyTime);
+        clone.setClienteId(this.clienteId);
         clone.setAssignedRoute(new ArrayList<>(this.assignedRoute));
         clone.setAssignedDepartures(
                 assignedDepartures != null ? new ArrayList<>(assignedDepartures) : null);
@@ -101,4 +105,6 @@ public class LuggageBatch {
     public List<Long> getAssignedDepartures() { return assignedDepartures; }
     public boolean isCumpleSLA()              { return cumpleSLA; }
     public void setCumpleSLA(boolean v)       { this.cumpleSLA = v; }
+    public Integer getClienteId()             { return clienteId; }
+    public void setClienteId(Integer id)      { this.clienteId = id; }
 }

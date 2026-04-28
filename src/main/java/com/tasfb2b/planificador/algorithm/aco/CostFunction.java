@@ -68,7 +68,7 @@ public class CostFunction {
     public static double calcularCostoEdge(Edge edge, EnvioContext envio) {
 
         // --- Duración real del vuelo en minutos ---
-        double duracion = calcularDuracionMinutos(edge.departureTime, edge.arrivalTime);
+        double duracion = calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString());
 
         // --- Penalización por falta de capacidad ---
         double penCapacidad = 0.0;
@@ -105,7 +105,7 @@ public class CostFunction {
         // --- Tiempo total de vuelo (ya en ant.totalCost, pero lo recalculamos limpio) ---
         double tiempoVuelo = 0.0;
         for (Edge e : edgesUsados) {
-            tiempoVuelo += calcularDuracionMinutos(e.departureTime, e.arrivalTime);
+            tiempoVuelo += calcularDuracionMinutos(e.departureTime.toString(), e.arrivalTime.toString());
         }
 
         // --- Tiempo de espera entre conexiones ---
@@ -114,6 +114,7 @@ public class CostFunction {
         // --- Tiempo de llegada al destino final (en minutos desde 00:00) ---
         Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
         int minutosLlegada = getMinutosLlegada(ultimoVuelo);
+        
         // Si la ruta tiene escalas que cruzan días, acumular días completos
         minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
 
@@ -158,13 +159,14 @@ public class CostFunction {
 
         double tiempoVuelo = 0.0;
         for (Edge e : edgesUsados) {
-            tiempoVuelo += calcularDuracionMinutos(e.departureTime, e.arrivalTime);
+            tiempoVuelo += calcularDuracionMinutos(e.departureTime.toString(), e.arrivalTime.toString());
         }
 
         double tiempoEspera = calcularTiempoEsperaTotal(edgesUsados);
 
         Edge ultimoVuelo = edgesUsados.get(edgesUsados.size() - 1);
         int minutosLlegada = getMinutosLlegada(ultimoVuelo);
+        
         minutosLlegada += calcularDiasRuta(edgesUsados) * 1440;
 
         double penSLA = 0.0;
@@ -247,7 +249,7 @@ public class CostFunction {
      */
     public static double heuristica(Edge edge, EnvioContext envio) {
 
-        double duracion = calcularDuracionMinutos(edge.departureTime, edge.arrivalTime);
+        double duracion = calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString());
         if (duracion <= 0) duracion = 1;
 
         // Factor de ocupación basado en semáforo
@@ -272,10 +274,18 @@ public class CostFunction {
 
     // Helpers privados
     /**
-     * Parsea "HH:MM" a minutos totales desde 00:00.
+     * Parsea "HH:MM" o "yyyy-MM-ddTHH:MM[:ss]" a minutos totales desde 00:00.
+     * Acepta el {@code toString()} de un {@code LocalDateTime} para permitir
+     * que los edges del flujo ALNS (con fecha real) y los del flujo ACO
+     * (solo hora) se procesen con la misma función.
      */
     private static int parsearMinutos(String horaStr) {
-        String[] partes = horaStr.split(":");
+        if (horaStr == null) return 0;
+        // Si viene de LocalDateTime.toString() ("2026-01-01T19:00") tomar la parte
+        // después de la 'T' para quedarnos con "HH:MM".
+        int t = horaStr.indexOf('T');
+        String hhmm = t >= 0 ? horaStr.substring(t + 1) : horaStr;
+        String[] partes = hhmm.split(":");
         return Integer.parseInt(partes[0]) * 60 + Integer.parseInt(partes[1]);
     }
 
@@ -297,6 +307,14 @@ public class CostFunction {
             d = d.plusDays(1);
         }
         return d.toMinutes();
+    }
+
+    /**
+     * Versión pública de {@link #parsearMinutos(String)} para que otros componentes
+     * (ej. {@code PlanificadorService}) puedan parsear de forma consistente.
+     */
+    public static int hhmmAMinutos(String horaStr) {
+        return parsearMinutos(horaStr);
     }
 
     /**

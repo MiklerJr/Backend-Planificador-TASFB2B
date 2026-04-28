@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.services;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -12,13 +13,14 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Disabled("Auditoría heredada del flujo ACO. Reemplazada por el endpoint /api/planificador/jobs/{jobId}/auditoria.csv del flujo ALNS, que respeta el modelo Sa/Sc/K.")
 class PlanificadorAuditoriaCsvTest {
 
     private final AeropuertoLoader aeropuertoLoader = new AeropuertoLoader();
     private final GraphBuilder graphBuilder = new GraphBuilder();
     private final EnvioLoader envioLoader = new EnvioLoader();
-    private final PlanificadorServiceACO planificadorService =
-            new PlanificadorServiceACO(aeropuertoLoader, graphBuilder, envioLoader);
+    private final PlanificadorService planificadorService =
+            new PlanificadorService(null, null, null, null, aeropuertoLoader, graphBuilder, envioLoader, null, null, null);
 
     @Test
     void exportaCsvAuditoria() throws Exception {

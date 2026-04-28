@@ -4,10 +4,12 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 /**
  * Adaptive Large Neighbourhood Search (ALNS) con Simulated Annealing.
@@ -70,6 +72,23 @@ public class AlgorithmALNS {
     private Map<Long,Integer> bestAirport;
 
     private double temperature;
+
+    /** Fuente de aleatoriedad (selección de operador, criterio SA). Reproducible si se setea via {@link #setRandom}. */
+    private Random rng = new Random();
+
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Inyecta una fuente de aleatoriedad explícita para reproducibilidad.
+     * También propaga el {@link Random} a los operadores destroy (shuffle).
+     */
+    public void setRandom(Random rng) {
+        if (rng == null) return;
+        this.rng = rng;
+        if (destroyOps != null) {
+            for (DestroyOperator op : destroyOps) op.setRandom(rng);
+        }
+    }
 
     // ────────────────────────────────────────────────────────────────────────
 
@@ -239,7 +258,7 @@ public class AlgorithmALNS {
     private int selectDestroyOp() {
         double total = 0;
         for (double w : weights) total += w;
-        double rand = Math.random() * total;
+        double rand = rng.nextDouble() * total;
         double cum  = 0;
         for (int i = 0; i < weights.length; i++) {
             cum += weights[i];
@@ -265,7 +284,7 @@ public class AlgorithmALNS {
 
     private boolean accept(double current, double candidate, double temp) {
         if (candidate <= current) return true;
-        return Math.random() < Math.exp((current - candidate) / temp);
+        return rng.nextDouble() < Math.exp((current - candidate) / temp);
     }
 
     public AlnsSolution      getBestSolution()     { return bestSolution; }

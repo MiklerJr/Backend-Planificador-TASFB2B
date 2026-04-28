@@ -300,6 +300,57 @@ public class GreedyRepairOperator implements RepairOperator {
              - blockFlight.getOrDefault(key, 0);
     }
 
+    // -----------------------------------------------------------------------
+    // API pública para motores alternativos (ACO) — reutiliza el modelo
+    // temporal y de ocupación del operador greedy para que las rutas sean
+    // comparables con las del ALNS.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Calcula la próxima salida ≥ earliest del vuelo cuyo horario diario es {@code depMinuteOfDay}.
+     */
+    public long calcularProximaSalida(int depMinuteOfDay, long earliest) {
+        return nextDepartureMin(depMinuteOfDay, earliest);
+    }
+
+    /**
+     * Capacidad restante de un vuelo en un día dado (resta global + bloque y vuelos cancelados).
+     */
+    public int capacidadRestante(Edge flight, long depMin, Map<Long, Integer> blockFlight) {
+        return remainingFlight(flight, depMin, blockFlight);
+    }
+
+    /**
+     * Capacidad restante de almacén de un nodo en un día dado.
+     */
+    public int capacidadAlmacen(Node node, long arrMin, Map<Long, Integer> blockAirport) {
+        if (node == null || node.idx < 0 || node.capacity <= 0) return Integer.MAX_VALUE;
+        long key = airportKey(node.idx, arrMin);
+        return node.capacity
+             - airportOccupancy.getOrDefault(key, 0)
+             - blockAirport.getOrDefault(key, 0);
+    }
+
+    /**
+     * Aplica una asignación ya calculada (route + departures + cumpleSLA) al bloque.
+     * Equivalente público a {@link #applyToBlock} para que un motor externo (p. ej. ACO)
+     * actualice los mismos contadores que usa el ALNS.
+     */
+    public void aplicarAsignacionBloque(LuggageBatch batch,
+                                         Map<Long, Integer> blockFlight,
+                                         Map<Long, Integer> blockAirport) {
+        List<Edge> route = batch.getAssignedRoute();
+        List<Long> deps  = batch.getAssignedDepartures();
+        if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) return;
+        RouteResult fake = new RouteResult(route, deps, batch.isCumpleSLA());
+        applyToBlock(batch, fake, blockFlight, blockAirport);
+    }
+
+    /** Conversión auxiliar usada por motores externos para alinearse con el modelo temporal. */
+    public static long toEpochMinPublic(LocalDateTime dt) {
+        return toEpochMin(dt);
+    }
+
     private static long flightKey(int edgeIdx, long epochMin) {
         return FlightKeyEncoder.flightKey(edgeIdx, epochMin);
     }

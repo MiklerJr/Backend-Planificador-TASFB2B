@@ -6,7 +6,9 @@ import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 
 @Component
@@ -33,6 +35,8 @@ public class GraphBuilder {
         for (String line : flightLines) {
             if (line == null || line.isEmpty()) continue;
 
+            // limpiar formato tipo "//SKBO-SEQM-..."
+            line = line.replace("//", "").trim();
             String[] parts = line.split("-");
 
             if (parts.length < 5) continue;
@@ -54,8 +58,11 @@ public class GraphBuilder {
             edge.from = from;
             edge.to = to;
 
-            edge.departureTime = LocalDateTime.parse(departure);
-            edge.arrivalTime = LocalDateTime.parse(arrival);
+            // Los archivos de vuelos traen solo HH:MM. Como Edge.departureTime es LocalDateTime
+            // (compatibilidad con AlgorithmMapper del flujo ALNS), combinamos con una fecha base.
+            LocalDate fechaBase = LocalDate.of(2026, 1, 1);
+            edge.departureTime = LocalDateTime.of(fechaBase, LocalTime.parse(departure));
+            edge.arrivalTime = LocalDateTime.of(fechaBase, LocalTime.parse(arrival));
             edge.capacity = capacity;
 
             edge.cost = calculateCost(departure, arrival);
@@ -65,7 +72,25 @@ public class GraphBuilder {
 
         return graph;
     }
-    
+
+    private double distance(Node n1, Node n2) {
+        double earthRadius = 6371.0; // Radio de la tierra en kilómetros
+
+        double dLat = Math.toRadians(n2.lat - n1.lat);
+        double dLon = Math.toRadians(n2.lon - n1.lon);
+
+        double lat1 = Math.toRadians(n1.lat);
+        double lat2 = Math.toRadians(n2.lat);
+
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1) * Math.cos(lat2) *
+                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+        return earthRadius * c; // Devuelve la distancia en kilómetros
+    }
+
     // CAPACIDAD (#### o números)
     private int parseCapacity(String value) {
         if (value == null) return 0;

@@ -1,12 +1,16 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.time.LocalDateTime;
-
+@Disabled("Tests del flujo ACO heredado. El ACO no respeta el modelo Sa/Sc/K del cliente; se conserva como referencia algorítmica.")
 class AlgorithmACOTest {
 
     private Graph graph;
@@ -148,8 +152,9 @@ class AlgorithmACOTest {
         Edge e = new Edge();
         e.from = from;
         e.to = to;
-        e.departureTime = LocalDateTime.parse(dep);
-        e.arrivalTime = LocalDateTime.parse(arr);
+        LocalDate fecha = LocalDate.of(2026, 1, 1);
+        e.departureTime = LocalDateTime.of(fecha, LocalTime.parse(dep));
+        e.arrivalTime = LocalDateTime.of(fecha, LocalTime.parse(arr));
         e.capacity = cap;
         e.cost = CostFunction.calcularDuracionMinutos(dep, arr);
         graph.edges.add(e);

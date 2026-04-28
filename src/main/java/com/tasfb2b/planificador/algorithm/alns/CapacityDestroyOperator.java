@@ -6,11 +6,19 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 
 public class CapacityDestroyOperator implements DestroyOperator {
 
+    private Random rng = new Random();
+
     public CapacityDestroyOperator(Graph graph) { }
+
+    @Override
+    public void setRandom(Random rng) {
+        if (rng != null) this.rng = rng;
+    }
 
     /**
      * Selecciona lotes para destruir siguiendo esta prioridad:
@@ -41,7 +49,7 @@ public class CapacityDestroyOperator implements DestroyOperator {
             for (LuggageBatch b : all) {
                 if (hasRoute(b) && !removedSet.contains(b)) candidatos.add(b);
             }
-            Collections.shuffle(candidatos);
+            Collections.shuffle(candidatos, rng);
             for (LuggageBatch b : candidatos) {
                 if (removed.size() >= target) break;
                 removed.add(b);
