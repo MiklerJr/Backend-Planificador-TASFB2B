@@ -21,7 +21,9 @@ data:
 # ── Planificador: hiperparámetros del ALNS y de los 3 escenarios ────────────
 planificador:
   scenario:
-    sa-minutos: 5                       # Salto del algoritmo (10 min)
+    sa-minutos: 5                       # Salto del algoritmo (Sa, en min)
+    ta-segundos: 30                     # Tiempo de algoritmo (Ta) FIJO por bloque. Debe ser < Sa·60.
+                                        # Cada bloque corre Ta segundos y duerme (Sa·60 - Ta) → wall-clock = Sa.
 
     # Acota la simulación a un número máximo de ventanas de Sa minutos.
     # 0 = procesar todo el dataset cargado.
