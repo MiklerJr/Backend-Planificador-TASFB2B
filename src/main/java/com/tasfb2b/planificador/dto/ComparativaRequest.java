@@ -1,7 +1,10 @@
 package com.tasfb2b.planificador.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
 
 /**
  * Petición para lanzar una comparativa pareada ALNS vs ACO.
@@ -27,4 +30,11 @@ public class ComparativaRequest {
     private boolean ejecutarColapso = false;
     /** Umbral de colapso (solo aplica si ejecutarColapso=true). */
     private Double umbralColapso = 0.20;
+    /**
+     * Fecha de inicio arbitraria del escenario 2 (formato ISO "2026-01-05T00:00").
+     * Null = primera ventana del dataset. Aplica a ambos motores en cada par para
+     * que ALNS y ACO comparen el mismo subperíodo.
+     */
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm[:ss]")
+    private LocalDateTime fechaInicio;
 }
