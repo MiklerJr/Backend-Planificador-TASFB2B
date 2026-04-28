@@ -54,6 +54,20 @@ public class JobState {
      */
     public volatile long seed = 0L;
 
+    /**
+     * Fecha de inicio efectiva del escenario 2 (puede ser distinta de la primera
+     * ventana del dataset si el cliente la fijó en el endpoint). Null = primera ventana.
+     */
+    public volatile LocalDateTime fechaInicio;
+
+    /**
+     * CSV con muestra de hasta 25 envíos del escenario 2 con motor ALNS.
+     * Solo se llena cuando escenario="2" y algoritmo="alns"; null en otros casos.
+     */
+    public volatile String muestraCsv;
+    /** Número de filas en {@link #muestraCsv} (sin contar la cabecera). */
+    public volatile int muestraFilas;
+
     public JobState(String jobId, String escenario, int k) {
         this.jobId     = jobId;
         this.escenario = escenario;

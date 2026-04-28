@@ -32,7 +32,7 @@ import java.util.concurrent.Executors;
 @Service
 public class BenchmarkService {
 
-    private final PlanificadorServiceACO     planificador;
+    private final PlanificadorService     planificador;
     private final PlanificadorProperties  props;
     private final ConcurrentHashMap<String, BenchmarkResult> results = new ConcurrentHashMap<>();
     private final ExecutorService         executor =
@@ -42,7 +42,7 @@ public class BenchmarkService {
                 return t;
             });
 
-    public BenchmarkService(PlanificadorServiceACO planificador, PlanificadorProperties props) {
+    public BenchmarkService(PlanificadorService planificador, PlanificadorProperties props) {
         this.planificador = planificador;
         this.props        = props;
     }

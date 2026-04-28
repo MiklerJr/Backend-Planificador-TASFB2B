@@ -59,6 +59,7 @@ public class PlanificadorService {
     private final JobsRegistry jobs;
     private final AuditoriaService auditoria;
     private final AcoBlockEngine acoEngine;
+    private final MuestraService muestra;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -104,7 +105,8 @@ public class PlanificadorService {
                                GraphBuilder graphBuilder,
                                EnvioLoader envioLoader,
                                AuditoriaService auditoria,
-                               AcoBlockEngine acoEngine) {
+                               AcoBlockEngine acoEngine,
+                               MuestraService muestra) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -114,6 +116,7 @@ public class PlanificadorService {
         this.envioLoader = envioLoader;
         this.auditoria = auditoria;
         this.acoEngine = acoEngine;
+        this.muestra = muestra;
     }
 
 
@@ -126,21 +129,27 @@ public class PlanificadorService {
      * jobId; el cliente puede consultar progreso/resultado en endpoints separados.
      */
     public JobState iniciarEscenario2Async(int k, double cancelProb) {
-        return iniciarEscenario2Async(k, cancelProb, MOTOR_ALNS, null);
+        return iniciarEscenario2Async(k, cancelProb, MOTOR_ALNS, null, null);
     }
 
     public JobState iniciarEscenario2Async(int k, double cancelProb, String motor) {
-        return iniciarEscenario2Async(k, cancelProb, motor, null);
+        return iniciarEscenario2Async(k, cancelProb, motor, null, null);
     }
 
     public JobState iniciarEscenario2Async(int k, double cancelProb, String motor, Long seed) {
+        return iniciarEscenario2Async(k, cancelProb, motor, seed, null);
+    }
+
+    public JobState iniciarEscenario2Async(int k, double cancelProb, String motor,
+                                            Long seed, LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         JobState job = jobs.crear("2", k);
         job.algoritmo = motorRes;
         job.seed = seedRes;
+        job.fechaInicio = fechaInicio;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarALNS(k, cancelProb, job, motorRes, seedRes);
+            SimulacionResponse res = ejecutarALNS(k, cancelProb, job, motorRes, seedRes, fechaInicio);
             job.resultado = res;
         });
         return job;
@@ -203,29 +212,34 @@ public class PlanificadorService {
     // Escenario 2: Simulación de período (batch completo)
     // =========================================================
     public SimulacionResponse ejecutarALNS(int k, double cancelProb) {
-        return ejecutarALNS(k, cancelProb, null, MOTOR_ALNS, resolverSeed(null));
+        return ejecutarALNS(k, cancelProb, null, MOTOR_ALNS, resolverSeed(null), null);
     }
 
     public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job) {
-        return ejecutarALNS(k, cancelProb, job, MOTOR_ALNS, resolverSeed(null));
+        return ejecutarALNS(k, cancelProb, job, MOTOR_ALNS, resolverSeed(null), null);
     }
 
     public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor) {
-        return ejecutarALNS(k, cancelProb, job, motor, resolverSeed(null));
+        return ejecutarALNS(k, cancelProb, job, motor, resolverSeed(null), null);
     }
 
     public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor, long seed) {
+        return ejecutarALNS(k, cancelProb, job, motor, seed, null);
+    }
+
+    public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor,
+                                            long seed, LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         Random rngSim = new Random(seed);
         int saMin = props.getScenario().getSaMinutos();
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 2 — motor={} seed={} ({} iters/bloque, K={}, Sa={}min, Sc={}min, cancelProb={}%, async={}) ...",
-                motorRes, seed, props.getAlns().getIteracionesBase(), k, saMin, scMin,
+        log.info("Escenario 2 — motor={} seed={} fechaInicio={} ({} iters/bloque, K={}, Sa={}min, Sc={}min, cancelProb={}%, async={}) ...",
+                motorRes, seed, fechaInicio, props.getAlns().getIteracionesBase(), k, saMin, scMin,
                 String.format("%.1f", cancelProb * 100),
                 job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k);
+        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio);
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
             SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
@@ -340,6 +354,8 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         publicarAuditoria(job, auditAcc);
+        // Muestra: solo escenario 2 con motor ALNS, hasta 25 envíos.
+        publicarMuestra(job, motorRes, "2", auditAcc);
         return res;
     }
 
@@ -963,6 +979,30 @@ public class PlanificadorService {
         }
     }
 
+    /**
+     * Construye, persiste e imprime una muestra de hasta 25 envíos. Solo aplica
+     * cuando {@code motor="alns"} y {@code escenario="2"} (requisito del cliente).
+     */
+    private void publicarMuestra(JobState job, String motor, String escenario,
+                                  Map<String, LuggageBatch> auditAcc) {
+        if (muestra == null || auditAcc == null || auditAcc.isEmpty()) return;
+        if (!"alns".equalsIgnoreCase(motor)) return;
+        if (!"2".equals(escenario)) return;
+
+        var filas = muestra.construir(auditAcc.values(), MuestraService.LIMITE_DEFAULT);
+        if (filas.isEmpty()) return;
+
+        String contexto = "E2 ALNS"
+                + (job != null ? " job=" + job.getJobId().substring(0, 8) : "")
+                + " seed=" + (job != null ? job.seed : "?");
+        muestra.imprimir(filas, contexto);
+
+        if (job != null) {
+            job.muestraCsv   = muestra.aCsv(filas);
+            job.muestraFilas = filas.size();
+        }
+    }
+
     // =========================================================
     // Núcleo: procesa un bloque (Sc = K*Sa minutos de datos)
     // Compartido por los 3 escenarios. Mide Ta y rellena el TemporalContext.
@@ -1054,11 +1094,20 @@ public class PlanificadorService {
         Map<Long, Integer> blockAirport = new HashMap<>();
         List<LuggageBatch> finalBatches;
 
+        // Presupuesto de tiempo Ta — variable del modelo (configurable, NO medida).
+        // Si ta-segundos > 0 se usa ese valor fijo; si no, fallback al legacy 0.7·Sa.
+        long saMs = ctx.saMinutos * 60_000L;
+        long taFijoMs = props.getScenario().getTaSegundos() * 1000L;
+        long presupuestoMs = taFijoMs > 0 ? taFijoMs : (long) (saMs * 0.7);
+        long inicioMotorMs = System.currentTimeMillis();
+
         if (MOTOR_ACO.equalsIgnoreCase(motor)) {
             if (acoEngine == null) {
                 throw new IllegalStateException("AcoBlockEngine no inyectado — motor 'aco' no disponible");
             }
-            acoEngine.procesar(graph, enrutador, bloqueBatches, blockFlight, blockAirport, rngSim);
+            // Ta como cota DURA: si el ACO excede el presupuesto, aborta y los
+            // batches restantes quedan sinRuta (mismo comportamiento que ALNS).
+            acoEngine.procesar(graph, enrutador, bloqueBatches, blockFlight, blockAirport, rngSim, presupuestoMs);
             finalBatches = bloqueBatches;
             enrutador.commitBlock(blockFlight, blockAirport);
         } else {
@@ -1083,9 +1132,8 @@ public class PlanificadorService {
                         ? props.getAlns().getIteracionesCercaColapso()
                         : props.getAlns().getIteracionesBase();
 
-                // Presupuesto de tiempo: 70% de Sa para mantener Ta < Sa siempre.
-                long saMs = ctx.saMinutos * 60_000L;
-                alns.tiempoLimiteMs = (long) (saMs * 0.7);
+                // Presupuesto Ta como cota dura: el ALNS aborta si lo excede.
+                alns.tiempoLimiteMs = presupuestoMs;
 
                 alns.run(iteraciones);
                 finalBatches = alns.getBestSolution().getBatches();
@@ -1093,6 +1141,24 @@ public class PlanificadorService {
             } else {
                 finalBatches = bloqueBatches;
                 enrutador.commitBlock(blockFlight, blockAirport);
+            }
+        }
+
+        // Si el motor terminó antes de Ta y Ta es fijo, completamos con sleep
+        // para que cada bloque consuma exactamente Ta de cómputo (modelo del cliente).
+        if (taFijoMs > 0) {
+            long transcurridoMs = System.currentTimeMillis() - inicioMotorMs;
+            long faltanteMs = taFijoMs - transcurridoMs;
+            if (faltanteMs > 0) {
+                try {
+                    Thread.sleep(faltanteMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            } else if (transcurridoMs > taFijoMs * 1.05) {
+                // Excedió el presupuesto en >5% — calibrar bajando iteraciones o subiendo Ta.
+                log.warn("Bloque {} excedió Ta: {}ms > {}ms (motor={})",
+                        ctx.bloqueIdx, transcurridoMs, taFijoMs, motor);
             }
         }
 
@@ -1130,7 +1196,9 @@ public class PlanificadorService {
             for (LuggageBatch b : finalBatches) auditAcc.put(b.getId(), b);
         }
 
-        ctx.marcarFin();
+        // Reportar Ta como variable fija del modelo (taMs = ta-segundos * 1000).
+        // Si Ta no está configurado, queda el legacy (taMs = tiempo medido).
+        ctx.marcarFin(taFijoMs);
 
         SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
         bloque.setHoraInicio(ctx.scStart.toString());
@@ -1150,30 +1218,63 @@ public class PlanificadorService {
      * Cada bloque cubre {@code Sc = K*Sa} minutos en el eje de datos.
      */
     private List<TemporalContext> construirPlanBloques(int k) {
+        return construirPlanBloques(k, null);
+    }
+
+    /**
+     * Variante con fecha de inicio arbitraria. Si {@code fechaInicio} es null
+     * o cae fuera del rango del dataset, se usa la primera ventana cargada.
+     * El inicio efectivo se alinea hacia abajo al múltiplo de Sa más cercano
+     * para que el {@code subMap} del {@code DataLoader} encaje con las
+     * ventanas existentes.
+     */
+    private List<TemporalContext> construirPlanBloques(int k, LocalDateTime fechaInicio) {
         LocalDateTime primero = dataLoader.getPrimeraVentana();
         LocalDateTime ultimo = dataLoader.getUltimaVentana();
         if (primero == null || ultimo == null) return Collections.emptyList();
 
         int saMin = props.getScenario().getSaMinutos();
         int scMin = Math.max(saMin, k * saMin);
+
+        // Resolver inicio: clamp al rango [primero, ultimo) y alinear a Sa.
+        LocalDateTime inicio = primero;
+        if (fechaInicio != null) {
+            if (fechaInicio.isBefore(primero)) {
+                log.warn("fechaInicio={} < primera ventana del dataset {} — usando primera",
+                        fechaInicio, primero);
+            } else if (!fechaInicio.isBefore(ultimo.plusMinutes(saMin))) {
+                log.warn("fechaInicio={} fuera del rango (último={}) — usando primera",
+                        fechaInicio, ultimo);
+            } else {
+                inicio = alinearASa(fechaInicio, primero, saMin);
+            }
+        }
+
         // Última ventana también contiene maletas → cubrir hasta ultimo + saMin.
         LocalDateTime fin = ultimo.plusMinutes(saMin);
 
-        // ─── NUEVO: LIMITAR A UN PERÍODO MÁXIMO (EJ. 5 DÍAS) ──────────────
-        // Leemos la propiedad del application.yaml (si no existe o es 0, procesa todo)
+        // Limitar a un período máximo (max-ventanas). El tope se calcula a partir
+        // del inicio efectivo, no del inicio del dataset.
         int maxVentanas = props.getScenario().getMaxVentanas();
         if (maxVentanas > 0) {
-            LocalDateTime fechaTope = primero.plusMinutes((long) maxVentanas * saMin);
+            LocalDateTime fechaTope = inicio.plusMinutes((long) maxVentanas * saMin);
             if (fin.isAfter(fechaTope)) {
                 fin = fechaTope;
-                log.info("Línea de tiempo acotada artificialmente a {} ventanas. Nuevo final de simulación: {}",
-                        maxVentanas, fin);
+                log.info("Línea de tiempo acotada a {} ventanas desde {}. Final: {}",
+                        maxVentanas, inicio, fin);
             }
         }
-        // ──────────────────────────────────────────────────────────────────
+
+        if (!inicio.isBefore(fin)) {
+            log.warn("Plan vacío: inicio={} >= fin={}", inicio, fin);
+            return Collections.emptyList();
+        }
+
+        log.info("Plan de bloques: inicio={} fin={} K={} Sa={}min Sc={}min",
+                inicio, fin, k, saMin, scMin);
 
         List<TemporalContext> plan = new ArrayList<>();
-        LocalDateTime scStart = primero;
+        LocalDateTime scStart = inicio;
         int idx = 0;
         while (scStart.isBefore(fin)) {
             LocalDateTime scEnd = scStart.plusMinutes(scMin);
@@ -1182,6 +1283,17 @@ public class PlanificadorService {
             scStart = scEnd;
         }
         return plan;
+    }
+
+    /**
+     * Alinea {@code t} hacia abajo a un múltiplo de Sa minutos contado desde
+     * {@code base}. Garantiza que cada bloque consume datos de ventanas
+     * existentes (las del {@code DataLoader.maletasPorVentana}).
+     */
+    private static LocalDateTime alinearASa(LocalDateTime t, LocalDateTime base, int saMin) {
+        long minutosDesdeBase = java.time.Duration.between(base, t).toMinutes();
+        long alineado = (minutosDesdeBase / saMin) * saMin;
+        return base.plusMinutes(alineado);
     }
 
     /**
