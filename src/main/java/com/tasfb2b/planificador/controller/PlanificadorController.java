@@ -3,12 +3,14 @@ package com.tasfb2b.planificador.controller;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -17,9 +19,9 @@ import java.util.Map;
 @RequestMapping("/api/planificador")
 public class PlanificadorController {
 
-    private final PlanificadorServiceACO service;
+    private final PlanificadorService service;
 
-    public PlanificadorController(PlanificadorServiceACO service) {
+    public PlanificadorController(PlanificadorService service) {
         this.service = service;
     }
 
@@ -113,17 +115,20 @@ public class PlanificadorController {
             @RequestParam(defaultValue = "14")    int    k,
             @RequestParam(defaultValue = "0.0")   double cancelProb,
             @RequestParam(defaultValue = "alns")  String algoritmo,
-            @RequestParam(required = false)        Long  seed) {
+            @RequestParam(required = false)        Long  seed,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
-        JobState job = service.iniciarEscenario2Async(k, cancelProb, algoritmo, seed);
-        return ResponseEntity.accepted().body(Map.of(
-                "jobId",     job.getJobId(),
-                "escenario", "2",
-                "algoritmo", job.algoritmo,
-                "k",         k,
-                "seed",      job.seed,
-                "estado",    job.estado
-        ));
+        JobState job = service.iniciarEscenario2Async(k, cancelProb, algoritmo, seed, fechaInicio);
+        Map<String, Object> body = new HashMap<>();
+        body.put("jobId",     job.getJobId());
+        body.put("escenario", "2");
+        body.put("algoritmo", job.algoritmo);
+        body.put("k",         k);
+        body.put("seed",      job.seed);
+        body.put("estado",    job.estado);
+        if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
+        return ResponseEntity.accepted().body(body);
     }
 
     @PostMapping("/escenario3/iniciar")
@@ -157,6 +162,7 @@ public class PlanificadorController {
         body.put("escenario",     job.getEscenario());
         body.put("algoritmo",     job.algoritmo);
         body.put("seed",          job.seed);
+        if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         body.put("k",             job.getK());
         body.put("estado",        job.estado);
         body.put("bloqueActual",  job.bloqueActual);
@@ -181,6 +187,28 @@ public class PlanificadorController {
     public ResponseEntity<Map<String, Object>> cancelarJob(@PathVariable String jobId) {
         boolean ok = service.cancelarJob(jobId);
         return ResponseEntity.ok(Map.of("jobId", jobId, "cancelado", ok));
+    }
+
+    /**
+     * Descarga el CSV con la muestra de hasta 25 envíos. Solo disponible para
+     * jobs de escenario 2 con motor ALNS (requisito del cliente).
+     *
+     * <p>10 columnas: idMaleta, idCliente, origen, destino, cantidad, ruta,
+     * tiempoTotalMin, slaLimiteMin, cumpleSLA, tardado.
+     */
+    @GetMapping(value = "/jobs/{jobId}/muestra.csv", produces = "text/csv")
+    public ResponseEntity<byte[]> muestraJob(@PathVariable String jobId) {
+        JobState job = service.getJob(jobId);
+        if (job == null)             return ResponseEntity.notFound().build();
+        if (job.muestraCsv == null)  return ResponseEntity.noContent().build();
+
+        byte[] body = job.muestraCsv.getBytes(StandardCharsets.UTF_8);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv; charset=UTF-8"));
+        headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename=\"muestra_" + jobId + ".csv\"");
+        headers.set("X-Muestra-Rows", String.valueOf(job.muestraFilas));
+        return ResponseEntity.ok().headers(headers).body(body);
     }
 
     /**

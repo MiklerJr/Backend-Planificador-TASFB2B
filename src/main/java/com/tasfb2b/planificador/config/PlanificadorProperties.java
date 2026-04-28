@@ -22,11 +22,23 @@ public class PlanificadorProperties {
     private Backlog   backlog   = new Backlog();
     private Benchmark benchmark = new Benchmark();
 
-    /** Parámetros de planificación programada fija (Sa, K, umbrales globales). */
+    /** Parámetros de planificación programada fija (Sa, Ta, K, umbrales globales). */
     @Data
     public static class Scenario {
         /** Salto del algoritmo (Sa) en minutos. Eje de datos: cada bloque consume K*Sa min. */
         private int saMinutos = 10;
+
+        /**
+         * Tiempo del algoritmo (Ta) en segundos — presupuesto FIJO de cómputo por bloque.
+         *
+         * <p>Es una variable de configuración del modelo, NO una medición. Cada bloque corre
+         * el motor durante exactamente {@code Ta} segundos (cota dura) y luego duerme
+         * {@code Sa - Ta} para que el wall-clock por bloque sea siempre Sa.
+         *
+         * <p>Restricción del modelo: {@code Ta < Sa}. Si {@code Ta = 0} se usa el legacy
+         * {@code 0.7·Sa} como presupuesto.
+         */
+        private int taSegundos = 0;
         /** K por defecto para escenario día a día (tiempo real). */
         private int kDefault1 = 1;
         /** K por defecto para escenario de período (3/5/7 días). */
