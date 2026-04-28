@@ -4,6 +4,7 @@ import com.tasfb2b.planificador.algorithm.aco.*;
 import com.tasfb2b.planificador.algorithm.alns.*;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
+import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.algorithm.aco.AlgorithmACO;
 import com.tasfb2b.planificador.algorithm.aco.Ant;
@@ -142,14 +143,38 @@ public class PlanificadorService {
 
     public JobState iniciarEscenario2Async(int k, double cancelProb, String motor,
                                             Long seed, LocalDateTime fechaInicio) {
-        String motorRes = resolverMotor(motor);
-        long seedRes = resolverSeed(seed);
+        EjecucionParams p = new EjecucionParams();
+        p.setK(k);
+        p.setCancelProb(cancelProb);
+        p.setMotor(motor);
+        p.setSeed(seed);
+        p.setFechaInicio(fechaInicio);
+        return iniciarEscenario2Async(p);
+    }
+
+    /**
+     * Lanza el escenario 2 con todos los parámetros de {@link EjecucionParams}.
+     * Cualquier campo null se completa con el default del yaml.
+     */
+    public JobState iniciarEscenario2Async(EjecucionParams params) {
+        if (params == null) params = new EjecucionParams();
+        int k = params.getK() != null ? params.getK() : props.getScenario().getKDefault2();
+        String motorRes = resolverMotor(params.getMotor());
+        long seedRes = resolverSeed(params.getSeed());
+
         JobState job = jobs.crear("2", k);
         job.algoritmo = motorRes;
         job.seed = seedRes;
-        job.fechaInicio = fechaInicio;
+        job.fechaInicio = params.getFechaInicio();
+
+        // Propagar el seed resuelto al params para que ejecutarALNS use el mismo.
+        EjecucionParams pf = params;
+        pf.setK(k);
+        pf.setMotor(motorRes);
+        pf.setSeed(seedRes);
+
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarALNS(k, cancelProb, job, motorRes, seedRes, fechaInicio);
+            SimulacionResponse res = ejecutarALNS(pf, job);
             job.resultado = res;
         });
         return job;
@@ -229,17 +254,49 @@ public class PlanificadorService {
 
     public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor,
                                             long seed, LocalDateTime fechaInicio) {
+        EjecucionParams p = new EjecucionParams();
+        p.setK(k);
+        p.setCancelProb(cancelProb);
+        p.setMotor(motor);
+        p.setSeed(seed);
+        p.setFechaInicio(fechaInicio);
+        return ejecutarALNS(p, job);
+    }
+
+    /**
+     * Método principal de simulación. Cualquier campo {@code null} en
+     * {@link EjecucionParams} cae al default global del yaml.
+     *
+     * <p>Permite override por petición de {@code Sa}, {@code Ta} y {@code dias}
+     * — la ventana temporal se calcula dinámicamente como
+     * {@code ventanasTotales = (dias·24·60)/Sa} sin acoplarse a {@code max-ventanas}.
+     */
+    public SimulacionResponse ejecutarALNS(EjecucionParams params, JobState job) {
+        if (params == null) params = new EjecucionParams();
+        int k = params.getK() != null ? params.getK() : props.getScenario().getKDefault2();
+        double cancelProb = params.getCancelProb() != null ? params.getCancelProb() : 0.0;
+        String motor = params.getMotor();
+        long seed = resolverSeed(params.getSeed());
+        LocalDateTime fechaInicio = params.getFechaInicio();
+        Integer saOverride = params.getSaMin();
+        Integer taOverride = params.getTaSegundos();
+        Integer diasOverride = params.getDias();
+
         String motorRes = resolverMotor(motor);
         Random rngSim = new Random(seed);
-        int saMin = props.getScenario().getSaMinutos();
+        int saMin = (saOverride != null && saOverride > 0)
+                ? saOverride
+                : props.getScenario().getSaMinutos();
+        long taFijoMs = (taOverride != null && taOverride > 0)
+                ? taOverride * 1000L
+                : props.getScenario().getTaSegundos() * 1000L;
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 2 — motor={} seed={} fechaInicio={} ({} iters/bloque, K={}, Sa={}min, Sc={}min, cancelProb={}%, async={}) ...",
-                motorRes, seed, fechaInicio, props.getAlns().getIteracionesBase(), k, saMin, scMin,
-                String.format("%.1f", cancelProb * 100),
-                job != null);
+        log.info("Escenario 2 — motor={} seed={} fechaInicio={} K={} Sa={}min Ta={}s dias={} Sc={}min cancelProb={}% async={}",
+                motorRes, seed, fechaInicio, k, saMin, taFijoMs / 1000, diasOverride, scMin,
+                String.format("%.1f", cancelProb * 100), job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio);
+        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio, saOverride, diasOverride);
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
             SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
@@ -284,7 +341,7 @@ public class PlanificadorService {
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngSim);
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngSim, taFijoMs);
             bloques.add(rv.bloque);
             taStats.acumular(ctx.taMs);
 
@@ -1036,20 +1093,9 @@ public class PlanificadorService {
                                             BacklogManager backlog,
                                             Map<String, LuggageBatch> auditAcc,
                                             String motor) {
-        return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, null);
+        return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, null, 0L);
     }
 
-    /**
-     * Núcleo de procesamiento por bloque. {@code motor} elige el algoritmo:
-     * <ul>
-     *   <li>{@code "alns"} — Greedy + Dijkstra + ALNS (default).</li>
-     *   <li>{@code "aco"}  — Adaptador {@link AcoBlockEngine} que ejecuta
-     *       Ant Colony Optimization por batch dentro del modelo Sa/Sc/K.</li>
-     * </ul>
-     * {@code rngSim} se inyecta a los componentes con aleatoriedad (selectDestroyOp,
-     * SA accept, ruleta ACO, shuffle de operadores) para reproducibilidad cuando
-     * se fija un seed.
-     */
     private ResultadoVentana procesarBloque(TemporalContext ctx,
                                             Graph graph,
                                             GreedyRepairOperator enrutador,
@@ -1059,6 +1105,25 @@ public class PlanificadorService {
                                             Map<String, LuggageBatch> auditAcc,
                                             String motor,
                                             Random rngSim) {
+        return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, rngSim, 0L);
+    }
+
+    /**
+     * Núcleo de procesamiento por bloque. {@code motor} elige el algoritmo
+     * (alns | aco). {@code rngSim} es la fuente de aleatoriedad reproducible.
+     * {@code taFijoMsOverride} permite override por job de {@code ta-segundos}
+     * del yaml; ≤0 = usar default global.
+     */
+    private ResultadoVentana procesarBloque(TemporalContext ctx,
+                                            Graph graph,
+                                            GreedyRepairOperator enrutador,
+                                            AlnsSolution solucionDummy,
+                                            Map<String, int[]> odStats,
+                                            BacklogManager backlog,
+                                            Map<String, LuggageBatch> auditAcc,
+                                            String motor,
+                                            Random rngSim,
+                                            long taFijoMsOverride) {
         ctx.marcarInicio();
 
         // 1. Eje de datos: consumir [scStart, scEnd) → todo lo registrado en ese rango.
@@ -1095,9 +1160,11 @@ public class PlanificadorService {
         List<LuggageBatch> finalBatches;
 
         // Presupuesto de tiempo Ta — variable del modelo (configurable, NO medida).
-        // Si ta-segundos > 0 se usa ese valor fijo; si no, fallback al legacy 0.7·Sa.
+        // Prioridad: override por job > props.ta-segundos > legacy 0.7·Sa.
         long saMs = ctx.saMinutos * 60_000L;
-        long taFijoMs = props.getScenario().getTaSegundos() * 1000L;
+        long taFijoMs = taFijoMsOverride > 0
+                ? taFijoMsOverride
+                : props.getScenario().getTaSegundos() * 1000L;
         long presupuestoMs = taFijoMs > 0 ? taFijoMs : (long) (saMs * 0.7);
         long inicioMotorMs = System.currentTimeMillis();
 
@@ -1218,22 +1285,38 @@ public class PlanificadorService {
      * Cada bloque cubre {@code Sc = K*Sa} minutos en el eje de datos.
      */
     private List<TemporalContext> construirPlanBloques(int k) {
-        return construirPlanBloques(k, null);
+        return construirPlanBloques(k, null, null, null);
     }
 
     /**
-     * Variante con fecha de inicio arbitraria. Si {@code fechaInicio} es null
-     * o cae fuera del rango del dataset, se usa la primera ventana cargada.
-     * El inicio efectivo se alinea hacia abajo al múltiplo de Sa más cercano
-     * para que el {@code subMap} del {@code DataLoader} encaje con las
-     * ventanas existentes.
+     * Variante con fecha de inicio arbitraria.
      */
     private List<TemporalContext> construirPlanBloques(int k, LocalDateTime fechaInicio) {
+        return construirPlanBloques(k, fechaInicio, null, null);
+    }
+
+    /**
+     * Variante con override de Sa y duración en días.
+     *
+     * <p>Si {@code saMinOverride} es null, se usa {@code props.scenario.sa-minutos}.
+     * Si {@code diasOverride} es null, se usa el legacy {@code max-ventanas} del yaml.
+     * Si {@code diasOverride > 0}, se calcula dinámicamente:
+     * {@code ventanasTotales = (dias · 24 · 60) / sa}.
+     *
+     * <p>El inicio efectivo se alinea hacia abajo al múltiplo de Sa más cercano
+     * para que el {@code subMap} del {@code DataLoader} encaje con ventanas existentes.
+     */
+    private List<TemporalContext> construirPlanBloques(int k,
+                                                        LocalDateTime fechaInicio,
+                                                        Integer saMinOverride,
+                                                        Integer diasOverride) {
         LocalDateTime primero = dataLoader.getPrimeraVentana();
         LocalDateTime ultimo = dataLoader.getUltimaVentana();
         if (primero == null || ultimo == null) return Collections.emptyList();
 
-        int saMin = props.getScenario().getSaMinutos();
+        int saMin = (saMinOverride != null && saMinOverride > 0)
+                ? saMinOverride
+                : props.getScenario().getSaMinutos();
         int scMin = Math.max(saMin, k * saMin);
 
         // Resolver inicio: clamp al rango [primero, ultimo) y alinear a Sa.
@@ -1250,19 +1333,27 @@ public class PlanificadorService {
             }
         }
 
-        // Última ventana también contiene maletas → cubrir hasta ultimo + saMin.
-        LocalDateTime fin = ultimo.plusMinutes(saMin);
+        // Cálculo dinámico de ventanas totales:
+        //   - Si dias > 0:                ventanasTotales = (dias · 24 · 60) / sa
+        //   - Si no, fallback a max-ventanas (legacy global).
+        long ventanasTotales;
+        if (diasOverride != null && diasOverride > 0) {
+            ventanasTotales = (long) diasOverride * 24L * 60L / saMin;
+        } else {
+            ventanasTotales = props.getScenario().getMaxVentanas();
+        }
 
-        // Limitar a un período máximo (max-ventanas). El tope se calcula a partir
-        // del inicio efectivo, no del inicio del dataset.
-        int maxVentanas = props.getScenario().getMaxVentanas();
-        if (maxVentanas > 0) {
-            LocalDateTime fechaTope = inicio.plusMinutes((long) maxVentanas * saMin);
-            if (fin.isAfter(fechaTope)) {
-                fin = fechaTope;
-                log.info("Línea de tiempo acotada a {} ventanas desde {}. Final: {}",
-                        maxVentanas, inicio, fin);
-            }
+        // Final del horizonte de simulación.
+        // Si ventanasTotales > 0, el horizonte es inicio + ventanasTotales · Sa.
+        // Si no, cubrimos hasta el final del dataset cargado.
+        LocalDateTime fin;
+        if (ventanasTotales > 0) {
+            fin = inicio.plusMinutes(ventanasTotales * saMin);
+            // No exceder el final del dataset (última ventana incluida).
+            LocalDateTime topeDataset = ultimo.plusMinutes(saMin);
+            if (fin.isAfter(topeDataset)) fin = topeDataset;
+        } else {
+            fin = ultimo.plusMinutes(saMin);
         }
 
         if (!inicio.isBefore(fin)) {
@@ -1270,8 +1361,9 @@ public class PlanificadorService {
             return Collections.emptyList();
         }
 
-        log.info("Plan de bloques: inicio={} fin={} K={} Sa={}min Sc={}min",
-                inicio, fin, k, saMin, scMin);
+        log.info("Plan de bloques: inicio={} fin={} K={} Sa={}min Sc={}min ventanas={}{}",
+                inicio, fin, k, saMin, scMin, ventanasTotales,
+                diasOverride != null ? " (dias=" + diasOverride + ")" : "");
 
         List<TemporalContext> plan = new ArrayList<>();
         LocalDateTime scStart = inicio;
@@ -1288,7 +1380,7 @@ public class PlanificadorService {
     /**
      * Alinea {@code t} hacia abajo a un múltiplo de Sa minutos contado desde
      * {@code base}. Garantiza que cada bloque consume datos de ventanas
-     * existentes (las del {@code DataLoader.maletasPorVentana}).
+     * existentes (la lista plana ordenada del {@code DataLoader}).
      */
     private static LocalDateTime alinearASa(LocalDateTime t, LocalDateTime base, int saMin) {
         long minutosDesdeBase = java.time.Duration.between(base, t).toMinutes();

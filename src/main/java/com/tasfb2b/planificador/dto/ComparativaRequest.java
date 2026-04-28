@@ -37,4 +37,11 @@ public class ComparativaRequest {
      */
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm[:ss]")
     private LocalDateTime fechaInicio;
+
+    /** Tamaño de ventana del planificador (Sa) en minutos. Null = default del yaml. */
+    private Integer sa;
+    /** Presupuesto Ta por bloque en segundos. Null = default del yaml. */
+    private Integer ta;
+    /** Duración total en días: ventanas = (dias·24·60)/sa. Null = legacy max-ventanas. */
+    private Integer dias;
 }

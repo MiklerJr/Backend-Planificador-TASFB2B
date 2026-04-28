@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.controller;
 
+import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
@@ -110,6 +111,15 @@ public class PlanificadorController {
     // ── Escenarios 2/3 asíncronos ────────────────────────────────────────────
     // Soportan ejecuciones largas (30-90 min con sleep activo) sin bloquear el HTTP.
 
+    /**
+     * Lanza el escenario 2. Todos los parámetros excepto {@code k} son opcionales —
+     * los que falten caen al default del yaml. Permite override por petición de
+     * {@code Sa}, {@code Ta} y {@code dias} para que cada job pueda ejecutar con
+     * su propia ventana sin tocar configuración global.
+     *
+     * <p>Ejemplo: {@code /escenario2/iniciar?k=120&sa=5&dias=5&algoritmo=alns}
+     * → cálculo dinámico {@code ventanas = (5·24·60)/5 = 1440} bloques de Sc=K·Sa.
+     */
     @PostMapping("/escenario2/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc2(
             @RequestParam(defaultValue = "14")    int    k,
@@ -117,9 +127,23 @@ public class PlanificadorController {
             @RequestParam(defaultValue = "alns")  String algoritmo,
             @RequestParam(required = false)        Long  seed,
             @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
+            @RequestParam(required = false)        Integer sa,
+            @RequestParam(required = false)        Integer ta,
+            @RequestParam(required = false)        Integer dias) {
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
-        JobState job = service.iniciarEscenario2Async(k, cancelProb, algoritmo, seed, fechaInicio);
+
+        EjecucionParams params = new EjecucionParams();
+        params.setK(k);
+        params.setCancelProb(cancelProb);
+        params.setMotor(algoritmo);
+        params.setSeed(seed);
+        params.setFechaInicio(fechaInicio);
+        params.setSaMin(sa);
+        params.setTaSegundos(ta);
+        params.setDias(dias);
+
+        JobState job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
         body.put("jobId",     job.getJobId());
         body.put("escenario", "2");
@@ -127,6 +151,9 @@ public class PlanificadorController {
         body.put("k",         k);
         body.put("seed",      job.seed);
         body.put("estado",    job.estado);
+        if (sa != null)   body.put("sa", sa);
+        if (ta != null)   body.put("ta", ta);
+        if (dias != null) body.put("dias", dias);
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }

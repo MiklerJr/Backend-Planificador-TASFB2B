@@ -77,8 +77,3 @@ planificador:
     cancel-prob-grid: [0.0]
     repeticiones: 1
     timeout-minutos: 90
-
-# Para alns sa = 5
-# k = 75 y aguanta
-
-# Falta para ACO!!!!!!

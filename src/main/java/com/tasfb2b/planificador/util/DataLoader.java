@@ -12,12 +12,25 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * Carga aeropuertos, vuelos y maletas en memoria al arrancar la app.
+ *
+ * <p>Las maletas se almacenan en una <b>lista plana ordenada</b> por
+ * {@code fechaHoraRegistro}. {@link #getMaletasEnRango(LocalDateTime, LocalDateTime)}
+ * usa búsqueda binaria para extraer un sub‑rango — sin granularizar a buckets,
+ * lo que permite que el modelo Sa/Sc/K acepte <b>cualquier</b> valor de Sa
+ * y Sc = K·Sa sin pérdidas ni duplicados, y con overhead mínimo (la lista
+ * solo guarda referencias).
+ */
 @Slf4j
 @Component
 public class DataLoader {
@@ -48,10 +61,15 @@ public class DataLoader {
     private List<Aeropuerto> aeropuertos = new ArrayList<>();
     private List<Vuelo>      vuelos      = new ArrayList<>();
 
-    // Maletas indexadas por ventana de 10 min (TreeMap = ya ordenado por clave temporal).
-    // Cada ventana solo existe en RAM mientras su lista tiene referencias; al liberarse la
-    // lista desde el servicio, el GC puede reclamar esos objetos.
-    private final TreeMap<LocalDateTime, List<Maleta>> maletasPorVentana = new TreeMap<>();
+    /**
+     * Maletas en orden cronológico por {@code fechaHoraRegistro}. Estructura plana
+     * para que {@code getMaletasEnRango} use {@code binarySearch} en O(log N) sin
+     * granularizar a buckets fijos. Inmutable tras {@link #load()}.
+     */
+    private List<Maleta> maletasOrdenadas = Collections.emptyList();
+
+    /** Comparator usado por la búsqueda binaria. */
+    private static final Comparator<Maleta> POR_FECHA = Comparator.comparing(Maleta::getFechaHoraRegistro);
 
     @PostConstruct
     public void load() throws IOException {
@@ -61,7 +79,9 @@ public class DataLoader {
 
         vuelos = vueloParser.parse(Path.of(flightsFile), aeropuertoMap);
 
-        int[] totalMaletas = {0};
+        // Acumular en una sola lista mientras parseamos cada archivo de envíos.
+        // Pre-dimensionada generosamente para evitar reallocs caros (9-10M maletas).
+        List<Maleta> todas = new ArrayList<>(10_000_000);
         Files.list(Path.of(baggageDir))
                 .filter(p -> p.toString().toLowerCase().endsWith(".txt"))
                 .forEach(file -> {
@@ -73,94 +93,90 @@ public class DataLoader {
                     if (origen == null) return;
 
                     try {
-                        List<Maleta> lote = maletaParser.parse(file, origen, aeropuertoMap);
-                        // Indexar cada maleta en su ventana de 10 min en una sola pasada,
-                        // sin crear una lista plana adicional.
-                        for (Maleta m : lote) {
-                            maletasPorVentana
-                                    .computeIfAbsent(claveVentana(m.getFechaHoraRegistro()), k -> new ArrayList<>())
-                                    .add(m);
-                        }
-                        totalMaletas[0] += lote.size();
+                        todas.addAll(maletaParser.parse(file, origen, aeropuertoMap));
                     } catch (IOException e) {
                         log.error("Error leyendo {}: {}", file, e.getMessage());
                     }
                 });
 
+        // Ordenar una sola vez por fecha de registro — clave para que getMaletasEnRango
+        // use binarySearch sin necesidad de buckets.
+        todas.sort(POR_FECHA);
+        maletasOrdenadas = todas;
+
         log.info("=================================================");
         log.info("RESUMEN DE DATOS CARGADOS EN MEMORIA");
         log.info("Aeropuertos : {}", aeropuertos.size());
         log.info("Vuelos      : {}", vuelos.size());
-        log.info("Maletas     : {} en {} ventanas de 10 min", totalMaletas[0], maletasPorVentana.size());
+        log.info("Maletas     : {} (lista plana ordenada por fechaHoraRegistro)",
+                maletasOrdenadas.size());
+        if (!maletasOrdenadas.isEmpty()) {
+            log.info("Rango       : {} → {}",
+                    maletasOrdenadas.get(0).getFechaHoraRegistro(),
+                    maletasOrdenadas.get(maletasOrdenadas.size() - 1).getFechaHoraRegistro());
+        }
         log.info("=================================================");
     }
 
-    // Ventanas disponibles en orden cronológico (TreeMap garantiza el orden).
-    public Set<LocalDateTime> getVentanas() {
-        return maletasPorVentana.keySet();
-    }
-
-    /** Primera ventana cargada (la más antigua). Null si no hay datos. */
+    /** Fecha de registro de la primera maleta. Null si no hay datos. */
     public LocalDateTime getPrimeraVentana() {
-        return maletasPorVentana.isEmpty() ? null : maletasPorVentana.firstKey();
+        return maletasOrdenadas.isEmpty() ? null : maletasOrdenadas.get(0).getFechaHoraRegistro();
     }
 
-    /** Última ventana cargada (la más reciente). Null si no hay datos. */
+    /** Fecha de registro de la última maleta. Null si no hay datos. */
     public LocalDateTime getUltimaVentana() {
-        return maletasPorVentana.isEmpty() ? null : maletasPorVentana.lastKey();
-    }
-
-    // Devuelve las maletas de una ventana sin eliminarlas (permite re-ejecución).
-    public List<Maleta> getMaletasVentana(LocalDateTime ventana) {
-        return maletasPorVentana.getOrDefault(ventana, Collections.emptyList());
+        return maletasOrdenadas.isEmpty() ? null
+                : maletasOrdenadas.get(maletasOrdenadas.size() - 1).getFechaHoraRegistro();
     }
 
     /**
      * Devuelve las maletas registradas en {@code [desde, hasta)} (eje de datos).
      *
-     * <p>Usado por el modelo de planificación programada fija para consumir
-     * Sc = K*Sa minutos por ejecución. Las claves del TreeMap están alineadas
-     * a múltiplos de 10 min ({@link #claveVentana}); para evitar pérdidas o
-     * duplicados, los argumentos {@code desde} y {@code hasta} también deben
-     * estar alineados (Sa debe ser múltiplo de 10).
+     * <p>Implementación: dos búsquedas binarias sobre la lista plana ordenada,
+     * resultado en O(log N + K) donde K es el número de maletas en el rango.
+     * No hay granularización por buckets — cualquier Sa y Sc = K·Sa funcionan
+     * exactamente sin pérdidas ni duplicados.
+     *
+     * <p>El resultado es una <b>vista</b> ({@code subList}) sobre la lista
+     * interna; los consumidores no deben modificarla.
      *
      * @param desde inicio del rango (inclusive)
      * @param hasta fin del rango (exclusivo)
      */
     public List<Maleta> getMaletasEnRango(LocalDateTime desde, LocalDateTime hasta) {
-        if (desde == null || hasta == null || !desde.isBefore(hasta))
+        if (desde == null || hasta == null || !desde.isBefore(hasta) || maletasOrdenadas.isEmpty())
             return Collections.emptyList();
 
-        // subMap([desde, hasta)) sobre el TreeMap es O(log n) + iteración del rango.
-        java.util.NavigableMap<LocalDateTime, List<Maleta>> sub =
-                maletasPorVentana.subMap(desde, true, hasta, false);
-
-        if (sub.isEmpty()) return Collections.emptyList();
-
-        // Tamaño esperado: estimación de la suma de tamaños.
-        int total = 0;
-        for (List<Maleta> l : sub.values()) total += l.size();
-        List<Maleta> result = new ArrayList<>(total);
-        for (List<Maleta> l : sub.values()) result.addAll(l);
-        return result;
+        int from = lowerBound(desde);
+        int to   = lowerBound(hasta);
+        if (from >= to) return Collections.emptyList();
+        return maletasOrdenadas.subList(from, to);
     }
 
-    // Muestra pequeña para ACO u otros usos que no requieren el dataset completo.
+    /**
+     * Primera posición {@code i} tal que {@code maletasOrdenadas.get(i).fechaHoraRegistro >= ts}.
+     * Si todas son anteriores, devuelve {@code size()}.
+     */
+    private int lowerBound(LocalDateTime ts) {
+        int lo = 0, hi = maletasOrdenadas.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (maletasOrdenadas.get(mid).getFechaHoraRegistro().isBefore(ts)) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    /** Muestra pequeña para usos legacy (ACO heredado, diagnóstico). */
     public List<Maleta> getMaletasMuestra(int limite) {
-        return maletasPorVentana.values().stream()
-                .flatMap(List::stream)
-                .limit(limite)
-                .collect(Collectors.toList());
+        if (limite <= 0 || maletasOrdenadas.isEmpty()) return Collections.emptyList();
+        return maletasOrdenadas.subList(0, Math.min(limite, maletasOrdenadas.size()));
     }
 
     public int getTotalMaletas() {
-        return maletasPorVentana.values().stream().mapToInt(List::size).sum();
+        return maletasOrdenadas.size();
     }
 
     public List<Aeropuerto> getAeropuertos() { return aeropuertos; }
     public List<Vuelo>      getVuelos()      { return vuelos; }
-
-    private LocalDateTime claveVentana(LocalDateTime t) {
-        return t.truncatedTo(ChronoUnit.HOURS).plusMinutes((t.getMinute() / 10) * 10L);
-    }
 }

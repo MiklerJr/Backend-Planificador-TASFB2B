@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.dto.ComparativaRequest;
 import com.tasfb2b.planificador.dto.ComparativaResultado;
 import com.tasfb2b.planificador.dto.ComparativaRow;
+import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -56,6 +57,9 @@ public class ComparativaService {
         boolean e3 = req.isEjecutarColapso();
         double umbral = req.getUmbralColapso() != null ? req.getUmbralColapso() : 0.20;
         LocalDateTime fechaInicio = req.getFechaInicio();
+        Integer sa = req.getSa();
+        Integer ta = req.getTa();
+        Integer dias = req.getDias();
 
         // Cada repetición = 2 corridas (ALNS + ACO). Si además ejecutamos E3, son 4 por rep.
         int filasTotales = reps * (e3 ? 2 : 1);
@@ -68,8 +72,8 @@ public class ComparativaService {
         res.setFilasCompletadas(0);
         results.put(res.getJobId(), res);
 
-        log.info("Comparativa {} iniciada: {} reps × {} escenarios, K={}, cancelProb={}, seedBase={}, fechaInicio={}",
-                res.getJobId(), reps, e3 ? 2 : 1, k, cp, seedBase, fechaInicio);
+        log.info("Comparativa {} iniciada: {} reps × {} escenarios, K={}, cancelProb={}, seedBase={}, fechaInicio={}, sa={}, ta={}, dias={}",
+                res.getJobId(), reps, e3 ? 2 : 1, k, cp, seedBase, fechaInicio, sa, ta, dias);
 
         final int repsF = reps;
         final int kF = k;
@@ -78,7 +82,10 @@ public class ComparativaService {
         final boolean e3F = e3;
         final double umbralF = umbral;
         final LocalDateTime fechaInicioF = fechaInicio;
-        executor.submit(() -> ejecutar(res, repsF, kF, cpF, seedBaseF, e3F, umbralF, fechaInicioF));
+        final Integer saF = sa;
+        final Integer taF = ta;
+        final Integer diasF = dias;
+        executor.submit(() -> ejecutar(res, repsF, kF, cpF, seedBaseF, e3F, umbralF, fechaInicioF, saF, taF, diasF));
         return res;
     }
 
@@ -90,11 +97,14 @@ public class ComparativaService {
 
     private void ejecutar(ComparativaResultado res, int reps, int k, double cancelProb,
                            long seedBase, boolean ejecutarColapso, double umbralColapso,
-                           LocalDateTime fechaInicio) {
+                           LocalDateTime fechaInicio, Integer sa, Integer ta, Integer dias) {
         try {
             for (int r = 0; r < reps; r++) {
                 long seed = seedBase + r;
-                String suf = fechaInicio != null ? " desde=" + fechaInicio : "";
+                String suf = (fechaInicio != null ? " desde=" + fechaInicio : "")
+                        + (sa != null ? " sa=" + sa : "")
+                        + (ta != null ? " ta=" + ta : "")
+                        + (dias != null ? " dias=" + dias : "");
 
                 // Escenario 2 — período completo
                 ComparativaRow row2 = new ComparativaRow();
@@ -107,14 +117,16 @@ public class ComparativaService {
                 res.setConfigActual(String.format("rep %d/%d — E2 ALNS K=%d cp=%.2f seed=%d%s", r + 1, reps, k, cancelProb, seed, suf));
                 log.info("Comparativa {} → {}", res.getJobId(), res.getConfigActual());
                 long t0 = System.currentTimeMillis();
-                SimulacionResponse alns = planificador.ejecutarALNS(k, cancelProb, null, "alns", seed, fechaInicio);
+                SimulacionResponse alns = planificador.ejecutarALNS(
+                        construirParams(k, cancelProb, "alns", seed, fechaInicio, sa, ta, dias), null);
                 long alnsMs = System.currentTimeMillis() - t0;
                 rellenarAlns(row2, alns, alnsMs);
 
                 res.setConfigActual(String.format("rep %d/%d — E2 ACO K=%d cp=%.2f seed=%d%s", r + 1, reps, k, cancelProb, seed, suf));
                 log.info("Comparativa {} → {}", res.getJobId(), res.getConfigActual());
                 t0 = System.currentTimeMillis();
-                SimulacionResponse aco = planificador.ejecutarALNS(k, cancelProb, null, "aco", seed, fechaInicio);
+                SimulacionResponse aco = planificador.ejecutarALNS(
+                        construirParams(k, cancelProb, "aco", seed, fechaInicio, sa, ta, dias), null);
                 long acoMs = System.currentTimeMillis() - t0;
                 rellenarAco(row2, aco, acoMs);
 
@@ -160,6 +172,22 @@ public class ComparativaService {
             res.setFin(LocalDateTime.now());
             log.error("Comparativa {} falló: {}", res.getJobId(), ex.getMessage(), ex);
         }
+    }
+
+    /** Construye un EjecucionParams para una corrida puntual de la comparativa. */
+    private static EjecucionParams construirParams(int k, double cancelProb, String motor,
+                                                    long seed, LocalDateTime fechaInicio,
+                                                    Integer sa, Integer ta, Integer dias) {
+        EjecucionParams p = new EjecucionParams();
+        p.setK(k);
+        p.setCancelProb(cancelProb);
+        p.setMotor(motor);
+        p.setSeed(seed);
+        p.setFechaInicio(fechaInicio);
+        p.setSaMin(sa);
+        p.setTaSegundos(ta);
+        p.setDias(dias);
+        return p;
     }
 
     private static void rellenarAlns(ComparativaRow row, SimulacionResponse r, long tiempoRealMs) {
