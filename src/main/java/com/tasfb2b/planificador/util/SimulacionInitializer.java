@@ -1,9 +1,9 @@
 package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.dto.SimulacionResponse;
-import com.tasfb2b.planificador.services.PlanificadorServiceACO;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
+import com.tasfb2b.planificador.services.PlanificadorService;
 
 import java.util.Map;
 import java.util.Scanner;
@@ -11,9 +11,9 @@ import java.util.Scanner;
 @Component
 public class SimulacionInitializer implements CommandLineRunner {
 
-    private final PlanificadorServiceACO planificadorService;
+    private final PlanificadorService planificadorService;
 
-    public SimulacionInitializer(PlanificadorServiceACO planificadorService) {
+    public SimulacionInitializer(PlanificadorService planificadorService) {
         this.planificadorService = planificadorService;
     }
 

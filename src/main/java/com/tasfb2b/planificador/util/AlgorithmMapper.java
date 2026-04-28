@@ -87,7 +87,7 @@ public class AlgorithmMapper {
             // Los archivos de envíos usan hora local; el Dijkstra opera en UTC.
             int offset = m.getAeropuertoOrigen().getOffsetHorario();
             LocalDateTime readyTimeUtc = m.getFechaHoraRegistro().minusHours(offset);
-            return new LuggageBatch(
+            LuggageBatch b = new LuggageBatch(
                     m.getIdEnvio(),
                     m.getCantidad(),
                     m.getPlazo(),
@@ -95,6 +95,8 @@ public class AlgorithmMapper {
                     m.getAeropuertoDestino().getCodigo(),
                     readyTimeUtc
             );
+            if (m.getCliente() != null) b.setClienteId(m.getCliente().getId());
+            return b;
         }).collect(Collectors.toList());
     }
 }
