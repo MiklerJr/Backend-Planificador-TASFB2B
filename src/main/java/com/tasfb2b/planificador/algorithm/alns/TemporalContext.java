@@ -39,8 +39,17 @@ public class TemporalContext {
     public long wallStartMs;
     /** Tiempo de pared al terminar el procesamiento del bloque (ms desde epoch). */
     public long wallEndMs;
-    /** {@code Ta} = duración real del procesamiento, en ms. */
+    /**
+     * {@code Ta} en ms — presupuesto FIJO del modelo (no medición). Es el tiempo
+     * que el algoritmo dispone para resolver cada bloque y debe cumplir Ta &lt; Sa.
+     * Si el motor termina antes, se completa con sleep hasta {@code Ta}.
+     */
     public long taMs;
+    /**
+     * Tiempo real medido del cómputo del motor en este bloque (en ms).
+     * Útil para diagnóstico: si {@code taRealMs > taMs} el presupuesto fue insuficiente.
+     */
+    public long taRealMs;
     /**
      * Tasa de sinRuta del bloque inmediatamente anterior (0.0 para el primer bloque).
      * Permite a {@code procesarBloque} elevar las iteraciones del ALNS cuando
@@ -63,9 +72,19 @@ public class TemporalContext {
         this.wallStartMs = System.currentTimeMillis();
     }
 
-    /** Marca el fin del eje real y calcula Ta (llamar justo después del procesamiento). */
-    public void marcarFin() {
+    /**
+     * Marca el fin del cómputo y registra el tiempo real medido.
+     * Si {@code taFijoMs > 0}, el {@link #taMs} reportado es ese valor fijo
+     * (modelo Ta como variable). En caso contrario reporta el tiempo medido.
+     */
+    public void marcarFin(long taFijoMs) {
         this.wallEndMs = System.currentTimeMillis();
-        this.taMs      = wallEndMs - wallStartMs;
+        this.taRealMs  = wallEndMs - wallStartMs;
+        this.taMs      = taFijoMs > 0 ? taFijoMs : this.taRealMs;
+    }
+
+    /** Versión legacy (sin Ta fijo): reporta el tiempo medido como Ta. */
+    public void marcarFin() {
+        marcarFin(0L);
     }
 }
