@@ -86,6 +86,8 @@ public class SimulacionResponse {
         private long   taMs;
         /** Cantidad de minutos de datos consumidos (Sc = K * Sa). */
         private int    scMinutos;
+
+        private long tiempoProcesamientoMs;
     }
 
     @Data

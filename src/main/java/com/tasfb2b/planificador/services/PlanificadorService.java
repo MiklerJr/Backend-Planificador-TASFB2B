@@ -937,6 +937,13 @@ public class PlanificadorService {
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngSim);
+
+            // ---> AGREGAR ESTA LÍNEA AQUÍ
+            rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
+
+            bloques.add(rv.bloque);
+            taStats.acumular(ctx.taMs);
+
             bloques.add(rv.bloque);
             taStats.acumular(ctx.taMs);
 
