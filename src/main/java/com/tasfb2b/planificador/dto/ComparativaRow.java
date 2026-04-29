@@ -32,6 +32,7 @@ public class ComparativaRow {
     private long   alnsTaPromedioMs;
     private long   alnsTaMaxMs;
     private long   alnsTiempoRealMs;
+    private Double alnsMsPorPaquete; // <--- NUEVO CAMPO
     private int    alnsBacklogPico;
     private int    alnsSinRutaDefinitivo;
     private boolean alnsCollapsoDetectado;
@@ -48,6 +49,7 @@ public class ComparativaRow {
     private long   acoTaPromedioMs;
     private long   acoTaMaxMs;
     private long   acoTiempoRealMs;
+    private Double acoMsPorPaquete;  // <--- NUEVO CAMPO
     private int    acoBacklogPico;
     private int    acoSinRutaDefinitivo;
     private boolean acoCollapsoDetectado;

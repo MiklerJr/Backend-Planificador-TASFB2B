@@ -206,6 +206,15 @@ public class ComparativaService {
         row.setAlnsSinRutaDefinitivo(m.getSinRutaDefinitivo());
         row.setAlnsCollapsoDetectado(m.isCollapsoDetectado());
         row.setAlnsBloqueColapso(m.getBloqueColapso());
+        row.setAlnsCollapsoDetectado(m.isCollapsoDetectado());
+        row.setAlnsBloqueColapso(m.getBloqueColapso());
+
+        // ---> NUEVO: Cálculo de ms por paquete ALNS
+        if (m.getEnrutadas() > 0) {
+            row.setAlnsMsPorPaquete((double) tiempoRealMs / m.getEnrutadas());
+        } else {
+            row.setAlnsMsPorPaquete(0.0);
+        }
     }
 
     private static void rellenarAco(ComparativaRow row, SimulacionResponse r, long tiempoRealMs) {
@@ -224,18 +233,27 @@ public class ComparativaService {
         row.setAcoSinRutaDefinitivo(m.getSinRutaDefinitivo());
         row.setAcoCollapsoDetectado(m.isCollapsoDetectado());
         row.setAcoBloqueColapso(m.getBloqueColapso());
+        row.setAcoCollapsoDetectado(m.isCollapsoDetectado());
+        row.setAcoBloqueColapso(m.getBloqueColapso());
+
+        // ---> NUEVO: Cálculo de ms por paquete ACO
+        if (m.getEnrutadas() > 0) {
+            row.setAcoMsPorPaquete((double) tiempoRealMs / m.getEnrutadas());
+        } else {
+            row.setAcoMsPorPaquete(0.0);
+        }
     }
 
     // ── Serialización a CSV ────────────────────────────────────────────────
 
     private static final String CSV_HEADER =
             "escenario,rep,seed,k,cancelProb," +
-            "alns_envios,alns_enrutadas,alns_sinRuta,alns_cumpleSLA,alns_tardadas,alns_pctSLA,alns_pctSinRuta," +
-            "alns_taPromedioMs,alns_taMaxMs,alns_tiempoRealMs,alns_backlogPico,alns_sinRutaDefinitivo," +
-            "alns_collapsoDetectado,alns_bloqueColapso," +
-            "aco_envios,aco_enrutadas,aco_sinRuta,aco_cumpleSLA,aco_tardadas,aco_pctSLA,aco_pctSinRuta," +
-            "aco_taPromedioMs,aco_taMaxMs,aco_tiempoRealMs,aco_backlogPico,aco_sinRutaDefinitivo," +
-            "aco_collapsoDetectado,aco_bloqueColapso\n";
+                    "alns_envios,alns_enrutadas,alns_sinRuta,alns_cumpleSLA,alns_tardadas,alns_pctSLA,alns_pctSinRuta," +
+                    "alns_taPromedioMs,alns_taMaxMs,alns_tiempoRealMs,alns_msPorPaquete,alns_backlogPico,alns_sinRutaDefinitivo," + // <-- Se agregó alns_msPorPaquete
+                    "alns_collapsoDetectado,alns_bloqueColapso," +
+                    "aco_envios,aco_enrutadas,aco_sinRuta,aco_cumpleSLA,aco_tardadas,aco_pctSLA,aco_pctSinRuta," +
+                    "aco_taPromedioMs,aco_taMaxMs,aco_tiempoRealMs,aco_msPorPaquete,aco_backlogPico,aco_sinRutaDefinitivo," + // <-- Se agregó aco_msPorPaquete
+                    "aco_collapsoDetectado,aco_bloqueColapso\n";
 
     public String aCsv(String jobId) {
         ComparativaResultado res = results.get(jobId);
@@ -257,6 +275,7 @@ public class ComparativaService {
               .append(r.getAlnsTaPromedioMs()).append(',')
               .append(r.getAlnsTaMaxMs()).append(',')
               .append(r.getAlnsTiempoRealMs()).append(',')
+                    .append(r.getAlnsMsPorPaquete()).append(',') // <--- NUEVO
               .append(r.getAlnsBacklogPico()).append(',')
               .append(r.getAlnsSinRutaDefinitivo()).append(',')
               .append(r.isAlnsCollapsoDetectado()).append(',')
@@ -271,6 +290,7 @@ public class ComparativaService {
               .append(r.getAcoTaPromedioMs()).append(',')
               .append(r.getAcoTaMaxMs()).append(',')
               .append(r.getAcoTiempoRealMs()).append(',')
+                    .append(r.getAcoMsPorPaquete()).append(',') // <--- NUEVO
               .append(r.getAcoBacklogPico()).append(',')
               .append(r.getAcoSinRutaDefinitivo()).append(',')
               .append(r.isAcoCollapsoDetectado()).append(',')
