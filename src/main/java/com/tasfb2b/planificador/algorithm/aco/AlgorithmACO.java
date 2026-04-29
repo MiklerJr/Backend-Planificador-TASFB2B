@@ -1,9 +1,7 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 
 public class AlgorithmACO {
@@ -37,11 +35,13 @@ public class AlgorithmACO {
         Node startNode = graph.nodes.get(start);
         Node endNode = graph.nodes.get(end);
         inicializarFeromonas();
+        precomputarHeuristicas();
 
         int sinMejora = 0;
 
         for (int it = 0; it < config.iterations; it++) {
 
+            boolean huboMejora = false;
             for (Ant ant : ants) {
                 ant.reset();
                 buildSolution(ant, startNode, endNode);
@@ -50,14 +50,14 @@ public class AlgorithmACO {
                         && ant.totalCost < mejorCostoGlobal) {
                     mejorCostoGlobal = ant.totalCost;
                     mejorGlobal = copiarAnt(ant);
-                    sinMejora = 0;
+                    huboMejora = true;
                 }
             }
 
             updatePheromones();
 
             if (config.maxNoImprovement > 0) {
-                sinMejora++;
+                sinMejora = huboMejora ? 0 : sinMejora + 1;
                 if (sinMejora >= config.maxNoImprovement) {
                     break;
                 }
@@ -85,7 +85,7 @@ public class AlgorithmACO {
 
         Node current = start;
         Ant ant = new Ant();
-        ant.path.add(current);
+        ant.addNode(current);
         Edge lastEdge = null;
 
         while (!current.equals(end)) {
@@ -113,32 +113,26 @@ public class AlgorithmACO {
             mejor.to.storeLoad(envioContext.cantidadMaletas);
 
             if (mejor.to.equals(end)) {
-                if (ant.edgesPath.isEmpty()) {
-                    break;
-                }
                 ant.edgesPath.add(mejor);
-                ant.path.add(mejor.to);
+                ant.addNode(mejor.to);
                 current = mejor.to;
                 current.releaseLoad(envioContext.cantidadMaletas);
                 break;
             }
 
             current = mejor.to;
-            ant.path.add(current);
+            ant.addNode(current);
             ant.edgesPath.add(mejor);
             lastEdge = mejor;
         }
 
         if (current.equals(end) && !ant.edgesPath.isEmpty()) {
-            int idx = 0;
-            for (Ant a : ants) {
-                if (a.path.isEmpty()) {
-                    a.path = ant.path;
-                    a.edgesPath = ant.edgesPath;
-                    a.totalCost = CostFunction.calcularCostoRuta(a, graph.edges, a.edgesPath, envioContext);
-                    break;
-                }
-            }
+            ant.totalCost = CostFunction.calcularCostoRuta(ant, graph.edges, ant.edgesPath, envioContext);
+            // Sobreescribir directamente la primera hormiga con la solución de rescate
+            Ant a = ants.get(0);
+            a.path = new ArrayList<>(ant.path);
+            a.edgesPath = new ArrayList<>(ant.edgesPath);
+            a.totalCost = ant.totalCost;
         }
     }
 
@@ -169,7 +163,7 @@ public class AlgorithmACO {
         start.storeLoad(envioContext.cantidadMaletas);
 
         Node current = start;
-        ant.path.add(current);
+        ant.addNode(current);
         Edge lastEdge = null;
         int maxEscalas = 10;
         int escalas = 0;
@@ -181,38 +175,36 @@ public class AlgorithmACO {
 
             if (options.isEmpty()) break;
 
-            Edge chosen = selectEdge(ant, options);
+            // 1. FILTRAR OPCIONES VÁLIDAS PRIMERO
+            List<Edge> validOptions = new ArrayList<>();
+            for (Edge e : options) {
+                if (ant.visited(e.to)) continue;
+                if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
+                if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
+                if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
+                validOptions.add(e);
+            }
 
+            // 2. SI NO HAY SALIDA, LA HORMIGA QUEDA ATRAPADA Y FALLA
+            if (validOptions.isEmpty() || escalas >= maxEscalas) break;
+
+            // 3. LA HORMIGA ELIGE SOLO ENTRE LAS OPCIONES SEGURAS
+            Edge chosen = selectEdge(ant, validOptions);
             if (chosen == null) break;
-
-            if (escalas >= maxEscalas) break;
-
-            if (ant.visited(chosen.to)) break;
-
-            if (!chosen.hasCapacity(envioContext.cantidadMaletas)) break;
-
-            if (!chosen.to.hasStorageCapacity(envioContext.cantidadMaletas)) break;
-
-            if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge,chosen)) break;
 
             current.releaseLoad(envioContext.cantidadMaletas);
             chosen.to.storeLoad(envioContext.cantidadMaletas);
 
-            ant.totalCost += chosen.cost;
-
             if (chosen.to.equals(end)) {
-                if (escalas == 0) {
-                    break;
-                }
                 ant.edgesPath.add(chosen);
-                ant.path.add(chosen.to);
+                ant.addNode(chosen.to);
                 current = chosen.to;
                 llego = true;
                 break;
             }
 
             current = chosen.to;
-            ant.path.add(current);
+            ant.addNode(current);
             ant.edgesPath.add(chosen);
             lastEdge = chosen;
             escalas++;
@@ -231,35 +223,48 @@ public class AlgorithmACO {
 
 
     // SELECCIÓN PROBABILÍSTICA
+    // Hot path: sin HashMap, sin Math.pow, una sola pasada con array temporal.
+    // Heurística^β ya viene cacheada en edge.heuristicCache (precomputarHeuristicas).
+    // Para α==1.0 (config por defecto y único uso actual) se evita pow sobre la feromona.
     private Edge selectEdge(Ant ant, List<Edge> edges) {
 
+        int n = edges.size();
+        if (n == 0) return null;
+
+        double[] weights = new double[n];
         double sum = 0.0;
-        Map<Edge, Double> probs = new HashMap<>();
+        boolean alphaUno = config.alpha == 1.0;
 
-        for (Edge e : edges) {
-
-            double pheromone = Math.pow(e.pheromone, config.alpha);
-            double heuristic = Math.pow(CostFunction.heuristica(e, envioContext), config.beta);
-
-            double value = pheromone * heuristic;
-
-            probs.put(e, value);
-            sum += value;
+        for (int i = 0; i < n; i++) {
+            Edge e = edges.get(i);
+            double pher = alphaUno ? e.pheromone : Math.pow(e.pheromone, config.alpha);
+            double w = pher * e.heuristicCache;
+            weights[i] = w;
+            sum += w;
         }
+
+        if (sum <= 0) return null;
 
         double rand = rng.nextDouble() * sum;
         double acc = 0;
-
-        for (Map.Entry<Edge, Double> entry : probs.entrySet()) {
-
-            acc += entry.getValue();
-
-            if (acc >= rand) {
-                return entry.getKey();
-            }
+        for (int i = 0; i < n; i++) {
+            acc += weights[i];
+            if (acc >= rand) return edges.get(i);
         }
+        return edges.get(n - 1);
+    }
 
-        return null;
+    /**
+     * Pre-eleva la heurística de cada arista a β para el batch actual.
+     * Como envioContext.cantidadMaletas es constante durante run(), basta
+     * computarla una sola vez y reusar en cada selección de hormiga/iteración.
+     */
+    private void precomputarHeuristicas() {
+        boolean betaDos = config.beta == 2.0;
+        for (Edge e : graph.edges) {
+            double h = CostFunction.heuristica(e, envioContext);
+            e.heuristicCache = betaDos ? (h * h) : Math.pow(h, config.beta);
+        }
     }
 
     // FEROMONAS

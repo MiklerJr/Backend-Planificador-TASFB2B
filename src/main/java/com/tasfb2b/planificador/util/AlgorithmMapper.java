@@ -4,6 +4,7 @@ import com.tasfb2b.planificador.algorithm.aco.Edge;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
@@ -26,7 +27,11 @@ public class AlgorithmMapper {
         // 1. Mapear Nodos (Aeropuertos)
         for (Aeropuerto a : aeropuertos) {
             graph.addNode(a.getCodigo());
-            graph.nodes.get(a.getCodigo()).capacity = a.getCapacidad();
+            Node nodo = graph.nodes.get(a.getCodigo());
+            nodo.capacity = a.getCapacidad();
+            // El ACO consulta storageCapacity (vs Node.storageUsed) en buildSolution.
+            // El ALNS consulta capacity. Mantener ambos sincronizados para que ambos motores funcionen.
+            nodo.storageCapacity = a.getCapacidad() != null ? a.getCapacidad() : 0;
         }
 
         // 2. Mapear Aristas (Vuelos)
