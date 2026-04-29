@@ -34,6 +34,22 @@ public class AlgorithmACO {
 
         Node startNode = graph.nodes.get(start);
         Node endNode = graph.nodes.get(end);
+
+        // === SHORTCUT: vuelo directo O(grado) ===
+        List<Edge> desdeOrigen = graph.getEdgesFrom(start);
+        for (Edge e : desdeOrigen) {
+            if (e.to.equals(endNode)
+                    && e.hasCapacity(envioContext.cantidadMaletas)
+                    && e.to.hasStorageCapacity(envioContext.cantidadMaletas)) {
+                mejorGlobal = new Ant();
+                mejorGlobal.path.add(startNode);
+                mejorGlobal.path.add(endNode);
+                mejorGlobal.edgesPath.add(e);
+                mejorGlobal.totalCost = e.cost;
+                return;
+            }
+        }
+
         inicializarFeromonas();
         precomputarHeuristicas();
 
