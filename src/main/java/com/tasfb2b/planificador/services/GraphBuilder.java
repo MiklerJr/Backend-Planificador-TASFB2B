@@ -67,7 +67,7 @@ public class GraphBuilder {
 
             edge.cost = calculateCost(departure, arrival);
 
-            graph.edges.add(edge);
+            graph.addEdge(edge);
         }
 
         return graph;

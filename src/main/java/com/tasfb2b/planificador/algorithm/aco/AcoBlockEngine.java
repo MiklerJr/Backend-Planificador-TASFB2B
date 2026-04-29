@@ -121,8 +121,13 @@ public class AcoBlockEngine {
 
     private ConfigACO configurar() {
         ConfigACO cfg = new ConfigACO();
-        cfg.antCount = Math.max(1, props.getAlns().getIteracionesBase());
-        cfg.iterations = Math.max(5, props.getAlns().getIteracionesBase() * 3);
+        // Presupuesto Ta del modelo Sa/Sc/K es ajustado: cada batch debe terminar
+        // en pocos ms para que el bloque entero (cientos de batches) quepa en Ta.
+        // Con maxNoImprovement el ACO corta apenas converge a una ruta válida —
+        // típico para rutas directas/cortas que dominan el dataset.
+        cfg.antCount = 8;
+        cfg.iterations = 20;
+        cfg.maxNoImprovement = 5;
         cfg.alpha = 1.0;
         cfg.beta = 2.0;
         cfg.evaporation = 0.5;

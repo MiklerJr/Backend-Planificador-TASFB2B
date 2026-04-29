@@ -25,6 +25,8 @@ public class Edge {
 
     public int    idx;              // índice único asignado por AlgorithmMapper (para claves long)
     public double pheromone = 1.0;
+    /** Heurística pre-elevada a β para el batch actual (rellena AlgorithmACO al inicio de run). */
+    public double heuristicCache;
 
     public boolean hasCapacity(int demand) {
         return (usedCapacity + demand) <= capacity;
