@@ -37,13 +37,26 @@ public class CostFunction {
         public int cantidadMaletas;     // campo NNN parseado a int
         public int minutosRegistro;     // HH*60 + MM del archivo, en minutos desde 00:00
         public int deadlineMinutos;     // minutosRegistro + SLA (calculado automáticamente)
+        public int offsetOrigen;      // offset GMT del aeropuerto origen (horas)
 
         public EnvioContext(String origenICAO, String destinoICAO,
                             int cantidadMaletas, int hh, int mm) {
+            this(origenICAO, destinoICAO, cantidadMaletas, hh, mm, 0);
+        }
+
+        public EnvioContext(String origenICAO, String destinoICAO,
+                            int cantidadMaletas, int hh, int mm, int offsetOrigen) {
             this.origenICAO      = origenICAO;
             this.destinoICAO     = destinoICAO;
             this.cantidadMaletas = cantidadMaletas;
-            this.minutosRegistro = hh * 60 + mm;
+            this.offsetOrigen    = offsetOrigen;
+
+            int minutosLocal = hh * 60 + mm;
+            int minutosUtc = minutosLocal + (offsetOrigen * 60);
+            if (minutosUtc >= 24 * 60) minutosUtc -= 24 * 60;
+            if (minutosUtc < 0) minutosUtc += 24 * 60;
+
+            this.minutosRegistro = minutosUtc;
             boolean mismoContiente = getContinente(origenICAO)
                                         .equals(getContinente(destinoICAO));
             this.deadlineMinutos = this.minutosRegistro +
