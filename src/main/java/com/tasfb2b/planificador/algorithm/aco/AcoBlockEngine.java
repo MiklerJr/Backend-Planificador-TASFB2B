@@ -167,9 +167,10 @@ public class AcoBlockEngine {
 
         int hh = batch.getReadyTime().getHour();
         int mm = batch.getReadyTime().getMinute();
+        // readyTime ya esta en UTC (convertido por AlgorithmMapper.mapToBatches)
         CostFunction.EnvioContext ctx = new CostFunction.EnvioContext(
                 batch.getOriginCode(), batch.getDestCode(),
-                batch.getQuantity(), hh, mm);
+                batch.getQuantity(), hh, mm, 0);
 
         AlgorithmACO aco = new AlgorithmACO(graph, cfg, ctx);
         if (rng != null) aco.setRandom(rng);

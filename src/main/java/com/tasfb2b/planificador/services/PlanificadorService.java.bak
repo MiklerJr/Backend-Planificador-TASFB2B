@@ -582,12 +582,6 @@ public class PlanificadorService {
         List<Aeropuerto> aeropuertos = aeropuertoLoader.cargarAeropuertos();
         List<String> vuelos = cargarVuelos();
 
-        Map<String, Integer> offsetPorCodigo = new HashMap<>();
-        for (Aeropuerto a : airports) {
-            offsetPorCodigo.put(a.getCodigo(), a.getOffsetHorario() != null ? a.getOffsetHorario() : 0);
-        }
-
-
         ResumenPlanificacionGlobal resumen = new ResumenPlanificacionGlobal();
         resumen.estadisticasPorOrigen = new HashMap<>();
         List<PlanificacionResultado> resultados = new ArrayList<>();
@@ -644,7 +638,7 @@ public class PlanificadorService {
                     }
 
                     TaStats.AttemptResult intento = intentarPlanificarEnvio(
-                            origen, offsetOrigen, envio, graph, config, eventos, tiempoActual, tick
+                            origen, envio, graph, config, eventos, tiempoActual, tick
                     );
 
                     if (intento == null) {
@@ -688,7 +682,6 @@ public class PlanificadorService {
 
     private TaStats.AttemptResult intentarPlanificarEnvio(
             String origen,
-            int offsetOrigen,
             EnvioDTO e,
             Graph graph,
             ConfigACO config,
@@ -697,7 +690,7 @@ public class PlanificadorService {
             int tick
     ) {
         CostFunction.EnvioContext ctx = new CostFunction.EnvioContext(
-                origen, e.destinoICAO, e.cantidadMaletas, e.horaRegistro, e.minutoRegistro, offsetOrigen
+                origen, e.destinoICAO, e.cantidadMaletas, e.horaRegistro, e.minutoRegistro
         );
 
         if (tiempoActual > ctx.deadlineMinutos) {
@@ -1608,7 +1601,6 @@ public class PlanificadorService {
     }
 
     private List<String> cargarVuelos() {
-
         List<String> vuelos = new ArrayList<>();
 
         try {
