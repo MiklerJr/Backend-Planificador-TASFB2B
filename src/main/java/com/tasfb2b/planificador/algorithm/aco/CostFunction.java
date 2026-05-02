@@ -37,13 +37,26 @@ public class CostFunction {
         public int cantidadMaletas;     // campo NNN parseado a int
         public int minutosRegistro;     // HH*60 + MM del archivo, en minutos desde 00:00
         public int deadlineMinutos;     // minutosRegistro + SLA (calculado automáticamente)
+        public int offsetOrigen;      // offset GMT del aeropuerto origen (horas)
 
         public EnvioContext(String origenICAO, String destinoICAO,
                             int cantidadMaletas, int hh, int mm) {
+            this(origenICAO, destinoICAO, cantidadMaletas, hh, mm, 0);
+        }
+
+        public EnvioContext(String origenICAO, String destinoICAO,
+                            int cantidadMaletas, int hh, int mm, int offsetOrigen) {
             this.origenICAO      = origenICAO;
             this.destinoICAO     = destinoICAO;
             this.cantidadMaletas = cantidadMaletas;
-            this.minutosRegistro = hh * 60 + mm;
+            this.offsetOrigen    = offsetOrigen;
+
+            int minutosLocal = hh * 60 + mm;
+            int minutosUtc = minutosLocal + (offsetOrigen * 60);
+            if (minutosUtc >= 24 * 60) minutosUtc -= 24 * 60;
+            if (minutosUtc < 0) minutosUtc += 24 * 60;
+
+            this.minutosRegistro = minutosUtc;
             boolean mismoContiente = getContinente(origenICAO)
                                         .equals(getContinente(destinoICAO));
             this.deadlineMinutos = this.minutosRegistro +
@@ -247,15 +260,43 @@ public class CostFunction {
      * @param edge  arista candidata
      * @return      valor η > 0 (mayor = más atractivo)
      */
-    public static double heuristica(Edge edge, EnvioContext envio) {
+    /**
+     * Heurística η(edge) MEJORADA para la selección probabilística del ACO.
+     * Considera: Duración de vuelo, Capacidad del avión, y Capacidad del Almacén destino.
+     */
+    public static double heuristica(Edge edge, EnvioContext envio, Ant hormiga) {
 
+        // 1. RESTRICCIÓN DURA: ¿Tengo los 10 min de escala?
+        if (hormiga.horaLlegadaActual != null) {
+            long diffMinutos = Duration.between(hormiga.horaLlegadaActual, edge.departureTime).toMinutes();
+            if (diffMinutos < 0) diffMinutos += 1440; // Manejo cruce medianoche
+            if (diffMinutos < TIEMPO_MIN_ESCALA) {
+                return 0.000001; // No hay tiempo para el transbordo, vuelo bloqueado.
+            }
+        }
+
+        // 2. Duración del vuelo
         double duracion = calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString());
         if (duracion <= 0) duracion = 1;
 
-        // Factor de ocupación basado en semáforo
-        double factorOcupacion = factorSemaforo(edge, envio.cantidadMaletas);
+        // 3. Capacidad del Avión (Semáforo existente)
+        double factorAvion = factorSemaforo(edge, envio.cantidadMaletas);
 
-        return factorOcupacion / duracion;
+        // NUEVO: 4. Capacidad del Almacén Destino
+        Node destino = edge.to;
+        double ocupacionAlmacen = (double) (destino.storageUsed + envio.cantidadMaletas) / destino.storageCapacity;
+        double factorAlmacen = 1.0;
+
+        if (ocupacionAlmacen > 1.0) {
+            factorAlmacen = 0.001; // Almacén colapsado: penalización extrema
+        } else if (ocupacionAlmacen > UMBRAL_AMBAR) {
+            factorAlmacen = 0.30;  // Almacén en peligro: evitar si es posible
+        } else if (ocupacionAlmacen > UMBRAL_VERDE) {
+            factorAlmacen = 0.70;  // Almacén llenándose
+        }
+
+        // Retornar la heurística combinada
+        return (factorAvion * factorAlmacen) / duracion;
     }
 
     // 4. SEMÁFORO DE OCUPACIÓN (para visualizador)

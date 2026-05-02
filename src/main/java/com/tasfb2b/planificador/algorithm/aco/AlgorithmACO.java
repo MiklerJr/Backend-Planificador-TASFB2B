@@ -53,6 +53,9 @@ public class AlgorithmACO {
             localPheromones = new HashMap<>();
         }
 
+        inicializarFeromonas();
+        //precomputarHeuristicas();
+        
         int sinMejora = 0;
 
         if (routeEvaluator != null) {
@@ -161,17 +164,7 @@ public class AlgorithmACO {
             for (Edge e : graph.getEdgesFrom(current.code)) {
                 if (ant.visited(e.to)) continue;
 
-                AcoRouteEvaluator.Transition transition = null;
-                if (routeEvaluator != null) {
-                    transition = routeEvaluator.evaluate(e, currentArrivalMin, ant.edgesPath.size());
-                    if (transition == null) continue;
-                } else {
-                    if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
-                    if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
-                    if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
-                }
-
-                double valor = greedyValue(e, transition, strategy);
+                double valor = CostFunction.heuristica(e, envioContext,ant);
                 if (valor > mejorValor) {
                     mejorValor = valor;
                     mejor = e;
@@ -293,6 +286,9 @@ public class AlgorithmACO {
 
             lastEdge = chosen.edge;
             escalas++;
+
+            // JFLXX: La hormiga actualiza su reloj al aterrizar
+            ant.horaLlegadaActual = chosen.arrivalTime;
         }
 
         if (llego) {
@@ -310,14 +306,35 @@ public class AlgorithmACO {
         }
     }
 
-    private Candidate selectEdge(List<Candidate> edges) {
+
+    // SELECCIÓN PROBABILÍSTICA
+    // Hot path: sin HashMap, sin Math.pow, una sola pasada con array temporal.
+    // Heurística^β ya viene cacheada en edge.heuristicCache (precomputarHeuristicas).
+    // Para α==1.0 (config por defecto y único uso actual) se evita pow sobre la feromona.
+    // SELECCIÓN PROBABILÍSTICA DINÁMICA
+    private Edge selectEdge(Ant ant, List<Edge> edges) {
+
         int n = edges.size();
         if (n == 0) return null;
 
         double sum = 0.0;
 
+        boolean alphaUno = config.alpha == 1.0;
+        boolean betaDos = config.beta == 2.0;
+
         for (int i = 0; i < n; i++) {
-            sum += weightOf(edges.get(i));
+            Edge e = edges.get(i);
+
+            // 1. Calcula la feromona
+            double pher = alphaUno ? e.pheromone : Math.pow(e.pheromone, config.alpha);
+
+            // 2. Calcula la heurística EN TIEMPO REAL usando el reloj de la hormiga
+            double h = CostFunction.heuristica(e, envioContext, ant);
+            double heur = betaDos ? (h * h) : Math.pow(h, config.beta);
+
+            double w = pher * heur;
+            weights[i] = w;
+            sum += w;
         }
 
         if (sum <= 0.0) return null;
@@ -361,6 +378,19 @@ public class AlgorithmACO {
             double deltaTau = config.q / (ant.totalCost + 1.0);
             for (Edge edge : ant.edgesPath) {
                 addPheromone(edge, deltaTau);
+            }
+        }
+
+        // 3. LÍMITES MAX-MIN: Evita la convergencia prematura
+        // Ninguna ruta será 100% ignorada, ni 100% dominante
+        double tauMax = 10.0;
+        double tauMin = 0.5;
+
+        for (Edge e : graph.edges) {
+            if (e.pheromone > tauMax) {
+                e.pheromone = tauMax;
+            } else if (e.pheromone < tauMin) {
+                e.pheromone = tauMin;
             }
         }
     }

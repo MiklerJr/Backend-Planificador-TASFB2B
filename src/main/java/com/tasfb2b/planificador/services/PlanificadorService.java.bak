@@ -334,7 +334,9 @@ public class PlanificadorService {
         TaStats taStats = new TaStats();
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal2();
         long saMs = saMin * 60_000L;
-        BacklogManager backlog = crearBacklogSinPerdida();
+        BacklogManager backlog = new BacklogManager(
+                props.getBacklog().getMaxSize(),
+                props.getBacklog().isPurgarVencidas());
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         for (TemporalContext ctx : plan) {
@@ -439,7 +441,9 @@ public class PlanificadorService {
         sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
         sc1Maletas = 0L;
         sc1TaStats = new TaStats();
-        sc1Backlog = crearBacklogSinPerdida();
+        sc1Backlog = new BacklogManager(
+                props.getBacklog().getMaxSize(),
+                props.getBacklog().isPurgarVencidas());
         sc1Bloques = new ArrayList<>();
         sc1OdStats.clear();
 
@@ -575,14 +579,8 @@ public class PlanificadorService {
         int tick = Math.max(1, request.tickMinutosSimulacion);
         int limite = (request.limitePorOrigen <= 0) ? Integer.MAX_VALUE : request.limitePorOrigen;
 
-        List<Aeropuerto> aeropuertos = dataLoader.getAeropuertos();
-        List<Vuelo> vuelos = dataLoader.getVuelos();
-
-        Map<String, Integer> offsetPorCodigo = new HashMap<>();
-        for (Aeropuerto a : aeropuertos) {
-            offsetPorCodigo.put(a.getCodigo(), a.getOffsetHorario() != null ? a.getOffsetHorario() : 0);
-        }
-
+        List<Aeropuerto> aeropuertos = aeropuertoLoader.cargarAeropuertos();
+        List<String> vuelos = cargarVuelos();
 
         ResumenPlanificacionGlobal resumen = new ResumenPlanificacionGlobal();
         resumen.estadisticasPorOrigen = new HashMap<>();
@@ -594,9 +592,6 @@ public class PlanificadorService {
         config.iterations = 50;
 
         for (String origen : request.origenes) {
-            // CORRECCIÓN 4: Crear la variable offsetOrigen sacándola del mapa
-            int offsetOrigen = offsetPorCodigo.getOrDefault(origen, 0);
-
             Graph graph = mapper.mapToGraph(aeropuertos, vuelos);
             List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
             if (envios.isEmpty()) {
@@ -643,7 +638,7 @@ public class PlanificadorService {
                     }
 
                     TaStats.AttemptResult intento = intentarPlanificarEnvio(
-                            origen, offsetOrigen, envio, graph, config, eventos, tiempoActual, tick
+                            origen, envio, graph, config, eventos, tiempoActual, tick
                     );
 
                     if (intento == null) {
@@ -687,7 +682,6 @@ public class PlanificadorService {
 
     private TaStats.AttemptResult intentarPlanificarEnvio(
             String origen,
-            int offsetOrigen,
             EnvioDTO e,
             Graph graph,
             ConfigACO config,
@@ -696,7 +690,7 @@ public class PlanificadorService {
             int tick
     ) {
         CostFunction.EnvioContext ctx = new CostFunction.EnvioContext(
-                origen, e.destinoICAO, e.cantidadMaletas, e.horaRegistro, e.minutoRegistro, offsetOrigen
+                origen, e.destinoICAO, e.cantidadMaletas, e.horaRegistro, e.minutoRegistro
         );
 
         if (tiempoActual > ctx.deadlineMinutos) {
@@ -934,20 +928,15 @@ public class PlanificadorService {
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal3();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
-        BacklogManager backlog = crearBacklogSinPerdida();
+        BacklogManager backlog = new BacklogManager(
+                props.getBacklog().getMaxSize(),
+                props.getBacklog().isPurgarVencidas());
         int umbralBacklog = props.getScenario().getUmbralColapsoBacklog();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngSim);
-
-            // ---> AGREGAR ESTA LÍNEA AQUÍ
-            rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
-
-            bloques.add(rv.bloque);
-            taStats.acumular(ctx.taMs);
-
             bloques.add(rv.bloque);
             taStats.acumular(ctx.taMs);
 
@@ -1141,9 +1130,15 @@ public class PlanificadorService {
         List<Maleta> maletasVentana = dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
         List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
-        // 2. Backlog: traer pendientes de bloques anteriores sin descarte definitivo.
+        // 2. Backlog: purgar vencidas y traer pendientes de bloques anteriores.
         if (backlog != null) {
-            List<LuggageBatch> pendientes = backlog.pollPendientes();
+            backlog.purgarVencidas(ctx.scStart);
+            int maxRepl = props.getBacklog().getMaxReplanificacionesPorBloque();
+            int maxTotal = backlog.size();
+            // Política: traer todos los sinRuta + hasta {maxRepl} replanificables.
+            // Como no hay distinción al hacer poll, limitamos por total cuando es razonable.
+            int polled = (maxRepl > 0 && maxRepl < maxTotal) ? maxRepl : maxTotal;
+            List<LuggageBatch> pendientes = backlog.pollPendientes(polled);
 
             // Liberar capacidad global de los replanificables (ya commiteados).
             for (LuggageBatch b : pendientes) {
@@ -1529,10 +1524,6 @@ public class PlanificadorService {
     /**
      * Llena las métricas del backlog acumulativo en la respuesta.
      */
-    private static BacklogManager crearBacklogSinPerdida() {
-        return new BacklogManager(0, false);
-    }
-
     private static void llenarMetricasBacklog(SimulacionResponse.Metricas m, BacklogManager backlog) {
         m.setBacklogActual(backlog.size());
         m.setBacklogPico(backlog.picoHistorico());
@@ -1610,7 +1601,6 @@ public class PlanificadorService {
     }
 
     private List<String> cargarVuelos() {
-
         List<String> vuelos = new ArrayList<>();
 
         try {
