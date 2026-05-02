@@ -82,22 +82,26 @@ public class AcoBlockEngine {
         ConfigACO cfg = configurar();
         int enrutados = 0;
         long tInicio = System.nanoTime();
+        long deadlineNano = tiempoLimiteMs > 0
+                ? tInicio + tiempoLimiteMs * 1_000_000L
+                : Long.MAX_VALUE;
         boolean abortado = false;
         int procesados = 0;
 
         for (LuggageBatch batch : batches) {
             // Cota dura de tiempo: si Ta se excede, abortar el bucle.
             if (tiempoLimiteMs > 0) {
-                long elapsedMs = (System.nanoTime() - tInicio) / 1_000_000L;
-                if (elapsedMs > tiempoLimiteMs) {
-                    log.warn("ACO abortado por presupuesto Ta: {}/{} batches procesados ({}ms > {}ms)",
+                long now = System.nanoTime();
+                if (now >= deadlineNano) {
+                    long elapsedMs = (now - tInicio) / 1_000_000L;
+                    log.warn("ACO abortado por presupuesto Ta: {}/{} batches procesados ({}ms >= {}ms)",
                             procesados, batches.size(), elapsedMs, tiempoLimiteMs);
                     abortado = true;
                     break;
                 }
             }
 
-            if (intentarBatch(graph, enrutador, batch, blockFlight, blockAirport, cfg, rng)) {
+            if (intentarBatch(graph, enrutador, batch, blockFlight, blockAirport, cfg, rng, deadlineNano)) {
                 enrutador.aplicarAsignacionBloque(batch, blockFlight, blockAirport);
                 enrutados++;
             } else {
@@ -121,12 +125,12 @@ public class AcoBlockEngine {
 
     private ConfigACO configurar() {
         ConfigACO cfg = new ConfigACO();
-        cfg.antCount = 40;          // Tu número ganador
-        cfg.iterations = 100;       // Tu número ganador
-        cfg.maxNoImprovement = 20;
-        cfg.alpha = 2.0;            // Tu número ganador
-        cfg.beta = 1.0;             // Tu número ganador
-        cfg.evaporation = 0.15;      // Tu número ganador
+        cfg.antCount = 14;
+        cfg.iterations = 40;
+        cfg.maxNoImprovement = 10;
+        cfg.alpha = 1.0;
+        cfg.beta = 2.0;
+        cfg.evaporation = 0.35;
         cfg.q = 100.0;
         cfg.initialPheromone = 1.0;
         return cfg;
@@ -138,7 +142,8 @@ public class AcoBlockEngine {
                                    Map<Long, Integer> blockFlight,
                                    Map<Long, Integer> blockAirport,
                                    ConfigACO cfg,
-                                   Random rng) {
+                                   Random rng,
+                                   long deadlineNano) {
         Node origen = graph.nodes.get(batch.getOriginCode());
         Node destino = graph.nodes.get(batch.getDestCode());
         if (origen == null || destino == null) return false;
@@ -153,6 +158,7 @@ public class AcoBlockEngine {
 
         AlgorithmACO aco = new AlgorithmACO(graph, cfg, ctx);
         if (rng != null) aco.setRandom(rng);
+        aco.setDeadlineNano(deadlineNano);
         aco.setRouteEvaluator(new AcoBlockRouteEvaluator(enrutador, batch, blockFlight, blockAirport));
         aco.run(batch.getOriginCode(), batch.getDestCode());
         Ant mejor = aco.getMejorAnt();
@@ -194,6 +200,10 @@ public class AcoBlockEngine {
             // Capacidad de almacén del aeropuerto destino del tramo.
             if (edge.to != null && edge.to.capacity > 0) {
                 if (enrutador.capacidadAlmacen(edge.to, actualArr, blockAirport) < batch.getQuantity()) return false;
+                if (!batch.getDestCode().equals(edge.to.code)
+                        && enrutador.capacidadAlmacen(edge.to, actualArr + DAY_MIN, blockAirport) < batch.getQuantity()) {
+                    return false;
+                }
             }
 
             finales.add(edge);

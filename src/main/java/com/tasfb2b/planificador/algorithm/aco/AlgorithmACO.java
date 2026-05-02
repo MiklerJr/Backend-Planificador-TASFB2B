@@ -20,6 +20,7 @@ public class AlgorithmACO {
     private Ant mejorGlobal = null;
     private double mejorCostoGlobal = Double.MAX_VALUE;
     private Random rng = new Random();
+    private long deadlineNano = Long.MAX_VALUE;
 
     public AlgorithmACO(Graph graph, ConfigACO config, CostFunction.EnvioContext envioContext) {
         this.graph = graph;
@@ -39,12 +40,18 @@ public class AlgorithmACO {
         this.routeEvaluator = routeEvaluator;
     }
 
+    public void setDeadlineNano(long deadlineNano) {
+        this.deadlineNano = deadlineNano > 0 ? deadlineNano : Long.MAX_VALUE;
+    }
+
     public void run(String start, String end) {
         Node startNode = graph.nodes.get(start);
         Node endNode = graph.nodes.get(end);
         if (startNode == null || endNode == null) return;
+        if (timeExpired()) return;
 
         if (buscarMejorDirecto(startNode, endNode)) return;
+        if (timeExpired()) return;
 
         if (routeEvaluator == null) {
             inicializarFeromonas();
@@ -64,9 +71,11 @@ public class AlgorithmACO {
         }
 
         for (int it = 0; it < config.iterations; it++) {
+            if (timeExpired()) break;
             boolean huboMejora = false;
 
             for (int antIdx = 0; antIdx < ants.size(); antIdx++) {
+                if (timeExpired()) break;
                 Ant ant = ants.get(antIdx);
                 ant.reset();
                 boolean useTopK = routeEvaluator != null && antIdx < ants.size() - 1;
@@ -90,6 +99,7 @@ public class AlgorithmACO {
 
         Ant mejor = getMejorAnt();
         if (mejor != null && !mejor.path.isEmpty()) return;
+        if (timeExpired()) return;
 
         buscarRutaGreedy(startNode, endNode, GreedyStrategy.BEST_DESIRABILITY);
 
@@ -105,8 +115,10 @@ public class AlgorithmACO {
     private boolean buscarMejorDirecto(Node startNode, Node endNode) {
         Edge mejorEdge = null;
         double mejorCosto = Double.MAX_VALUE;
+        boolean mejorOnTime = false;
 
         for (Edge e : graph.getEdgesFrom(startNode.code)) {
+            if (timeExpired()) break;
             if (!e.to.equals(endNode)) continue;
 
             double costo;
@@ -115,8 +127,16 @@ public class AlgorithmACO {
                 if (t == null) continue;
                 List<Edge> route = List.of(e);
                 List<AcoRouteEvaluator.Transition> transitions = List.of(t);
-                if (!routeEvaluator.isCompleteRouteOnTime(route, transitions)) continue;
                 costo = routeEvaluator.routeCost(route, transitions);
+                boolean onTime = routeEvaluator.isCompleteRouteOnTime(route, transitions);
+                if (onTime && !mejorOnTime) {
+                    mejorCosto = Double.MAX_VALUE;
+                    mejorOnTime = true;
+                } else if (onTime && costo < mejorCosto) {
+                    mejorOnTime = true;
+                } else if (!onTime && mejorOnTime) {
+                    continue;
+                }
             } else {
                 if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
                 if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
@@ -137,7 +157,7 @@ public class AlgorithmACO {
         mejorGlobal.edgesPath.add(mejorEdge);
         mejorGlobal.totalCost = mejorCosto;
         mejorCostoGlobal = mejorCosto;
-        return true;
+        return routeEvaluator == null || mejorOnTime;
     }
 
     private void seedGreedySolutions(Node start, Node end) {
@@ -157,6 +177,7 @@ public class AlgorithmACO {
         List<AcoRouteEvaluator.Transition> transitions = new ArrayList<>();
 
         while (!current.equals(end)) {
+            if (timeExpired()) break;
             Edge mejor = null;
             double mejorValor = -1.0;
             AcoRouteEvaluator.Transition mejorTransition = null;
@@ -164,7 +185,17 @@ public class AlgorithmACO {
             for (Edge e : graph.getEdgesFrom(current.code)) {
                 if (ant.visited(e.to)) continue;
 
-                double valor = CostFunction.heuristica(e, envioContext,ant);
+                AcoRouteEvaluator.Transition transition = null;
+                if (routeEvaluator != null) {
+                    transition = routeEvaluator.evaluate(e, currentArrivalMin, ant.edgesPath.size());
+                    if (transition == null) continue;
+                } else {
+                    if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
+                    if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
+                    if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
+                }
+
+                double valor = greedyValue(e, transition, strategy, ant);
                 if (valor > mejorValor) {
                     mejorValor = valor;
                     mejor = e;
@@ -240,6 +271,7 @@ public class AlgorithmACO {
         boolean llego = false;
 
         while (!current.equals(end)) {
+            if (timeExpired()) break;
             List<Edge> options = graph.getEdgesFrom(current.code);
             if (options.isEmpty()) break;
 
@@ -288,7 +320,7 @@ public class AlgorithmACO {
             escalas++;
 
             // JFLXX: La hormiga actualiza su reloj al aterrizar
-            ant.horaLlegadaActual = chosen.arrivalTime;
+            ant.horaLlegadaActual = chosen.edge.arrivalTime;
         }
 
         if (llego) {
@@ -312,29 +344,13 @@ public class AlgorithmACO {
     // Heurística^β ya viene cacheada en edge.heuristicCache (precomputarHeuristicas).
     // Para α==1.0 (config por defecto y único uso actual) se evita pow sobre la feromona.
     // SELECCIÓN PROBABILÍSTICA DINÁMICA
-    private Edge selectEdge(Ant ant, List<Edge> edges) {
-
+    private Candidate selectEdge(List<Candidate> edges) {
         int n = edges.size();
         if (n == 0) return null;
 
         double sum = 0.0;
-
-        boolean alphaUno = config.alpha == 1.0;
-        boolean betaDos = config.beta == 2.0;
-
         for (int i = 0; i < n; i++) {
-            Edge e = edges.get(i);
-
-            // 1. Calcula la feromona
-            double pher = alphaUno ? e.pheromone : Math.pow(e.pheromone, config.alpha);
-
-            // 2. Calcula la heurística EN TIEMPO REAL usando el reloj de la hormiga
-            double h = CostFunction.heuristica(e, envioContext, ant);
-            double heur = betaDos ? (h * h) : Math.pow(h, config.beta);
-
-            double w = pher * heur;
-            weights[i] = w;
-            sum += w;
+            sum += weightOf(edges.get(i));
         }
 
         if (sum <= 0.0) return null;
@@ -358,7 +374,7 @@ public class AlgorithmACO {
     private void precomputarHeuristicas() {
         boolean betaDos = config.beta == 2.0;
         for (Edge e : graph.edges) {
-            double h = CostFunction.heuristica(e, envioContext);
+            double h = CostFunction.heuristica(e, envioContext, new Ant());
             e.heuristicCache = betaDos ? (h * h) : Math.pow(h, config.beta);
         }
     }
@@ -441,9 +457,9 @@ public class AlgorithmACO {
                 && ant.totalCost <= GOOD_ENOUGH_COST;
     }
 
-    private double greedyValue(Edge edge, AcoRouteEvaluator.Transition transition, GreedyStrategy strategy) {
+    private double greedyValue(Edge edge, AcoRouteEvaluator.Transition transition, GreedyStrategy strategy, Ant ant) {
         if (routeEvaluator == null || transition == null) {
-            return CostFunction.heuristica(edge, envioContext);
+            return CostFunction.heuristica(edge, envioContext, ant);
         }
         switch (strategy) {
             case EARLIEST_ARRIVAL:
@@ -454,6 +470,10 @@ public class AlgorithmACO {
             default:
                 return transition.desirability;
         }
+    }
+
+    private boolean timeExpired() {
+        return System.nanoTime() >= deadlineNano;
     }
 
     private enum GreedyStrategy {

@@ -339,16 +339,18 @@ public class PlanificadorService {
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngSim, taFijoMs);
+            Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
             taStats.acumular(ctx.taMs);
 
-            totalEnvios += rv.envios;
-            totalEnrutadas += rv.enrutadas;
-            totalSinRuta += rv.sinRuta;
-            totalCumpleSLA += rv.cumpleSLA;
-            totalTardadas += rv.tardadas;
-            totalMaletas += rv.maletas;
+            TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
+            totalEnvios = totales.envios();
+            totalEnrutadas = totales.enrutadas();
+            totalSinRuta = totales.sinRuta();
+            totalCumpleSLA = totales.cumpleSLA();
+            totalTardadas = totales.tardadas();
+            totalMaletas = totales.maletas();
 
             // Reporte de progreso al job (si está siendo ejecutado de forma async)
             if (job != null) {
@@ -940,7 +942,8 @@ public class PlanificadorService {
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngSim);
+            Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque);
 
             // ---> AGREGAR ESTA LÍNEA AQUÍ
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
@@ -951,12 +954,13 @@ public class PlanificadorService {
             bloques.add(rv.bloque);
             taStats.acumular(ctx.taMs);
 
-            totalEnvios += rv.envios;
-            totalEnrutadas += rv.enrutadas;
-            totalSinRuta += rv.sinRuta;
-            totalCumpleSLA += rv.cumpleSLA;
-            totalTardadas += rv.tardadas;
-            totalMaletas += rv.maletas;
+            TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
+            totalEnvios = totales.envios();
+            totalEnrutadas = totales.enrutadas();
+            totalSinRuta = totales.sinRuta();
+            totalCumpleSLA = totales.cumpleSLA();
+            totalTardadas = totales.tardadas();
+            totalMaletas = totales.maletas();
 
             // Reporte de progreso al job (si está siendo ejecutado de forma async)
             if (job != null) {
@@ -1172,6 +1176,8 @@ public class PlanificadorService {
                 : props.getScenario().getTaSegundos() * 1000L;
         long presupuestoMs = taFijoMs > 0 ? taFijoMs : (long) (saMs * 0.7);
         long inicioMotorMs = System.currentTimeMillis();
+        long inicioMotorNs = System.nanoTime();
+        long deadlineMotorNs = inicioMotorNs + presupuestoMs * 1_000_000L;
 
         if (MOTOR_ACO.equalsIgnoreCase(motor)) {
             if (acoEngine == null) {
@@ -1189,10 +1195,17 @@ public class PlanificadorService {
                 if (b.getSlaLimitHours() <= 24) intra.add(b);
                 else inter.add(b);
             }
-            intra.forEach(b -> enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport));
-            inter.forEach(b -> enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport));
+            for (LuggageBatch b : intra) {
+                if (System.nanoTime() >= deadlineMotorNs) break;
+                enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport);
+            }
+            for (LuggageBatch b : inter) {
+                if (System.nanoTime() >= deadlineMotorNs) break;
+                enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport);
+            }
 
-            if (bloqueBatches.stream().anyMatch(b -> !b.isCumpleSLA())) {
+            long restanteAlnsMs = Math.max(0L, (deadlineMotorNs - System.nanoTime()) / 1_000_000L);
+            if (restanteAlnsMs > 0 && bloqueBatches.stream().anyMatch(b -> !b.isCumpleSLA())) {
                 AlgorithmALNS alns = new AlgorithmALNS(
                         graph, enrutador, bloqueBatches, blockFlight, blockAirport, props);
                 if (rngSim != null) alns.setRandom(rngSim);
@@ -1205,7 +1218,7 @@ public class PlanificadorService {
                         : props.getAlns().getIteracionesBase();
 
                 // Presupuesto Ta como cota dura: el ALNS aborta si lo excede.
-                alns.tiempoLimiteMs = presupuestoMs;
+                alns.tiempoLimiteMs = restanteAlnsMs;
 
                 alns.run(iteraciones);
                 finalBatches = alns.getBestSolution().getBatches();
@@ -1240,7 +1253,9 @@ public class PlanificadorService {
         int cumpleSLA = (int) asignaciones.stream().filter(a -> a.isEnrutada() && a.isCumpleSLA()).count();
         int tardadas = enrutadas - cumpleSLA;
         int sinRuta = finalBatches.size() - enrutadas;
-        long maletas = finalBatches.stream().mapToLong(LuggageBatch::getQuantity).sum();
+        long maletas = maletasVentana.stream()
+                .mapToLong(m -> m.getCantidad() != null ? m.getCantidad() : 0L)
+                .sum();
 
         for (SimulacionResponse.AsignacionMaleta a : asignaciones) {
             int[] s = odStats.computeIfAbsent(a.getOrigen() + "->" + a.getDestino(), key -> new int[2]);
@@ -1250,12 +1265,13 @@ public class PlanificadorService {
 
         // 4. Reabastecer el backlog con los batches que aún pendientes/críticos.
         if (backlog != null) {
+            boolean motorAco = MOTOR_ACO.equalsIgnoreCase(motor);
             double umbralSlack = props.getBacklog().getUmbralReplanificacionSlack();
             for (LuggageBatch b : finalBatches) {
                 boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
                 if (!enrutada) {
                     backlog.addSinRuta(b);
-                } else if (b.isCumpleSLA() && b.getSlaSlackRatio() < umbralSlack) {
+                } else if (!motorAco && b.isCumpleSLA() && b.getSlaSlackRatio() < umbralSlack) {
                     // Próximo a tardar — candidato a replanificación preventiva.
                     backlog.addReplanificable(b);
                 }
@@ -1265,7 +1281,7 @@ public class PlanificadorService {
         // 5. Acumular para auditoría: cada batch queda con su última asignación
         //    (sobreescribe entradas anteriores si volvió por el backlog).
         if (auditAcc != null) {
-            for (LuggageBatch b : finalBatches) auditAcc.put(b.getId(), b);
+            for (LuggageBatch b : finalBatches) auditAcc.put(batchAuditKey(b), b);
         }
 
         // Reportar Ta como variable fija del modelo (taMs = ta-segundos * 1000).
@@ -1533,6 +1549,48 @@ public class PlanificadorService {
         return new BacklogManager(0, false);
     }
 
+    private static Random rngParaBloque(long seed, String motor, int bloqueIdx) {
+        long mixed = seed
+                ^ ((long) bloqueIdx * 0x9E3779B97F4A7C15L)
+                ^ ((long) (motor != null ? motor.hashCode() : 0) << 32);
+        return new Random(mixed);
+    }
+
+    private static TotalesUnicos calcularTotalesUnicos(Map<String, LuggageBatch> auditAcc) {
+        if (auditAcc == null || auditAcc.isEmpty()) {
+            return new TotalesUnicos(0, 0, 0, 0, 0, 0L);
+        }
+        int envios = auditAcc.size();
+        int enrutadas = 0;
+        int cumpleSLA = 0;
+        long maletas = 0L;
+        for (LuggageBatch b : auditAcc.values()) {
+            maletas += b.getQuantity();
+            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            if (enrutada) {
+                enrutadas++;
+                if (b.isCumpleSLA()) cumpleSLA++;
+            }
+        }
+        int tardadas = enrutadas - cumpleSLA;
+        int sinRuta = envios - enrutadas;
+        return new TotalesUnicos(envios, enrutadas, sinRuta, cumpleSLA, tardadas, maletas);
+    }
+
+    private static String batchAuditKey(LuggageBatch b) {
+        if (b == null) return "";
+        return String.join("|",
+                safe(b.getId()),
+                safe(b.getOriginCode()),
+                safe(b.getDestCode()),
+                b.getReadyTime() != null ? b.getReadyTime().toString() : "",
+                String.valueOf(b.getQuantity()));
+    }
+
+    private static String safe(String value) {
+        return value != null ? value : "";
+    }
+
     private static void llenarMetricasBacklog(SimulacionResponse.Metricas m, BacklogManager backlog) {
         m.setBacklogActual(backlog.size());
         m.setBacklogPico(backlog.picoHistorico());
@@ -1564,6 +1622,10 @@ public class PlanificadorService {
     // =========================================================
     private record ResultadoVentana(
             SimulacionResponse.BloqueSimulacion bloque,
+            int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas) {
+    }
+
+    private record TotalesUnicos(
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas) {
     }
 

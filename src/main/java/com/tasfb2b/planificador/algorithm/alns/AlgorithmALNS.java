@@ -184,8 +184,8 @@ public class AlgorithmALNS {
             // Presupuesto de tiempo: aborta si excede tiempoLimiteMs.
             if (tiempoLimiteMs < Long.MAX_VALUE) {
                 long elapsedMs = (System.nanoTime() - tInicio) / 1_000_000;
-                if (elapsedMs > tiempoLimiteMs) {
-                    log.warn("ALNS abortado por presupuesto de tiempo: iter {}/{} ({}ms > {}ms)",
+                if (elapsedMs >= tiempoLimiteMs) {
+                    log.warn("ALNS abortado por presupuesto de tiempo: iter {}/{} ({}ms >= {}ms)",
                             iter, maxIterations, elapsedMs, tiempoLimiteMs);
                     break;
                 }

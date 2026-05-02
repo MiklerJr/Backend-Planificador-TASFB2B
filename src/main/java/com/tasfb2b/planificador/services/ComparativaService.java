@@ -106,7 +106,7 @@ public class ComparativaService {
             boolean ejecutarAco = "ambos".equals(motorSeleccionado) || "aco".equals(motorSeleccionado);
 
             for (int r = 0; r < reps; r++) {
-                long seed = seedBase + r;
+                long seed = seedBase;
                 String suf = (fechaInicio != null ? " desde=" + fechaInicio : "")
                         + (sa != null ? " sa=" + sa : "")
                         + (ta != null ? " ta=" + ta : "")
@@ -219,7 +219,7 @@ public class ComparativaService {
         row.setAlnsSinRuta(m.getSinRuta());
         row.setAlnsCumpleSLA(m.getCumpleSLA());
         row.setAlnsTardadas(m.getTardadas());
-        row.setAlnsPctSLA(m.getEnrutadas() > 0 ? (double) m.getCumpleSLA() / m.getEnrutadas() : 0.0);
+        row.setAlnsPctSLA(m.getProcesadas() > 0 ? (double) m.getCumpleSLA() / m.getProcesadas() : 0.0);
         row.setAlnsPctSinRuta(m.getProcesadas() > 0 ? (double) m.getSinRuta() / m.getProcesadas() : 0.0);
         row.setAlnsTaPromedioMs(m.getTaPromedioMs());
         row.setAlnsTaMaxMs(m.getTaMaxMs());
@@ -246,7 +246,7 @@ public class ComparativaService {
         row.setAcoSinRuta(m.getSinRuta());
         row.setAcoCumpleSLA(m.getCumpleSLA());
         row.setAcoTardadas(m.getTardadas());
-        row.setAcoPctSLA(m.getEnrutadas() > 0 ? (double) m.getCumpleSLA() / m.getEnrutadas() : 0.0);
+        row.setAcoPctSLA(m.getProcesadas() > 0 ? (double) m.getCumpleSLA() / m.getProcesadas() : 0.0);
         row.setAcoPctSinRuta(m.getProcesadas() > 0 ? (double) m.getSinRuta() / m.getProcesadas() : 0.0);
         row.setAcoTaPromedioMs(m.getTaPromedioMs());
         row.setAcoTaMaxMs(m.getTaMaxMs());
