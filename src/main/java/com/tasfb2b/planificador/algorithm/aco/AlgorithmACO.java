@@ -51,7 +51,7 @@ public class AlgorithmACO {
         }
 
         inicializarFeromonas();
-        precomputarHeuristicas();
+        //precomputarHeuristicas();
 
         int sinMejora = 0;
 
@@ -116,7 +116,7 @@ public class AlgorithmACO {
                 if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
                 if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
 
-                double valor = CostFunction.heuristica(e, envioContext);
+                double valor = CostFunction.heuristica(e, envioContext,ant);
                 if (valor > mejorValor) {
                     mejorValor = valor;
                     mejor = e;
@@ -224,6 +224,9 @@ public class AlgorithmACO {
             ant.edgesPath.add(chosen);
             lastEdge = chosen;
             escalas++;
+
+            // JFLXX: La hormiga actualiza su reloj al aterrizar
+            ant.horaLlegadaActual = chosen.arrivalTime;
         }
 
         if (llego) {
@@ -242,6 +245,7 @@ public class AlgorithmACO {
     // Hot path: sin HashMap, sin Math.pow, una sola pasada con array temporal.
     // Heurística^β ya viene cacheada en edge.heuristicCache (precomputarHeuristicas).
     // Para α==1.0 (config por defecto y único uso actual) se evita pow sobre la feromona.
+    // SELECCIÓN PROBABILÍSTICA DINÁMICA
     private Edge selectEdge(Ant ant, List<Edge> edges) {
 
         int n = edges.size();
@@ -250,11 +254,19 @@ public class AlgorithmACO {
         double[] weights = new double[n];
         double sum = 0.0;
         boolean alphaUno = config.alpha == 1.0;
+        boolean betaDos = config.beta == 2.0;
 
         for (int i = 0; i < n; i++) {
             Edge e = edges.get(i);
+
+            // 1. Calcula la feromona
             double pher = alphaUno ? e.pheromone : Math.pow(e.pheromone, config.alpha);
-            double w = pher * e.heuristicCache;
+
+            // 2. Calcula la heurística EN TIEMPO REAL usando el reloj de la hormiga
+            double h = CostFunction.heuristica(e, envioContext, ant);
+            double heur = betaDos ? (h * h) : Math.pow(h, config.beta);
+
+            double w = pher * heur;
             weights[i] = w;
             sum += w;
         }
@@ -275,31 +287,35 @@ public class AlgorithmACO {
      * Como envioContext.cantidadMaletas es constante durante run(), basta
      * computarla una sola vez y reusar en cada selección de hormiga/iteración.
      */
-    private void precomputarHeuristicas() {
-        boolean betaDos = config.beta == 2.0;
-        for (Edge e : graph.edges) {
-            double h = CostFunction.heuristica(e, envioContext);
-            e.heuristicCache = betaDos ? (h * h) : Math.pow(h, config.beta);
-        }
-    }
 
     // FEROMONAS
+    // FEROMONAS (Actualizado a MMAS - Max-Min Ant System)
     private void updatePheromones() {
 
-        // evaporación
+        // 1. Evaporación normal
         for (Edge e : graph.edges) {
             e.pheromone *= (1 - config.evaporation);
         }
 
-        // refuerzo
-        for (Ant ant : ants) {
-            if (!CostFunction.cumpleRestriccionesDuras(ant, ant.edgesPath, envioContext)) {
-                continue;
-            }
-
-            double deltaTau = config.q / (ant.totalCost + 1.0);
-            for (Edge edge : ant.edgesPath) {
+        // 2. ELITISMO: Solo la mejor hormiga deposita feromona (cero ruido)
+        Ant mejor = getMejorAnt();
+        if (mejor != null && CostFunction.cumpleRestriccionesDuras(mejor, mejor.edgesPath, envioContext)) {
+            double deltaTau = config.q / (mejor.totalCost + 1.0);
+            for (Edge edge : mejor.edgesPath) {
                 edge.pheromone += deltaTau;
+            }
+        }
+
+        // 3. LÍMITES MAX-MIN: Evita la convergencia prematura
+        // Ninguna ruta será 100% ignorada, ni 100% dominante
+        double tauMax = 10.0;
+        double tauMin = 0.5;
+
+        for (Edge e : graph.edges) {
+            if (e.pheromone > tauMax) {
+                e.pheromone = tauMax;
+            } else if (e.pheromone < tauMin) {
+                e.pheromone = tauMin;
             }
         }
     }

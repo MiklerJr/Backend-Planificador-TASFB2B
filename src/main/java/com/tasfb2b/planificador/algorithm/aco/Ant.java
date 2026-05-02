@@ -13,6 +13,9 @@ public class Ant {
 
     public int load; //  paquetes que transporta
 
+    //Reloj interno de la hormiga
+    public java.time.LocalDateTime horaLlegadaActual = null;
+
     // Espejo de `path` como Set para que visited() sea O(1). Se mantiene
     // sincronizado vía addNode/reset; quien lea path crudo no lo nota.
     private final Set<Node> visitedSet = new HashSet<>();
@@ -22,6 +25,7 @@ public class Ant {
         edgesPath.clear();
         visitedSet.clear();
         totalCost = 0;
+        horaLlegadaActual = null; // Reiniciar reloj
     }
 
     public void addNode(Node n) {

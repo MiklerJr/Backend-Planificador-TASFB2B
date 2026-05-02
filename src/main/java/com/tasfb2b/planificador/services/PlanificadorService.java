@@ -579,11 +579,11 @@ public class PlanificadorService {
         int tick = Math.max(1, request.tickMinutosSimulacion);
         int limite = (request.limitePorOrigen <= 0) ? Integer.MAX_VALUE : request.limitePorOrigen;
 
-        List<Aeropuerto> aeropuertos = aeropuertoLoader.cargarAeropuertos();
-        List<String> vuelos = cargarVuelos();
+        List<Aeropuerto> aeropuertos = dataLoader.getAeropuertos();
+        List<Vuelo> vuelos = dataLoader.getVuelos();
 
         Map<String, Integer> offsetPorCodigo = new HashMap<>();
-        for (Aeropuerto a : airports) {
+        for (Aeropuerto a : aeropuertos) {
             offsetPorCodigo.put(a.getCodigo(), a.getOffsetHorario() != null ? a.getOffsetHorario() : 0);
         }
 
@@ -598,6 +598,9 @@ public class PlanificadorService {
         config.iterations = 50;
 
         for (String origen : request.origenes) {
+            // CORRECCIÓN 4: Crear la variable offsetOrigen sacándola del mapa
+            int offsetOrigen = offsetPorCodigo.getOrDefault(origen, 0);
+
             Graph graph = mapper.mapToGraph(aeropuertos, vuelos);
             List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
             if (envios.isEmpty()) {
