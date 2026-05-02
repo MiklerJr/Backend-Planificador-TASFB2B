@@ -26,6 +26,10 @@ public class ComparativaRequest {
     private Integer repeticiones = 30;
     /** Seed del primer par; las repeticiones siguientes usan seedBase+1, +2, ... */
     private Long seedBase = 42L;
+    /** Motor a ejecutar: "ambos" (default), "alns" o "aco". */
+    private String motor = "ambos";
+    /** Alias de motor para requests en espaÃ±ol: "ambos", "alns" o "aco". */
+    private String algoritmo;
     /** Si true, además del escenario 2 ejecuta también escenario 3 (hasta colapso). */
     private boolean ejecutarColapso = false;
     /** Umbral de colapso (solo aplica si ejecutarColapso=true). */

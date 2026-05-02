@@ -7,11 +7,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 
 /**
  * Adaptador que ejecuta {@link AlgorithmACO} dentro del modelo Sa/Sc/K del cliente.
@@ -35,10 +33,6 @@ public class AcoBlockEngine {
     private static final long MAX_HORIZON_MIN = 3 * DAY_MIN;
 
     private final PlanificadorProperties props;
-
-    // Pheromone reset incremental: guarda las aristas tocadas en el batch previo
-    // para resetear solo esas (~10-30) en vez de todas (2866) por batch.
-    private final Set<Integer> touchedEdgesPreviousBatch = new HashSet<>();
 
     public AcoBlockEngine(PlanificadorProperties props) {
         this.props = props;
@@ -154,17 +148,6 @@ public class AcoBlockEngine {
         if (origen == null || destino == null) return false;
         if (origen.idx < 0 || destino.idx < 0) return false;
 
-        // === PHEROMONE RESET INCREMENTAL ===
-        // Resetear solo las aristas tocadas en el batch previo (~10-30 en vez de 2866)
-        for (Integer edgeIdx : touchedEdgesPreviousBatch) {
-            for (Edge e : graph.edges) {
-                if (e.idx == edgeIdx) {
-                    e.pheromone = cfg.initialPheromone;
-                    break;
-                }
-            }
-        }
-
         int hh = batch.getReadyTime().getHour();
         int mm = batch.getReadyTime().getMinute();
         CostFunction.EnvioContext ctx = new CostFunction.EnvioContext(
@@ -173,16 +156,11 @@ public class AcoBlockEngine {
 
         AlgorithmACO aco = new AlgorithmACO(graph, cfg, ctx);
         if (rng != null) aco.setRandom(rng);
+        aco.setRouteEvaluator(new AcoBlockRouteEvaluator(enrutador, batch, blockFlight, blockAirport));
         aco.run(batch.getOriginCode(), batch.getDestCode());
         Ant mejor = aco.getMejorAnt();
         if (mejor == null || mejor.edgesPath == null || mejor.edgesPath.isEmpty()) return false;
         if (!batch.getDestCode().equals(mejor.path.get(mejor.path.size() - 1).code)) return false;
-
-        // Guardar aristas tocadas para el siguiente batch (pheromone reset incremental)
-        touchedEdgesPreviousBatch.clear();
-        for (Edge e : mejor.edgesPath) {
-            if (e.idx >= 0) touchedEdgesPreviousBatch.add(e.idx);
-        }
 
         return materializarRuta(enrutador, batch, mejor.edgesPath, blockFlight, blockAirport);
     }

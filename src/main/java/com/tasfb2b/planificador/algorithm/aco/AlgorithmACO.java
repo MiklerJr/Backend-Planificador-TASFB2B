@@ -1,19 +1,24 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 public class AlgorithmACO {
 
-    private Graph graph;
-    private ConfigACO config;
-    private CostFunction.EnvioContext envioContext;
+    private final Graph graph;
+    private final ConfigACO config;
+    private final CostFunction.EnvioContext envioContext;
+    private AcoRouteEvaluator routeEvaluator;
+    private Map<Edge, Double> localPheromones;
+    private static final int TOP_K_CANDIDATES = 8;
+    private static final double GOOD_ENOUGH_COST = 360.0;
 
-    private List<Ant> ants = new ArrayList<>();
+    private final List<Ant> ants = new ArrayList<>();
     private Ant mejorGlobal = null;
     private double mejorCostoGlobal = Double.MAX_VALUE;
-    /** Fuente de aleatoriedad — reproducible si se setea con un seed explícito. */
     private Random rng = new Random();
 
     public AlgorithmACO(Graph graph, ConfigACO config, CostFunction.EnvioContext envioContext) {
@@ -30,43 +35,45 @@ public class AlgorithmACO {
         if (rng != null) this.rng = rng;
     }
 
-    public void run(String start, String end) {
+    public void setRouteEvaluator(AcoRouteEvaluator routeEvaluator) {
+        this.routeEvaluator = routeEvaluator;
+    }
 
+    public void run(String start, String end) {
         Node startNode = graph.nodes.get(start);
         Node endNode = graph.nodes.get(end);
+        if (startNode == null || endNode == null) return;
 
-        // === SHORTCUT: vuelo directo O(grado) ===
-        List<Edge> desdeOrigen = graph.getEdgesFrom(start);
-        for (Edge e : desdeOrigen) {
-            if (e.to.equals(endNode)
-                    && e.hasCapacity(envioContext.cantidadMaletas)
-                    && e.to.hasStorageCapacity(envioContext.cantidadMaletas)) {
-                mejorGlobal = new Ant();
-                mejorGlobal.path.add(startNode);
-                mejorGlobal.path.add(endNode);
-                mejorGlobal.edgesPath.add(e);
-                mejorGlobal.totalCost = e.cost;
-                return;
-            }
+        if (buscarMejorDirecto(startNode, endNode)) return;
+
+        if (routeEvaluator == null) {
+            inicializarFeromonas();
+            precomputarHeuristicas();
+        } else {
+            localPheromones = new HashMap<>();
         }
-
-        inicializarFeromonas();
-        precomputarHeuristicas();
 
         int sinMejora = 0;
 
+        if (routeEvaluator != null) {
+            seedGreedySolutions(startNode, endNode);
+            if (mejorGlobal != null && isGoodEnough(mejorGlobal)) return;
+        }
+
         for (int it = 0; it < config.iterations; it++) {
-
             boolean huboMejora = false;
-            for (Ant ant : ants) {
-                ant.reset();
-                buildSolution(ant, startNode, endNode);
 
-                if (CostFunction.cumpleRestriccionesDuras(ant, ant.edgesPath, envioContext)
-                        && ant.totalCost < mejorCostoGlobal) {
+            for (int antIdx = 0; antIdx < ants.size(); antIdx++) {
+                Ant ant = ants.get(antIdx);
+                ant.reset();
+                boolean useTopK = routeEvaluator != null && antIdx < ants.size() - 1;
+                buildSolution(ant, startNode, endNode, useTopK);
+
+                if (cumpleRestricciones(ant) && ant.totalCost < mejorCostoGlobal) {
                     mejorCostoGlobal = ant.totalCost;
                     mejorGlobal = copiarAnt(ant);
                     huboMejora = true;
+                    if (routeEvaluator != null && isGoodEnough(mejorGlobal)) return;
                 }
             }
 
@@ -74,52 +81,101 @@ public class AlgorithmACO {
 
             if (config.maxNoImprovement > 0) {
                 sinMejora = huboMejora ? 0 : sinMejora + 1;
-                if (sinMejora >= config.maxNoImprovement) {
-                    break;
-                }
+                if (sinMejora >= config.maxNoImprovement) break;
             }
         }
 
         Ant mejor = getMejorAnt();
-        if (mejor != null && !mejor.path.isEmpty()) {
-            return;
-        }
+        if (mejor != null && !mejor.path.isEmpty()) return;
 
-        buscarRutaGreedy(startNode, endNode);
+        buscarRutaGreedy(startNode, endNode, GreedyStrategy.BEST_DESIRABILITY);
 
         Ant mejorPostGreedy = getMejorAnt();
         if (mejorPostGreedy != null
-                && CostFunction.cumpleRestriccionesDuras(mejorPostGreedy, mejorPostGreedy.edgesPath, envioContext)
+                && cumpleRestricciones(mejorPostGreedy)
                 && mejorPostGreedy.totalCost < mejorCostoGlobal) {
             mejorCostoGlobal = mejorPostGreedy.totalCost;
             mejorGlobal = copiarAnt(mejorPostGreedy);
         }
     }
 
-    private void buscarRutaGreedy(Node start, Node end) {
+    private boolean buscarMejorDirecto(Node startNode, Node endNode) {
+        Edge mejorEdge = null;
+        double mejorCosto = Double.MAX_VALUE;
+
+        for (Edge e : graph.getEdgesFrom(startNode.code)) {
+            if (!e.to.equals(endNode)) continue;
+
+            double costo;
+            if (routeEvaluator != null) {
+                AcoRouteEvaluator.Transition t = routeEvaluator.evaluate(e, routeEvaluator.initialReadyMin(), 0);
+                if (t == null) continue;
+                List<Edge> route = List.of(e);
+                List<AcoRouteEvaluator.Transition> transitions = List.of(t);
+                if (!routeEvaluator.isCompleteRouteOnTime(route, transitions)) continue;
+                costo = routeEvaluator.routeCost(route, transitions);
+            } else {
+                if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
+                if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
+                costo = e.cost;
+            }
+
+            if (costo < mejorCosto) {
+                mejorCosto = costo;
+                mejorEdge = e;
+            }
+        }
+
+        if (mejorEdge == null) return false;
+
+        mejorGlobal = new Ant();
+        mejorGlobal.addNode(startNode);
+        mejorGlobal.addNode(endNode);
+        mejorGlobal.edgesPath.add(mejorEdge);
+        mejorGlobal.totalCost = mejorCosto;
+        mejorCostoGlobal = mejorCosto;
+        return true;
+    }
+
+    private void seedGreedySolutions(Node start, Node end) {
+        buscarRutaGreedy(start, end, GreedyStrategy.EARLIEST_ARRIVAL);
+        buscarRutaGreedy(start, end, GreedyStrategy.LOWEST_COST);
+        buscarRutaGreedy(start, end, GreedyStrategy.BEST_DESIRABILITY);
+    }
+
+    private void buscarRutaGreedy(Node start, Node end, GreedyStrategy strategy) {
         start.storeLoad(envioContext.cantidadMaletas);
 
         Node current = start;
         Ant ant = new Ant();
         ant.addNode(current);
         Edge lastEdge = null;
+        long currentArrivalMin = routeEvaluator != null ? routeEvaluator.initialReadyMin() : 0L;
+        List<AcoRouteEvaluator.Transition> transitions = new ArrayList<>();
 
         while (!current.equals(end)) {
-            List<Edge> options = graph.getEdgesFrom(current.code);
-
             Edge mejor = null;
-            double mejorValor = -1;
+            double mejorValor = -1.0;
+            AcoRouteEvaluator.Transition mejorTransition = null;
 
-            for (Edge e : options) {
+            for (Edge e : graph.getEdgesFrom(current.code)) {
                 if (ant.visited(e.to)) continue;
-                if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
-                if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
-                if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
 
-                double valor = CostFunction.heuristica(e, envioContext);
+                AcoRouteEvaluator.Transition transition = null;
+                if (routeEvaluator != null) {
+                    transition = routeEvaluator.evaluate(e, currentArrivalMin, ant.edgesPath.size());
+                    if (transition == null) continue;
+                } else {
+                    if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
+                    if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
+                    if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
+                }
+
+                double valor = greedyValue(e, transition, strategy);
                 if (valor > mejorValor) {
                     mejorValor = valor;
                     mejor = e;
+                    mejorTransition = transition;
                 }
             }
 
@@ -128,34 +184,40 @@ public class AlgorithmACO {
             current.releaseLoad(envioContext.cantidadMaletas);
             mejor.to.storeLoad(envioContext.cantidadMaletas);
 
-            if (mejor.to.equals(end)) {
-                ant.edgesPath.add(mejor);
-                ant.addNode(mejor.to);
-                current = mejor.to;
+            ant.edgesPath.add(mejor);
+            if (mejorTransition != null) {
+                transitions.add(mejorTransition);
+                currentArrivalMin = mejorTransition.arrivalMin;
+            }
+            ant.addNode(mejor.to);
+            current = mejor.to;
+
+            if (current.equals(end)) {
                 current.releaseLoad(envioContext.cantidadMaletas);
                 break;
             }
 
-            current = mejor.to;
-            ant.addNode(current);
-            ant.edgesPath.add(mejor);
             lastEdge = mejor;
         }
 
-        if (current.equals(end) && !ant.edgesPath.isEmpty()) {
-            ant.totalCost = CostFunction.calcularCostoRuta(ant, graph.edges, ant.edgesPath, envioContext);
-            // Sobreescribir directamente la primera hormiga con la solución de rescate
+        if (current.equals(end) && !ant.edgesPath.isEmpty()
+                && (routeEvaluator == null || routeEvaluator.isCompleteRouteFeasible(ant.edgesPath, transitions))) {
+            ant.totalCost = routeEvaluator != null
+                    ? routeEvaluator.routeCost(ant.edgesPath, transitions)
+                    : CostFunction.calcularCostoRuta(ant, graph.edges, ant.edgesPath, envioContext);
             Ant a = ants.get(0);
             a.path = new ArrayList<>(ant.path);
             a.edgesPath = new ArrayList<>(ant.edgesPath);
             a.totalCost = ant.totalCost;
+            if (cumpleRestricciones(a) && a.totalCost < mejorCostoGlobal) {
+                mejorCostoGlobal = a.totalCost;
+                mejorGlobal = copiarAnt(a);
+            }
         }
     }
 
     public Ant getMejorAnt() {
-        if (mejorGlobal != null) {
-            return mejorGlobal;
-        }
+        if (mejorGlobal != null) return mejorGlobal;
 
         Ant mejor = null;
         double mejorCosto = Double.MAX_VALUE;
@@ -172,57 +234,64 @@ public class AlgorithmACO {
         return mejor;
     }
 
-
-    // CONSTRUCCIÓN DE SOLUCIÓN
-    private void buildSolution(Ant ant, Node start, Node end) {
-
+    private void buildSolution(Ant ant, Node start, Node end, boolean useTopK) {
         start.storeLoad(envioContext.cantidadMaletas);
 
         Node current = start;
         ant.addNode(current);
         Edge lastEdge = null;
+        long currentArrivalMin = routeEvaluator != null ? routeEvaluator.initialReadyMin() : 0L;
+        List<AcoRouteEvaluator.Transition> transitions = new ArrayList<>();
         int maxEscalas = 10;
         int escalas = 0;
         boolean llego = false;
 
         while (!current.equals(end)) {
-
             List<Edge> options = graph.getEdgesFrom(current.code);
-
             if (options.isEmpty()) break;
 
-            // 1. FILTRAR OPCIONES VÁLIDAS PRIMERO
-            List<Edge> validOptions = new ArrayList<>();
+            List<Candidate> validOptions = new ArrayList<>();
             for (Edge e : options) {
                 if (ant.visited(e.to)) continue;
-                if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
-                if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
-                if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
-                validOptions.add(e);
+
+                if (routeEvaluator != null) {
+                    AcoRouteEvaluator.Transition transition = routeEvaluator.evaluate(e, currentArrivalMin, ant.edgesPath.size());
+                    if (transition == null) continue;
+                    validOptions.add(new Candidate(e, transition));
+                } else {
+                    if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
+                    if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
+                    if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
+                    validOptions.add(new Candidate(e, null));
+                }
             }
 
-            // 2. SI NO HAY SALIDA, LA HORMIGA QUEDA ATRAPADA Y FALLA
             if (validOptions.isEmpty() || escalas >= maxEscalas) break;
+            if (useTopK && validOptions.size() > TOP_K_CANDIDATES) {
+                validOptions.sort((a, b) -> Double.compare(weightOf(b), weightOf(a)));
+                validOptions = new ArrayList<>(validOptions.subList(0, TOP_K_CANDIDATES));
+            }
 
-            // 3. LA HORMIGA ELIGE SOLO ENTRE LAS OPCIONES SEGURAS
-            Edge chosen = selectEdge(ant, validOptions);
+            Candidate chosen = selectEdge(validOptions);
             if (chosen == null) break;
 
             current.releaseLoad(envioContext.cantidadMaletas);
-            chosen.to.storeLoad(envioContext.cantidadMaletas);
+            chosen.edge.to.storeLoad(envioContext.cantidadMaletas);
 
-            if (chosen.to.equals(end)) {
-                ant.edgesPath.add(chosen);
-                ant.addNode(chosen.to);
-                current = chosen.to;
+            ant.edgesPath.add(chosen.edge);
+            if (chosen.transition != null) {
+                transitions.add(chosen.transition);
+                currentArrivalMin = chosen.transition.arrivalMin;
+            }
+            ant.addNode(chosen.edge.to);
+            current = chosen.edge.to;
+
+            if (current.equals(end)) {
                 llego = true;
                 break;
             }
 
-            current = chosen.to;
-            ant.addNode(current);
-            ant.edgesPath.add(chosen);
-            lastEdge = chosen;
+            lastEdge = chosen.edge;
             escalas++;
         }
 
@@ -234,47 +303,41 @@ public class AlgorithmACO {
             }
         }
 
-        ant.totalCost = CostFunction.calcularCostoRuta(ant, graph.edges, ant.edgesPath, envioContext);
+        if (llego && routeEvaluator != null) {
+            ant.totalCost = routeEvaluator.routeCost(ant.edgesPath, transitions);
+        } else {
+            ant.totalCost = CostFunction.calcularCostoRuta(ant, graph.edges, ant.edgesPath, envioContext);
+        }
     }
 
-
-    // SELECCIÓN PROBABILÍSTICA
-    // Hot path: sin HashMap, sin Math.pow, una sola pasada con array temporal.
-    // Heurística^β ya viene cacheada en edge.heuristicCache (precomputarHeuristicas).
-    // Para α==1.0 (config por defecto y único uso actual) se evita pow sobre la feromona.
-    private Edge selectEdge(Ant ant, List<Edge> edges) {
-
+    private Candidate selectEdge(List<Candidate> edges) {
         int n = edges.size();
         if (n == 0) return null;
 
-        double[] weights = new double[n];
         double sum = 0.0;
-        boolean alphaUno = config.alpha == 1.0;
 
         for (int i = 0; i < n; i++) {
-            Edge e = edges.get(i);
-            double pher = alphaUno ? e.pheromone : Math.pow(e.pheromone, config.alpha);
-            double w = pher * e.heuristicCache;
-            weights[i] = w;
-            sum += w;
+            sum += weightOf(edges.get(i));
         }
 
-        if (sum <= 0) return null;
+        if (sum <= 0.0) return null;
 
         double rand = rng.nextDouble() * sum;
-        double acc = 0;
+        double acc = 0.0;
         for (int i = 0; i < n; i++) {
-            acc += weights[i];
+            acc += weightOf(edges.get(i));
             if (acc >= rand) return edges.get(i);
         }
         return edges.get(n - 1);
     }
 
-    /**
-     * Pre-eleva la heurística de cada arista a β para el batch actual.
-     * Como envioContext.cantidadMaletas es constante durante run(), basta
-     * computarla una sola vez y reusar en cada selección de hormiga/iteración.
-     */
+    private double weightOf(Candidate c) {
+        double pheromone = getPheromone(c.edge);
+        double pher = config.alpha == 1.0 ? pheromone : Math.pow(pheromone, config.alpha);
+        double heuristic = c.transition != null ? c.transition.desirability : c.edge.heuristicCache;
+        return pher * heuristic;
+    }
+
     private void precomputarHeuristicas() {
         boolean betaDos = config.beta == 2.0;
         for (Edge e : graph.edges) {
@@ -283,23 +346,21 @@ public class AlgorithmACO {
         }
     }
 
-    // FEROMONAS
     private void updatePheromones() {
-
-        // evaporación
-        for (Edge e : graph.edges) {
-            e.pheromone *= (1 - config.evaporation);
+        if (routeEvaluator == null) {
+            for (Edge e : graph.edges) {
+                e.pheromone *= (1 - config.evaporation);
+            }
+        } else {
+            localPheromones.replaceAll((edge, pheromone) -> pheromone * (1 - config.evaporation));
         }
 
-        // refuerzo
         for (Ant ant : ants) {
-            if (!CostFunction.cumpleRestriccionesDuras(ant, ant.edgesPath, envioContext)) {
-                continue;
-            }
+            if (!cumpleRestricciones(ant)) continue;
 
             double deltaTau = config.q / (ant.totalCost + 1.0);
             for (Edge edge : ant.edgesPath) {
-                edge.pheromone += deltaTau;
+                addPheromone(edge, deltaTau);
             }
         }
     }
@@ -310,11 +371,74 @@ public class AlgorithmACO {
         }
     }
 
+    private double getPheromone(Edge edge) {
+        if (routeEvaluator == null) return edge.pheromone;
+        return localPheromones.getOrDefault(edge, config.initialPheromone);
+    }
+
+    private void addPheromone(Edge edge, double delta) {
+        if (routeEvaluator == null) {
+            edge.pheromone += delta;
+        } else {
+            localPheromones.put(edge, getPheromone(edge) + delta);
+        }
+    }
+
     private Ant copiarAnt(Ant original) {
         Ant copia = new Ant();
         copia.path = new ArrayList<>(original.path);
         copia.edgesPath = new ArrayList<>(original.edgesPath);
         copia.totalCost = original.totalCost;
         return copia;
+    }
+
+    private boolean cumpleRestricciones(Ant ant) {
+        if (routeEvaluator == null) {
+            return CostFunction.cumpleRestriccionesDuras(ant, ant.edgesPath, envioContext);
+        }
+        return ant != null
+                && ant.totalCost < Double.MAX_VALUE
+                && ant.path != null
+                && !ant.path.isEmpty()
+                && envioContext.destinoICAO.equals(ant.path.get(ant.path.size() - 1).code);
+    }
+
+    private boolean isGoodEnough(Ant ant) {
+        return ant != null
+                && ant.edgesPath != null
+                && !ant.edgesPath.isEmpty()
+                && ant.edgesPath.size() <= 2
+                && ant.totalCost <= GOOD_ENOUGH_COST;
+    }
+
+    private double greedyValue(Edge edge, AcoRouteEvaluator.Transition transition, GreedyStrategy strategy) {
+        if (routeEvaluator == null || transition == null) {
+            return CostFunction.heuristica(edge, envioContext);
+        }
+        switch (strategy) {
+            case EARLIEST_ARRIVAL:
+                return 1.0 / (1.0 + transition.arrivalMin);
+            case LOWEST_COST:
+                return 1.0 / (1.0 + transition.cost);
+            case BEST_DESIRABILITY:
+            default:
+                return transition.desirability;
+        }
+    }
+
+    private enum GreedyStrategy {
+        BEST_DESIRABILITY,
+        EARLIEST_ARRIVAL,
+        LOWEST_COST
+    }
+
+    private static final class Candidate {
+        final Edge edge;
+        final AcoRouteEvaluator.Transition transition;
+
+        Candidate(Edge edge, AcoRouteEvaluator.Transition transition) {
+            this.edge = edge;
+            this.transition = transition;
+        }
     }
 }

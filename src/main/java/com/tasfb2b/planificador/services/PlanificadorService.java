@@ -334,9 +334,7 @@ public class PlanificadorService {
         TaStats taStats = new TaStats();
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal2();
         long saMs = saMin * 60_000L;
-        BacklogManager backlog = new BacklogManager(
-                props.getBacklog().getMaxSize(),
-                props.getBacklog().isPurgarVencidas());
+        BacklogManager backlog = crearBacklogSinPerdida();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         for (TemporalContext ctx : plan) {
@@ -441,9 +439,7 @@ public class PlanificadorService {
         sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
         sc1Maletas = 0L;
         sc1TaStats = new TaStats();
-        sc1Backlog = new BacklogManager(
-                props.getBacklog().getMaxSize(),
-                props.getBacklog().isPurgarVencidas());
+        sc1Backlog = crearBacklogSinPerdida();
         sc1Bloques = new ArrayList<>();
         sc1OdStats.clear();
 
@@ -928,9 +924,7 @@ public class PlanificadorService {
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal3();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
-        BacklogManager backlog = new BacklogManager(
-                props.getBacklog().getMaxSize(),
-                props.getBacklog().isPurgarVencidas());
+        BacklogManager backlog = crearBacklogSinPerdida();
         int umbralBacklog = props.getScenario().getUmbralColapsoBacklog();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
@@ -1137,15 +1131,9 @@ public class PlanificadorService {
         List<Maleta> maletasVentana = dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
         List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
-        // 2. Backlog: purgar vencidas y traer pendientes de bloques anteriores.
+        // 2. Backlog: traer pendientes de bloques anteriores sin descarte definitivo.
         if (backlog != null) {
-            backlog.purgarVencidas(ctx.scStart);
-            int maxRepl = props.getBacklog().getMaxReplanificacionesPorBloque();
-            int maxTotal = backlog.size();
-            // Política: traer todos los sinRuta + hasta {maxRepl} replanificables.
-            // Como no hay distinción al hacer poll, limitamos por total cuando es razonable.
-            int polled = (maxRepl > 0 && maxRepl < maxTotal) ? maxRepl : maxTotal;
-            List<LuggageBatch> pendientes = backlog.pollPendientes(polled);
+            List<LuggageBatch> pendientes = backlog.pollPendientes();
 
             // Liberar capacidad global de los replanificables (ya commiteados).
             for (LuggageBatch b : pendientes) {
@@ -1531,6 +1519,10 @@ public class PlanificadorService {
     /**
      * Llena las métricas del backlog acumulativo en la respuesta.
      */
+    private static BacklogManager crearBacklogSinPerdida() {
+        return new BacklogManager(0, false);
+    }
+
     private static void llenarMetricasBacklog(SimulacionResponse.Metricas m, BacklogManager backlog) {
         m.setBacklogActual(backlog.size());
         m.setBacklogPico(backlog.picoHistorico());
