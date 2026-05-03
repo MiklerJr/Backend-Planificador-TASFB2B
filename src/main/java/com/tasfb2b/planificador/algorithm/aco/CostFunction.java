@@ -52,7 +52,7 @@ public class CostFunction {
             this.offsetOrigen    = offsetOrigen;
 
             int minutosLocal = hh * 60 + mm;
-            int minutosUtc = minutosLocal + (offsetOrigen * 60);
+            int minutosUtc = minutosLocal - (offsetOrigen * 60);
             if (minutosUtc >= 24 * 60) minutosUtc -= 24 * 60;
             if (minutosUtc < 0) minutosUtc += 24 * 60;
 
@@ -365,8 +365,6 @@ public class CostFunction {
     private static double calcularTiempoEsperaTotal(List<Edge> edgesRuta) {
         double espera = 0.0;
         for (int i = 0; i < edgesRuta.size() - 1; i++) {
-            double llegada = calcularDuracionMinutos(edgesRuta.get(i).arrivalTime, edgesRuta.get(i).arrivalTime);
-            double salida  = calcularDuracionMinutos(edgesRuta.get(i + 1).departureTime, edgesRuta.get(i + 1).departureTime);
             Edge anterior = edgesRuta.get(i);
             Edge siguiente = edgesRuta.get(i + 1);
             long diff = Duration.between(anterior.arrivalTime, siguiente.departureTime).toMinutes();
@@ -399,16 +397,9 @@ public class CostFunction {
     }
 
     private static int calcularDiasRuta(List<Edge> edgesRuta) {
-        int dias = 0;
-        int minutosActuales = getMinutosDesdeMednight(edgesRuta.get(0).departureTime);
-        for (Edge e : edgesRuta) {
-            int salida  = getMinutosDesdeMednight(e.departureTime);
-            int llegada = getMinutosDesdeMednight(e.arrivalTime);
-            if (salida < minutosActuales) dias++;
-            if (llegada < salida) dias++;
-            minutosActuales = llegada;
-        }
-        return dias;
+        LocalDateTime inicio = edgesRuta.get(0).departureTime;
+        LocalDateTime fin = edgesRuta.get(edgesRuta.size() - 1).arrivalTime;
+        return (int) java.time.temporal.ChronoUnit.DAYS.between(inicio.toLocalDate(), fin.toLocalDate());
     }
 
     /**

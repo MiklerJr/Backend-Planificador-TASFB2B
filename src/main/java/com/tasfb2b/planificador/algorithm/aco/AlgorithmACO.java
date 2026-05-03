@@ -59,9 +59,6 @@ public class AlgorithmACO {
         } else {
             localPheromones = new HashMap<>();
         }
-
-        inicializarFeromonas();
-        //precomputarHeuristicas();
         
         int sinMejora = 0;
 
@@ -222,6 +219,10 @@ public class AlgorithmACO {
             }
 
             lastEdge = mejor;
+        }
+
+        if (!current.equals(end)) {
+            current.releaseLoad(envioContext.cantidadMaletas);
         }
 
         if (current.equals(end) && !ant.edgesPath.isEmpty()
@@ -402,12 +403,13 @@ public class AlgorithmACO {
         double tauMax = 10.0;
         double tauMin = 0.5;
 
-        for (Edge e : graph.edges) {
-            if (e.pheromone > tauMax) {
-                e.pheromone = tauMax;
-            } else if (e.pheromone < tauMin) {
-                e.pheromone = tauMin;
+        if (routeEvaluator == null) {
+            for (Edge e : graph.edges) {
+                if (e.pheromone > tauMax) e.pheromone = tauMax;
+                else if (e.pheromone < tauMin) e.pheromone = tauMin;
             }
+        } else {
+            localPheromones.replaceAll((e, p) -> Math.min(tauMax, Math.max(tauMin, p)));
         }
     }
 
