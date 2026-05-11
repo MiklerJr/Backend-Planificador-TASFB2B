@@ -305,6 +305,12 @@ public class PlanificadorService {
             return r;
         }
 
+        // Warm-up: si la fechaInicio del usuario está por delante de la primera
+        // ventana del dataset, simulamos primero [primera, fechaInicio) para que
+        // el motor llegue a fechaInicio con backlog/ocupaciones realistas. Los
+        // bloques de warm-up NO se publican al front ni cuentan en la auditoría.
+        List<TemporalContext> warmupPlan = construirPlanWarmup(k, fechaInicio, saOverride);
+
         Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
@@ -314,7 +320,12 @@ public class PlanificadorService {
 
         int totalVuelosCancelados = 0;
         if (cancelProb > 0.0) {
-            long startDay = plan.get(0).scStart.toLocalDate().toEpochDay();
+            // Si hay warm-up, ampliamos el rango de días para que las
+            // cancelaciones también afecten al período pre-fechaInicio.
+            LocalDateTime startDt = !warmupPlan.isEmpty()
+                    ? warmupPlan.get(0).scStart
+                    : plan.get(0).scStart;
+            long startDay = startDt.toLocalDate().toEpochDay();
             long endDay = plan.get(plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
             // Sub-Random independiente para cancelaciones para que su consumo no
             // desfase el rng del motor (mantiene reproducibilidad por componente).
@@ -336,6 +347,44 @@ public class PlanificadorService {
         long saMs = saMin * 60_000L;
         BacklogManager backlog = crearBacklogSinPerdida();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+
+        // ── Fase warm-up ────────────────────────────────────────────────────
+        // Se ejecuta el plan [primera-ventana, fechaInicio) compartiendo
+        // graph/enrutador/backlog/odStats con la fase visible. Auditoría y
+        // métricas del warm-up van a un acumulador descartable.
+        if (!warmupPlan.isEmpty()) {
+            if (job != null) {
+                job.estado = "calentando";
+                job.totalBloquesWarmup = warmupPlan.size();
+                job.bloqueWarmup = 0;
+            }
+            Map<String, LuggageBatch> auditWarmup = new LinkedHashMap<>();
+            int intervaloWarmup = Math.max(1, warmupPlan.size() / 10);
+            long inicioWarmupMs = System.currentTimeMillis();
+            log.info("Warm-up iniciado: {} bloques hasta fechaInicio={}", warmupPlan.size(), fechaInicio);
+            int wIdx = 0;
+            for (TemporalContext ctx : warmupPlan) {
+                wIdx++;
+                Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
+                procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
+                        auditWarmup, motorRes, rngBloque, taFijoMs, true);
+                if (job != null) {
+                    job.bloqueWarmup = wIdx;
+                    if ("cancelado".equals(job.estado)) break;
+                }
+                if (wIdx % intervaloWarmup == 0 || wIdx == warmupPlan.size()) {
+                    log.info("Warm-up ({}): {}% — {}/{} | backlog actual={}",
+                            motorRes, (int) Math.round(wIdx * 100.0 / warmupPlan.size()),
+                            wIdx, warmupPlan.size(), backlog.size());
+                }
+            }
+            log.info("Warm-up completado en {} ms (backlog={}, pico={})",
+                    System.currentTimeMillis() - inicioWarmupMs,
+                    backlog.size(), backlog.picoHistorico());
+            if (job != null && !"cancelado".equals(job.estado)) {
+                job.estado = "ejecutando";
+            }
+        }
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
@@ -1157,6 +1206,29 @@ public class PlanificadorService {
                                             String motor,
                                             Random rngSim,
                                             long taFijoMsOverride) {
+        return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
+                auditAcc, motor, rngSim, taFijoMsOverride, false);
+    }
+
+    /**
+     * Variante con {@code fastForward}: si es true, omite el padding-sleep
+     * final que rellena hasta Ta. Pensada para el warm-up: queremos que los
+     * bloques previos a {@code fechaInicio} acumulen estado lo más rápido
+     * posible. El motor sigue corriendo con su presupuesto Ta como deadline,
+     * pero su tiempo real de cómputo (≪ Ta en la mayoría de bloques) marca
+     * la cadencia.
+     */
+    private ResultadoVentana procesarBloque(TemporalContext ctx,
+                                            Graph graph,
+                                            GreedyRepairOperator enrutador,
+                                            AlnsSolution solucionDummy,
+                                            Map<String, int[]> odStats,
+                                            BacklogManager backlog,
+                                            Map<String, LuggageBatch> auditAcc,
+                                            String motor,
+                                            Random rngSim,
+                                            long taFijoMsOverride,
+                                            boolean fastForward) {
         ctx.marcarInicio();
 
         // 1. Eje de datos: consumir [scStart, scEnd) → todo lo registrado en ese rango.
@@ -1249,7 +1321,9 @@ public class PlanificadorService {
 
         // Si el motor terminó antes de Ta y Ta es fijo, completamos con sleep
         // para que cada bloque consuma exactamente Ta de cómputo (modelo del cliente).
-        if (taFijoMs > 0) {
+        // Excepción: en warm-up (fastForward=true) saltamos el padding para
+        // alcanzar fechaInicio en el menor tiempo de wall-clock posible.
+        if (taFijoMs > 0 && !fastForward) {
             long transcurridoMs = System.currentTimeMillis() - inicioMotorMs;
             long faltanteMs = taFijoMs - transcurridoMs;
             if (faltanteMs > 0) {
@@ -1406,6 +1480,54 @@ public class PlanificadorService {
 
         List<TemporalContext> plan = new ArrayList<>();
         LocalDateTime scStart = inicio;
+        int idx = 0;
+        while (scStart.isBefore(fin)) {
+            LocalDateTime scEnd = scStart.plusMinutes(scMin);
+            if (scEnd.isAfter(fin)) scEnd = fin;
+            plan.add(new TemporalContext(scStart, scEnd, scMin, saMin, k, idx++));
+            scStart = scEnd;
+        }
+        return plan;
+    }
+
+    /**
+     * Construye el plan de warm-up: bloques desde la primera ventana del
+     * dataset hasta {@code fechaInicio} (excluido), alineados a Sa·K.
+     *
+     * <p>Permite que el motor "alcance" un estado realista cuando el usuario
+     * pide arrancar la simulación visible varios días/semanas/meses adelante
+     * de la primera ventana del dataset. Los bloques resultantes se procesan
+     * sin publicarse al front y sin padding-sleep — solo sirven para acumular
+     * backlog, ocupaciones de vuelo y almacén.
+     *
+     * <p>Devuelve lista vacía si {@code fechaInicio} es null, está fuera del
+     * rango del dataset, o no deja al menos un bloque completo de warm-up.
+     */
+    private List<TemporalContext> construirPlanWarmup(int k,
+                                                       LocalDateTime fechaInicio,
+                                                       Integer saMinOverride) {
+        if (fechaInicio == null) return Collections.emptyList();
+        LocalDateTime primero = dataLoader.getPrimeraVentana();
+        LocalDateTime ultimo  = dataLoader.getUltimaVentana();
+        if (primero == null || ultimo == null) return Collections.emptyList();
+
+        int saMin = (saMinOverride != null && saMinOverride > 0)
+                ? saMinOverride
+                : props.getScenario().getSaMinutos();
+        int scMin = Math.max(saMin, k * saMin);
+
+        // fechaInicio fuera de rango → sin warm-up útil.
+        if (!fechaInicio.isAfter(primero)) return Collections.emptyList();
+        if (!fechaInicio.isBefore(ultimo.plusMinutes(saMin))) return Collections.emptyList();
+
+        LocalDateTime fin = alinearASa(fechaInicio, primero, saMin);
+        if (!primero.isBefore(fin)) return Collections.emptyList();
+
+        log.info("Plan warm-up: inicio={} fin={} K={} Sa={}min Sc={}min",
+                primero, fin, k, saMin, scMin);
+
+        List<TemporalContext> plan = new ArrayList<>();
+        LocalDateTime scStart = primero;
         int idx = 0;
         while (scStart.isBefore(fin)) {
             LocalDateTime scEnd = scStart.plusMinutes(scMin);

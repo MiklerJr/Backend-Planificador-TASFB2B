@@ -263,6 +263,11 @@ public class PlanificadorController {
         body.put("bloqueActual",  job.bloqueActual);
         body.put("totalBloques",  job.totalBloques);
         body.put("progreso",      job.getProgreso());
+        // Warm-up: si fechaInicio obliga a simular hasta esa fecha antes de
+        // publicar, el front consulta estos campos mientras estado="calentando".
+        body.put("bloqueWarmup",       job.bloqueWarmup);
+        body.put("totalBloquesWarmup", job.totalBloquesWarmup);
+        body.put("progresoWarmup",     job.getProgresoWarmup());
         body.put("taPromedioMs",  job.taPromedioMs);
         body.put("inicio",        job.inicio.toString());
         if (job.fin != null) body.put("fin", job.fin.toString());
@@ -298,7 +303,8 @@ public class PlanificadorController {
         Map<String, Object> body = new HashMap<>();
         body.put("bloques",   job.bloquesDesde(desde));
         body.put("total",     job.bloquesPublicados());
-        body.put("terminado", !"ejecutando".equals(job.estado));
+        body.put("terminado", !"ejecutando".equals(job.estado)
+                           && !"calentando".equals(job.estado));
         return ResponseEntity.ok(body);
     }
 

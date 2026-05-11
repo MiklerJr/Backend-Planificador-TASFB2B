@@ -21,13 +21,24 @@ public class JobState {
     /** Factor K de aceleración. */
     private final int k;
 
-    /** "ejecutando" | "completado" | "error". */
+    /** "calentando" | "ejecutando" | "completado" | "error". */
     public volatile String estado = "ejecutando";
 
     /** Bloque actualmente procesado (1-based, 0 antes de iniciar). */
     public volatile int bloqueActual = 0;
     /** Total de bloques previstos (se conoce tras construir el plan). */
     public volatile int totalBloques = 0;
+
+    /**
+     * Progreso del warm-up cuando {@code fechaInicio} obliga a simular el
+     * período [primera-ventana-del-dataset, fechaInicio) antes de empezar a
+     * publicar bloques al front. Mientras dura, {@link #estado} = "calentando"
+     * y el front muestra un indicador de "esperando a alcanzar la fecha inicial".
+     * Si no hay warm-up (sin {@code fechaInicio} o fechaInicio ≤ primera ventana),
+     * ambos quedan en 0.
+     */
+    public volatile int bloqueWarmup = 0;
+    public volatile int totalBloquesWarmup = 0;
     /** Promedio de Ta hasta el bloque actual (ms). */
     public volatile long taPromedioMs = 0L;
 
@@ -89,6 +100,11 @@ public class JobState {
 
     public double getProgreso() {
         return totalBloques == 0 ? 0.0 : (double) bloqueActual / totalBloques;
+    }
+
+    /** Progreso del warm-up [0..1]. 0 si no hay warm-up para este job. */
+    public double getProgresoWarmup() {
+        return totalBloquesWarmup == 0 ? 0.0 : (double) bloqueWarmup / totalBloquesWarmup;
     }
 
     /** Publica un bloque procesado para que el front lo consuma incrementalmente. */
