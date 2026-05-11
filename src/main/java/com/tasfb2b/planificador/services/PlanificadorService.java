@@ -357,6 +357,9 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
+                // Publicación incremental: el front lo consume con
+                // GET /jobs/{jobId}/bloques?desde=N para dibujar en tiempo real.
+                job.publicarBloque(rv.bloque);
             }
 
             // Propagar tasa sinRuta al siguiente bloque para iteraciones dinámicas
@@ -687,6 +690,23 @@ public class PlanificadorService {
         return new TaStats.BaseRunResult(resumen, resultados, auditoria);
     }
 
+    /**
+     * <b>VÍA DE PRUEBAS / DIAGNÓSTICO — NO ES PRODUCCIÓN.</b>
+     *
+     * <p>Ejecuta una corrida ACO directa ({@code new AlgorithmACO(...)} sin
+     * inyectar {@link AcoRouteEvaluator}). En este modo el algoritmo usa los
+     * contadores globales mutables {@code Edge.usedCapacity} y
+     * {@code Node.storeLoad}, que NO respetan el modelo flight-day/airport-day
+     * que sí aplica la vía de producción ({@link AcoBlockEngine}).
+     *
+     * <p>Solo se invoca desde flujos de simulación interna
+     * ({@code procesarBaseConResultados}, {@code ejecutarHastaColapso}) y desde
+     * los tests {@code Diagnostico*}. Sus métricas <b>no son comparables</b> con
+     * las que produce el endpoint principal de planificación.
+     *
+     * <p>El front <b>no llega aquí</b> en el flujo normal de planificación con
+     * {@code motor=aco}; ese flujo entra por {@link AcoBlockEngine#procesar}.
+     */
     private TaStats.AttemptResult intentarPlanificarEnvio(
             String origen,
             int offsetOrigen,
@@ -945,11 +965,7 @@ public class PlanificadorService {
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque);
 
-            // ---> AGREGAR ESTA LÍNEA AQUÍ
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
-
-            bloques.add(rv.bloque);
-            taStats.acumular(ctx.taMs);
 
             bloques.add(rv.bloque);
             taStats.acumular(ctx.taMs);
@@ -967,6 +983,8 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
+                // Publicación incremental para dibujo en tiempo real desde el front.
+                job.publicarBloque(rv.bloque);
             }
 
             // Propagar tasa sinRuta al siguiente bloque para iteraciones dinámicas

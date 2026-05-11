@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.controller;
 
+import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.services.JobState;
@@ -21,9 +22,76 @@ import java.util.Map;
 public class PlanificadorController {
 
     private final PlanificadorService service;
+    private final PlanificadorProperties props;
 
-    public PlanificadorController(PlanificadorService service) {
+    public PlanificadorController(PlanificadorService service, PlanificadorProperties props) {
         this.service = service;
+        this.props = props;
+    }
+
+    /**
+     * Catálogo de escenarios disponibles para el front. Devuelve los valores
+     * por defecto (Sa, Ta, K, umbrales) que toma el backend desde
+     * {@link PlanificadorProperties.Scenario}, junto con una descripción
+     * human-readable y la lista de motores soportados.
+     *
+     * <p>Pensado para que el front no tenga que hardcodear los defaults ni los
+     * textos de los escenarios.
+     */
+    @GetMapping("/escenarios")
+    public ResponseEntity<Map<String, Object>> catalogoEscenarios() {
+        PlanificadorProperties.Scenario sc = props.getScenario();
+
+        Map<String, Object> esc1 = new HashMap<>();
+        esc1.put("id", 1);
+        esc1.put("nombre", "Día a día (tiempo real)");
+        esc1.put("descripcion",
+                "Planificación viva: cada corrida cubre un único bloque Sa. " +
+                "El wall-clock por bloque es Sa real, sin aceleración.");
+        esc1.put("kDefault", sc.getKDefault1());
+        esc1.put("simulaTiempoReal", true);
+        esc1.put("endpoints", Map.of(
+                "inicializar", "POST /api/planificador/escenario1/inicializar",
+                "ventana",     "GET  /api/planificador/escenario1/ventana",
+                "estado",      "GET  /api/planificador/escenario1/estado",
+                "bloque",      "GET  /api/planificador/escenario1/bloque/{index}"
+        ));
+
+        Map<String, Object> esc2 = new HashMap<>();
+        esc2.put("id", 2);
+        esc2.put("nombre", "Período (3/5/7 días)");
+        esc2.put("descripcion",
+                "Replays/simulaciones de un período cerrado. Entre bloques duerme " +
+                "(Sa - Ta) cuando simularTiempoReal2=true, para imitar el ritmo real.");
+        esc2.put("kDefault", sc.getKDefault2());
+        esc2.put("simulaTiempoReal", sc.isSimularTiempoReal2());
+        esc2.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario2/iniciar"
+        ));
+
+        Map<String, Object> esc3 = new HashMap<>();
+        esc3.put("id", 3);
+        esc3.put("nombre", "Hasta colapso");
+        esc3.put("descripcion",
+                "Estrés / capacity planning. Avanza lo más rápido posible (a menos " +
+                "que simularTiempoReal3=true) hasta que se dispara la condición de colapso.");
+        esc3.put("kDefault", sc.getKDefault3());
+        esc3.put("simulaTiempoReal", sc.isSimularTiempoReal3());
+        esc3.put("umbralColapso", sc.getUmbralColapso());
+        esc3.put("umbralColapsoBacklog", sc.getUmbralColapsoBacklog());
+        esc3.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario3/iniciar"
+        ));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("saMinutos", sc.getSaMinutos());
+        body.put("taSegundos", sc.getTaSegundos());
+        body.put("motoresSoportados", java.util.List.of(
+                PlanificadorService.MOTOR_ALNS,
+                PlanificadorService.MOTOR_ACO
+        ));
+        body.put("escenarios", java.util.List.of(esc1, esc2, esc3));
+        return ResponseEntity.ok(body);
     }
 
     /**
@@ -199,6 +267,38 @@ public class PlanificadorController {
         body.put("inicio",        job.inicio.toString());
         if (job.fin != null) body.put("fin", job.fin.toString());
         if (job.error != null) body.put("error", job.error);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Bloques publicados de forma incremental por el job (escenarios 2 y 3).
+     *
+     * <p>El front pasa {@code desde} con el índice del próximo bloque que aún no
+     * tiene; el backend devuelve los bloques disponibles a partir de ahí. Pensado
+     * para polling cada pocos segundos durante el sleep {@code Sa - Ta}, de modo
+     * que el front pueda dibujar vuelos y el estado de cada maleta a medida que
+     * se procesan.
+     *
+     * <p>Respuesta:
+     * <pre>
+     * {
+     *   "bloques":   [...],   // BloqueSimulacion[N..total]
+     *   "total":     int,     // bloques publicados hasta ahora
+     *   "terminado": boolean  // true si el job ya finalizó (estado != 'ejecutando')
+     * }
+     * </pre>
+     */
+    @GetMapping("/jobs/{jobId}/bloques")
+    public ResponseEntity<Map<String, Object>> bloquesJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde) {
+        JobState job = service.getJob(jobId);
+        if (job == null) return ResponseEntity.notFound().build();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("bloques",   job.bloquesDesde(desde));
+        body.put("total",     job.bloquesPublicados());
+        body.put("terminado", !"ejecutando".equals(job.estado));
         return ResponseEntity.ok(body);
     }
 

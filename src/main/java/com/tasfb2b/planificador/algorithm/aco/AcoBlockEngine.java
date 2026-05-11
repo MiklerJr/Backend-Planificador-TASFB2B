@@ -12,7 +12,10 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * Adaptador que ejecuta {@link AlgorithmACO} dentro del modelo Sa/Sc/K del cliente.
+ * <b>VÍA DE PRODUCCIÓN</b> del motor ACO. Adaptador que ejecuta {@link AlgorithmACO}
+ * dentro del modelo Sa/Sc/K del cliente. Es el punto de entrada que reciben las
+ * llamadas desde el front cuando se selecciona {@code motor=aco} en el endpoint
+ * de planificación (ver {@code PlanificadorService.procesarBloque}).
  *
  * <p>Para cada {@link LuggageBatch} del bloque (incluyendo backlog) lanza una
  * corrida ACO que produce una secuencia de aeropuertos. Después calcula las
@@ -22,6 +25,13 @@ import java.util.Random;
  *
  * <p>El estado de capacidad se gestiona contra los mismos {@code blockFlight} y
  * {@code blockAirport} que el ALNS, vía {@link GreedyRepairOperator#aplicarAsignacionBloque}.
+ *
+ * <p><b>Diferencia con la vía de pruebas</b>: aquí siempre se inyecta un
+ * {@link AcoBlockRouteEvaluator}, por lo que las restricciones duras del modelo
+ * (flight-day, airport-day, overnight, horizonte 3d, SLA por batch) se evalúan
+ * de forma idéntica al ALNS. La otra vía
+ * ({@code PlanificadorService.intentarPlanificarEnvio}) NO usa evaluator y solo
+ * sirve para simulación/diagnóstico.
  */
 @Slf4j
 @Component

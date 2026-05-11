@@ -6,6 +6,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+/**
+ * Algoritmo ACO base. Tiene DOS modos de operación según se inyecte o no
+ * un {@link AcoRouteEvaluator} con {@link #setRouteEvaluator(AcoRouteEvaluator)}:
+ *
+ * <h3>MODO PRODUCCIÓN (con evaluator)</h3>
+ * Usado por {@link AcoBlockEngine} en el endpoint principal de planificación
+ * (motor=aco). El evaluator delega capacidad/almacén/SLA en el
+ * {@code GreedyRepairOperator} de ALNS, compartiendo {@code blockFlight} y
+ * {@code blockAirport}. Cumple las restricciones duras del modelo Sa/Sc/K
+ * (flight-day, airport-day, overnight, horizonte 3d, conexión 10min, SLA por batch).
+ * <b>Esta es la vía que recibe llamadas desde el front.</b>
+ *
+ * <h3>MODO PRUEBAS / DIAGNÓSTICO (sin evaluator)</h3>
+ * Usado por {@code PlanificadorService.intentarPlanificarEnvio} (flujo
+ * {@code ejecutarHastaColapso} y tests {@code Diagnostico*}). Usa
+ * {@link Edge#usedCapacity} y {@link Node#storeLoad} como contadores globales
+ * mutables — NO respeta el modelo flight-day/airport-day. Sus métricas no son
+ * directamente comparables con las de producción. <b>No usar para resultados
+ * que vayan al cliente.</b>
+ */
 public class AlgorithmACO {
 
     private final Graph graph;
