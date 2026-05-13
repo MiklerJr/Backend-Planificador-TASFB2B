@@ -67,6 +67,8 @@ public class SimulacionResponse {
         private String codigo;
         private double latitud;
         private double longitud;
+        /** Capacidad real de almacen del aeropuerto, en maletas individuales. */
+        private Integer capacidadAlmacen;
     }
 
     @Data
@@ -75,8 +77,16 @@ public class SimulacionResponse {
         private String horaInicio;
         /** Fin del rango de datos consumidos (eje de datos = scEnd). */
         private String horaFin;
+        /** Legacy: cantidad de envios/lotes procesados en este bloque (delta). */
         private int maletasProcesadas;
+        /** Legacy: cantidad de envios/lotes enrutados en este bloque (delta). */
         private int maletasEnrutadas;
+        /** Acumulado del job visible, en maletas individuales reales. */
+        private long maletasProcesadasAcum;
+        /** Acumulado enrutado del job visible, en maletas individuales reales. */
+        private long maletasEnrutadasAcum;
+        /** Acumulado entregado hasta horaFin, en maletas individuales reales. */
+        private long maletasEntregadasAcum;
         private List<AsignacionMaleta> asignaciones;
 
         // ── Modelo Ta/Sa: campos del eje real ──────────────────────────────
@@ -95,6 +105,7 @@ public class SimulacionResponse {
         private String batchId;
         private String origen;
         private String destino;
+        /** Numero de maletas individuales dentro del envio/lote. */
         private int cantidad;
         private boolean enrutada;
         private boolean cumpleSLA;

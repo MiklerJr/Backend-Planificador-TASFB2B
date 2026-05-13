@@ -96,6 +96,7 @@ public class PlanificadorService {
     private volatile TaStats sc1TaStats = new TaStats();
     private volatile BacklogManager sc1Backlog = null;
     private volatile List<SimulacionResponse.BloqueSimulacion> sc1Bloques = new ArrayList<>();
+    private volatile Map<String, LuggageBatch> sc1AuditAcc = new LinkedHashMap<>();
     private final Map<String, int[]> sc1OdStats = new HashMap<>();
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
@@ -261,6 +262,7 @@ public class PlanificadorService {
             dto.setCodigo(a.getCodigo());
             dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
             dto.setLongitud(a.getLongitud() != null ? a.getLongitud() : 0.0);
+            dto.setCapacidadAlmacen(a.getCapacidad());
             info.put(a.getCodigo(), dto);
         }
         return info;
@@ -285,7 +287,10 @@ public class PlanificadorService {
         out.put("primeraVentana", primera != null ? primera.toString() : null);
         out.put("ultimaVentana",  ultima  != null ? ultima.toString()  : null);
         out.put("diasDisponibles", diasDisponibles);
+        // totalMaletas queda por compatibilidad: historicamente equivale a filas/envios.
         out.put("totalMaletas", dataLoader.getTotalMaletas());
+        out.put("totalEnvios", dataLoader.getTotalEnvios());
+        out.put("totalMaletasIndividuales", dataLoader.getTotalMaletasIndividuales());
         out.put("totalAeropuertos", dataLoader.getAeropuertos().size());
         out.put("totalVuelos", dataLoader.getVuelos().size());
         return out;
@@ -553,6 +558,7 @@ public class PlanificadorService {
         sc1TaStats = new TaStats();
         sc1Backlog = crearBacklogSinPerdida();
         sc1Bloques = new ArrayList<>();
+        sc1AuditAcc = new LinkedHashMap<>();
         sc1OdStats.clear();
 
         sc1Plan = construirPlanBloques(k);
@@ -932,7 +938,7 @@ public class PlanificadorService {
         TemporalContext ctx = sc1Plan.get(sc1Idx);
         sc1Idx++;
 
-        ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog);
+        ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog, sc1AuditAcc);
         sc1Bloques.add(rv.bloque);
         sc1TaStats.acumular(ctx.taMs);
 
@@ -1447,6 +1453,7 @@ public class PlanificadorService {
         bloque.setBloqueIdx(ctx.bloqueIdx);
         bloque.setTaMs(ctx.taMs);
         bloque.setScMinutos(ctx.scMinutos);
+        llenarAcumuladosFisicos(bloque, auditAcc, ctx.scEnd);
 
         return new ResultadoVentana(bloque, finalBatches.size(), enrutadas, sinRuta, cumpleSLA, tardadas, maletas);
     }
@@ -1782,6 +1789,48 @@ public class PlanificadorService {
         return new TotalesUnicos(envios, enrutadas, sinRuta, cumpleSLA, tardadas, maletas);
     }
 
+    private static void llenarAcumuladosFisicos(SimulacionResponse.BloqueSimulacion bloque,
+                                                Map<String, LuggageBatch> auditAcc,
+                                                LocalDateTime corte) {
+        if (bloque == null || auditAcc == null || auditAcc.isEmpty()) return;
+
+        long procesadas = 0L;
+        long enrutadas = 0L;
+        long entregadas = 0L;
+        long corteMin = toEpochMin(corte);
+
+        for (LuggageBatch b : auditAcc.values()) {
+            long cantidad = b.getQuantity();
+            procesadas += cantidad;
+            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            if (!enrutada) continue;
+
+            enrutadas += cantidad;
+            if (ultimoArriboMin(b) <= corteMin) {
+                entregadas += cantidad;
+            }
+        }
+
+        bloque.setMaletasProcesadasAcum(procesadas);
+        bloque.setMaletasEnrutadasAcum(enrutadas);
+        bloque.setMaletasEntregadasAcum(entregadas);
+    }
+
+    private static long ultimoArriboMin(LuggageBatch b) {
+        if (b.getAssignedRoute() == null || b.getAssignedDepartures() == null) {
+            return Long.MAX_VALUE;
+        }
+        int lastIdx = Math.min(b.getAssignedRoute().size(), b.getAssignedDepartures().size()) - 1;
+        if (lastIdx < 0) return Long.MAX_VALUE;
+        return b.getAssignedDepartures().get(lastIdx)
+                + b.getAssignedRoute().get(lastIdx).durationMinutes;
+    }
+
+    private static long toEpochMin(LocalDateTime dt) {
+        if (dt == null) return Long.MIN_VALUE;
+        return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
+    }
+
     private static String batchAuditKey(LuggageBatch b) {
         if (b == null) return "";
         return String.join("|",
@@ -1818,6 +1867,7 @@ public class PlanificadorService {
             dto.setCodigo(cod);
             dto.setLatitud(a.getLatitud());
             dto.setLongitud(a.getLongitud());
+            dto.setCapacidadAlmacen(a.getCapacidad());
             map.put(cod, dto);
         }
     }

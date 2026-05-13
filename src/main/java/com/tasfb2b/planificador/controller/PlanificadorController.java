@@ -45,7 +45,7 @@ public class PlanificadorController {
 
     /**
      * Mapa estático de aeropuertos del dataset cargado:
-     * {@code {[codigo]: {codigo, latitud, longitud}}}. Pensado para que el
+     * {@code {[codigo]: {codigo, latitud, longitud, capacidadAlmacen}}}. Pensado para que el
      * front lo cachee al cargar la app y dibuje bloques incrementalmente
      * sin esperar a {@code /resultado}. No cambia en runtime.
      */

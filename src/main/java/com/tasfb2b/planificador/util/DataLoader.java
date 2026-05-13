@@ -67,6 +67,7 @@ public class DataLoader {
      * granularizar a buckets fijos. Inmutable tras {@link #load()}.
      */
     private List<Maleta> maletasOrdenadas = Collections.emptyList();
+    private long totalMaletasIndividuales = 0L;
 
     /** Comparator usado por la búsqueda binaria. */
     private static final Comparator<Maleta> POR_FECHA = Comparator.comparing(Maleta::getFechaHoraRegistro);
@@ -103,13 +104,17 @@ public class DataLoader {
         // use binarySearch sin necesidad de buckets.
         todas.sort(POR_FECHA);
         maletasOrdenadas = todas;
+        totalMaletasIndividuales = maletasOrdenadas.stream()
+                .mapToLong(m -> m.getCantidad() != null ? m.getCantidad() : 0L)
+                .sum();
 
         log.info("=================================================");
         log.info("RESUMEN DE DATOS CARGADOS EN MEMORIA");
         log.info("Aeropuertos : {}", aeropuertos.size());
         log.info("Vuelos      : {}", vuelos.size());
-        log.info("Maletas     : {} (lista plana ordenada por fechaHoraRegistro)",
+        log.info("Envios      : {} (lista plana ordenada por fechaHoraRegistro)",
                 maletasOrdenadas.size());
+        log.info("Maletas fisicas: {}", totalMaletasIndividuales);
         if (!maletasOrdenadas.isEmpty()) {
             log.info("Rango       : {} → {}",
                     maletasOrdenadas.get(0).getFechaHoraRegistro(),
@@ -175,6 +180,14 @@ public class DataLoader {
 
     public int getTotalMaletas() {
         return maletasOrdenadas.size();
+    }
+
+    public int getTotalEnvios() {
+        return maletasOrdenadas.size();
+    }
+
+    public long getTotalMaletasIndividuales() {
+        return totalMaletasIndividuales;
     }
 
     public List<Aeropuerto> getAeropuertos() { return aeropuertos; }
