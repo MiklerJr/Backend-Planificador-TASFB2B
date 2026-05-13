@@ -13,7 +13,10 @@ import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @CrossOrigin(origins = {"http://localhost:5173", "http://localhost:3000"})
@@ -27,6 +30,64 @@ public class PlanificadorController {
     public PlanificadorController(PlanificadorService service, PlanificadorProperties props) {
         this.service = service;
         this.props = props;
+    }
+
+    /**
+     * Metadatos del dataset cargado (rango temporal disponible, conteos).
+     * Permite al front validar {@code fechaInicio} antes de enviar el job:
+     * si la fecha está fuera de {@code [primeraVentana, ultimaVentana]} el
+     * backend la ignora silenciosamente.
+     */
+    @GetMapping("/dataset/info")
+    public ResponseEntity<Map<String, Object>> datasetInfo() {
+        return ResponseEntity.ok(service.getDatasetInfo());
+    }
+
+    /**
+     * Mapa estático de aeropuertos del dataset cargado:
+     * {@code {[codigo]: {codigo, latitud, longitud}}}. Pensado para que el
+     * front lo cachee al cargar la app y dibuje bloques incrementalmente
+     * sin esperar a {@code /resultado}. No cambia en runtime.
+     */
+    @GetMapping("/aeropuertos")
+    public ResponseEntity<Map<String, SimulacionResponse.AeropuertoDTO>> aeropuertos() {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
+                .body(service.getAeropuertosInfo());
+    }
+
+    /**
+     * Lista de jobs en memoria. Por defecto solo los activos (encolado,
+     * calentando, ejecutando). Útil tras un refresh para reengancharse a una
+     * simulación en marcha sin haber persistido el {@code jobId} en cliente.
+     *
+     * @param activos si true (default), filtra a estados activos. Si false,
+     *                devuelve todos los jobs vivos en el registry.
+     */
+    @GetMapping("/jobs")
+    public ResponseEntity<Map<String, Object>> listarJobs(
+            @RequestParam(defaultValue = "true") boolean activos) {
+        List<JobState> lista = activos ? service.listarJobsActivos() : service.listarTodosLosJobs();
+        List<Map<String, Object>> items = new ArrayList<>(lista.size());
+        for (JobState j : lista) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("jobId", j.getJobId());
+            item.put("escenario", j.getEscenario());
+            item.put("algoritmo", j.algoritmo);
+            item.put("estado", j.estado);
+            item.put("k", j.getK());
+            item.put("seed", j.seed);
+            if (j.fechaInicio != null) item.put("fechaInicio", j.fechaInicio.toString());
+            item.put("inicio", j.inicio.toString());
+            if (j.fin != null) item.put("fin", j.fin.toString());
+            item.put("progreso", j.getProgreso());
+            item.put("progresoWarmup", j.getProgresoWarmup());
+            items.add(item);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobs", items);
+        body.put("total", items.size());
+        return ResponseEntity.ok(body);
     }
 
     /**
@@ -268,6 +329,12 @@ public class PlanificadorController {
         body.put("bloqueWarmup",       job.bloqueWarmup);
         body.put("totalBloquesWarmup", job.totalBloquesWarmup);
         body.put("progresoWarmup",     job.getProgresoWarmup());
+        // Cola: si estado="encolado", posicionEnCola indica el turno (1-based).
+        // Es 0 cuando ya está corriendo o terminó.
+        body.put("posicionEnCola",     service.posicionEnCola(jobId));
+        // Cancelación: true si el usuario llamó a /cancelar. Permite al front
+        // distinguir cancelación voluntaria de fallo real sin parsear `error`.
+        body.put("canceladoPorUsuario", job.canceladoPorUsuario);
         body.put("taPromedioMs",  job.taPromedioMs);
         body.put("inicio",        job.inicio.toString());
         if (job.fin != null) body.put("fin", job.fin.toString());
@@ -303,8 +370,10 @@ public class PlanificadorController {
         Map<String, Object> body = new HashMap<>();
         body.put("bloques",   job.bloquesDesde(desde));
         body.put("total",     job.bloquesPublicados());
-        body.put("terminado", !"ejecutando".equals(job.estado)
-                           && !"calentando".equals(job.estado));
+        // terminado = estado terminal alcanzado (completado, cancelado o error).
+        body.put("terminado", !"encolado".equals(job.estado)
+                           && !"calentando".equals(job.estado)
+                           && !"ejecutando".equals(job.estado));
         return ResponseEntity.ok(body);
     }
 

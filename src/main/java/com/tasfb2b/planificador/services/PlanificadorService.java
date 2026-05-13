@@ -44,6 +44,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Random;
@@ -233,6 +234,63 @@ public class PlanificadorService {
         return jobs.cancelar(jobId);
     }
 
+    /** Lista los jobs activos (encolado/calentando/ejecutando). */
+    public List<JobState> listarJobsActivos() {
+        return jobs.listarActivos();
+    }
+
+    /** Lista todos los jobs vivos en memoria (activos y terminados). */
+    public List<JobState> listarTodosLosJobs() {
+        return jobs.listarTodos();
+    }
+
+    /** Posición del job en la cola del executor (1-based; 0 si ya corre o no existe). */
+    public int posicionEnCola(String jobId) {
+        return jobs.posicionEnCola(jobId);
+    }
+
+    /**
+     * Mapa estático de aeropuertos del dataset cargado. Pensado para que el
+     * front cachee las coordenadas al arrancar la sesión y pueda dibujar
+     * los bloques de forma incremental sin esperar a {@code /resultado}.
+     */
+    public Map<String, SimulacionResponse.AeropuertoDTO> getAeropuertosInfo() {
+        Map<String, SimulacionResponse.AeropuertoDTO> info = new LinkedHashMap<>();
+        for (Aeropuerto a : dataLoader.getAeropuertos()) {
+            SimulacionResponse.AeropuertoDTO dto = new SimulacionResponse.AeropuertoDTO();
+            dto.setCodigo(a.getCodigo());
+            dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
+            dto.setLongitud(a.getLongitud() != null ? a.getLongitud() : 0.0);
+            info.put(a.getCodigo(), dto);
+        }
+        return info;
+    }
+
+    /**
+     * Metadatos del dataset cargado (rango de fechas, días disponibles, total
+     * de maletas). Útil para que el front valide {@code fechaInicio} contra
+     * el rango antes de invocar {@code /escenario2/iniciar}.
+     *
+     * <p>Devuelve nulls en los campos de fecha si el dataset está vacío.
+     */
+    public Map<String, Object> getDatasetInfo() {
+        LocalDateTime primera = dataLoader.getPrimeraVentana();
+        LocalDateTime ultima  = dataLoader.getUltimaVentana();
+        long diasDisponibles = 0L;
+        if (primera != null && ultima != null) {
+            diasDisponibles = java.time.Duration.between(primera, ultima).toDays();
+            if (diasDisponibles < 1) diasDisponibles = 1; // mínimo 1 día si hay datos
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("primeraVentana", primera != null ? primera.toString() : null);
+        out.put("ultimaVentana",  ultima  != null ? ultima.toString()  : null);
+        out.put("diasDisponibles", diasDisponibles);
+        out.put("totalMaletas", dataLoader.getTotalMaletas());
+        out.put("totalAeropuertos", dataLoader.getAeropuertos().size());
+        out.put("totalVuelos", dataLoader.getVuelos().size());
+        return out;
+    }
+
     // =========================================================
     // Escenario 2: Simulación de período (batch completo)
     // =========================================================
@@ -370,7 +428,7 @@ public class PlanificadorService {
                         auditWarmup, motorRes, rngBloque, taFijoMs, true);
                 if (job != null) {
                     job.bloqueWarmup = wIdx;
-                    if ("cancelado".equals(job.estado)) break;
+                    if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
                 }
                 if (wIdx % intervaloWarmup == 0 || wIdx == warmupPlan.size()) {
                     log.info("Warm-up ({}): {}% — {}/{} | backlog actual={}",
@@ -381,7 +439,7 @@ public class PlanificadorService {
             log.info("Warm-up completado en {} ms (backlog={}, pico={})",
                     System.currentTimeMillis() - inicioWarmupMs,
                     backlog.size(), backlog.picoHistorico());
-            if (job != null && !"cancelado".equals(job.estado)) {
+            if (job != null && !("cancelado".equals(job.estado) || job.canceladoPorUsuario)) {
                 job.estado = "ejecutando";
             }
         }
@@ -1579,8 +1637,15 @@ public class PlanificadorService {
                     tr.setVueloId(edge.id);
                     tr.setOrigen(edge.from != null ? edge.from.code : "");
                     tr.setDestino(edge.to != null ? edge.to.code : "");
-                    tr.setSalidaUtc(epochMinToUtc(depMin));
-                    tr.setLlegadaUtc(epochMinToUtc(arrMin));
+                    String salida  = epochMinToUtc(depMin);
+                    String llegada = epochMinToUtc(arrMin);
+                    // salidaUtc/llegadaUtc se mantienen por compat (deprecated).
+                    // salidaLocal/llegadaLocal son los nombres correctos —
+                    // mismos valores: LocalDateTime sin offset, TZ del dataset.
+                    tr.setSalidaUtc(salida);
+                    tr.setLlegadaUtc(llegada);
+                    tr.setSalidaLocal(salida);
+                    tr.setLlegadaLocal(llegada);
                     tramos.add(tr);
                 }
             }

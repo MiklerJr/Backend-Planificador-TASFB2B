@@ -21,8 +21,30 @@ public class JobState {
     /** Factor K de aceleración. */
     private final int k;
 
-    /** "calentando" | "ejecutando" | "completado" | "error". */
-    public volatile String estado = "ejecutando";
+    /**
+     * Estado del job. Transiciones válidas:
+     * <pre>
+     *   encolado ──► ejecutando ──► completado
+     *           │              │
+     *           │              ├──► calentando ──► ejecutando ──► completado
+     *           │              │
+     *           ▼              ▼
+     *        cancelado      cancelado | error
+     * </pre>
+     *
+     * <p>Valores: {@code "encolado"} (esperando turno en el executor),
+     * {@code "calentando"} (simulando hasta fechaInicio), {@code "ejecutando"}
+     * (procesando bloques visibles), {@code "completado"}, {@code "cancelado"},
+     * {@code "error"}.
+     */
+    public volatile String estado = "encolado";
+
+    /**
+     * True si el job terminó porque el usuario llamó a {@code /cancelar}.
+     * Permite distinguir cancelación voluntaria de fallo real. Cuando es
+     * {@code true}, {@code estado="cancelado"} y {@code error} es null.
+     */
+    public volatile boolean canceladoPorUsuario = false;
 
     /** Bloque actualmente procesado (1-based, 0 antes de iniciar). */
     public volatile int bloqueActual = 0;

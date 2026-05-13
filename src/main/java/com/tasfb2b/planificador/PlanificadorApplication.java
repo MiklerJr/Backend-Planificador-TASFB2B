@@ -25,6 +25,10 @@ public class PlanificadorApplication {
         config.setAllowedOrigins(Arrays.asList("http://localhost:5173", "http://localhost:3000"));
         config.setAllowedHeaders(Arrays.asList("Origin", "Content-Type", "Accept", "Authorization"));
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "OPTIONS", "DELETE", "PATCH"));
+        // Headers que el front necesita leer desde fetch (CSV row counts y
+        // nombre de archivo del attachment). Sin esto el navegador los oculta.
+        config.setExposedHeaders(Arrays.asList(
+                "X-Audit-Rows", "X-Muestra-Rows", "Content-Disposition"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

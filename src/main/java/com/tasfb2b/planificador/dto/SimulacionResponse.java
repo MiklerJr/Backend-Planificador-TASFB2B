@@ -108,7 +108,19 @@ public class SimulacionResponse {
         private String vueloId;
         private String origen;
         private String destino;
-        private String salidaUtc;   // ISO datetime UTC del despegue real de este tramo
-        private String llegadaUtc;  // ISO datetime UTC del aterrizaje real de este tramo
+        /**
+         * @deprecated El nombre miente — son {@code LocalDateTime} sin offset,
+         * misma TZ del dataset (no UTC). Usar {@link #salidaLocal} en código
+         * nuevo. Se mantiene en el JSON durante una versión por compatibilidad.
+         */
+        @Deprecated
+        private String salidaUtc;
+        /** @deprecated Idem {@link #salidaUtc}. Usar {@link #llegadaLocal}. */
+        @Deprecated
+        private String llegadaUtc;
+        /** ISO datetime sin offset (hora local del dataset). Despegue del tramo. */
+        private String salidaLocal;
+        /** ISO datetime sin offset (hora local del dataset). Aterrizaje del tramo. */
+        private String llegadaLocal;
     }
 }
