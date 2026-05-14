@@ -110,8 +110,9 @@ public class PlanificadorController {
                 "Planificación viva: cada corrida cubre un único bloque Sa. " +
                 "El wall-clock por bloque es Sa real, sin aceleración.");
         esc1.put("kDefault", sc.getKDefault1());
-        esc1.put("simulaTiempoReal", true);
+        esc1.put("simulaTiempoReal", sc.isSimularTiempoReal1());
         esc1.put("endpoints", Map.of(
+                "iniciar",     "POST /api/planificador/escenario1/iniciar",
                 "inicializar", "POST /api/planificador/escenario1/inicializar",
                 "ventana",     "GET  /api/planificador/escenario1/ventana",
                 "estado",      "GET  /api/planificador/escenario1/estado",
@@ -206,12 +207,36 @@ public class PlanificadorController {
 
     // ── Escenario 1: día a día ────────────────────────────────────────────────
 
+    /**
+     * Lanza el escenario 1 como job asíncrono. K se fija al default del yaml
+     * (día a día). El front consume bloques vía
+     * {@code GET /jobs/{jobId}/bloques?desde=N} igual que en E2/E3.
+     */
+    @PostMapping("/escenario1/iniciar")
+    public ResponseEntity<Map<String, Object>> iniciarEsc1Async(
+            @RequestParam(defaultValue = "0.0")  double cancelProb,
+            @RequestParam(defaultValue = "alns") String algoritmo,
+            @RequestParam(required = false)      Long   seed) {
+        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
+        JobState job = service.iniciarEscenario1Async(cancelProb, algoritmo, seed);
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId",     job.getJobId(),
+                "escenario", "1",
+                "algoritmo", job.algoritmo,
+                "k",         job.getK(),
+                "seed",      job.seed,
+                "estado",    job.estado
+        ));
+    }
+
     @PostMapping("/escenario1/inicializar")
     public ResponseEntity<Map<String, Object>> inicializarEsc1(
-            @RequestParam(defaultValue = "0.0") double cancelProb) {
+            @RequestParam(defaultValue = "0.0")  double cancelProb,
+            @RequestParam(defaultValue = "alns") String algoritmo,
+            @RequestParam(required = false)      Long   seed) {
 
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
-        return ResponseEntity.ok(service.inicializarEscenario1(cancelProb));
+        return ResponseEntity.ok(service.inicializarEscenario1(cancelProb, algoritmo, seed));
     }
 
     @GetMapping("/escenario1/ventana")

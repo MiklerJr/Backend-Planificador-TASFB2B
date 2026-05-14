@@ -97,6 +97,8 @@ public class PlanificadorService {
     private volatile BacklogManager sc1Backlog = null;
     private volatile List<SimulacionResponse.BloqueSimulacion> sc1Bloques = new ArrayList<>();
     private volatile Map<String, LuggageBatch> sc1AuditAcc = new LinkedHashMap<>();
+    private volatile String sc1Motor = MOTOR_ALNS;
+    private volatile long sc1Seed = 0L;
     private final Map<String, int[]> sc1OdStats = new HashMap<>();
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
@@ -201,6 +203,29 @@ public class PlanificadorService {
         job.seed = seedRes;
         jobs.ejecutar(job, () -> {
             SimulacionResponse res = ejecutarHastaColapso(k, cancelProb, umbralColapso, job, motorRes, seedRes);
+            job.resultado = res;
+        });
+        return job;
+    }
+
+    /**
+     * Lanza el escenario 1 como job asíncrono. K se fija al default del yaml
+     * (día a día) y el bucle duerme {@code Sa - Ta} entre bloques cuando
+     * {@code simularTiempoReal1=true}, replicando el ritmo real.
+     */
+    public JobState iniciarEscenario1Async(double cancelProb) {
+        return iniciarEscenario1Async(cancelProb, MOTOR_ALNS, null);
+    }
+
+    public JobState iniciarEscenario1Async(double cancelProb, String motor, Long seed) {
+        String motorRes = resolverMotor(motor);
+        long seedRes = resolverSeed(seed);
+        int k = props.getScenario().getKDefault1();
+        JobState job = jobs.crear("1", k);
+        job.algoritmo = motorRes;
+        job.seed = seedRes;
+        jobs.ejecutar(job, () -> {
+            SimulacionResponse res = ejecutarEscenario1(cancelProb, job, motorRes, seedRes);
             job.resultado = res;
         });
         return job;
@@ -544,10 +569,16 @@ public class PlanificadorService {
      * Inicializa el estado del escenario 1. Debe llamarse antes de procesarSiguienteVentana().
      */
     public synchronized Map<String, Object> inicializarEscenario1(double cancelProb) {
+        return inicializarEscenario1(cancelProb, MOTOR_ALNS, null);
+    }
+
+    public synchronized Map<String, Object> inicializarEscenario1(double cancelProb, String motor, Long seed) {
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
+        String motorRes = resolverMotor(motor);
+        long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1(); // K=1 día a día
-        log.info("Escenario 1 — inicializando (K={}, cancelProb={}%) ...",
-                k, String.format("%.1f", cancelProb * 100));
+        log.info("Escenario 1 — inicializando motor={} seed={} (K={}, cancelProb={}%) ...",
+                motorRes, seedRes, k, String.format("%.1f", cancelProb * 100));
 
         sc1Graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         sc1Enrutador = new GreedyRepairOperator(sc1Graph);
@@ -559,6 +590,8 @@ public class PlanificadorService {
         sc1Backlog = crearBacklogSinPerdida();
         sc1Bloques = new ArrayList<>();
         sc1AuditAcc = new LinkedHashMap<>();
+        sc1Motor = motorRes;
+        sc1Seed = seedRes;
         sc1OdStats.clear();
 
         sc1Plan = construirPlanBloques(k);
@@ -566,10 +599,11 @@ public class PlanificadorService {
         if (cancelProb > 0.0 && !sc1Plan.isEmpty()) {
             long startDay = sc1Plan.get(0).scStart.toLocalDate().toEpochDay();
             long endDay = sc1Plan.get(sc1Plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
+            Random rngCancel = new Random(seedRes ^ 0x9E3779B97F4A7C15L);
             Set<Long> cancelados = FlightCancellationSimulator.generate(
-                    sc1Graph.edges, startDay, endDay, cancelProb);
+                    sc1Graph.edges, startDay, endDay, cancelProb, rngCancel);
             sc1Enrutador.setCancelledFlights(cancelados);
-            log.info("E1 listo: {} bloques, {} cancelaciones", sc1Plan.size(), cancelados.size());
+            log.info("E1 listo: {} bloques, {} cancelaciones (seed cancel)", sc1Plan.size(), cancelados.size());
         } else {
             log.info("E1 listo: {} bloques, sin cancelaciones", sc1Plan.size());
         }
@@ -577,7 +611,9 @@ public class PlanificadorService {
         return Map.of(
                 "estado", "inicializado",
                 "totalVentanas", sc1Plan.size(),
-                "ventanaActual", 0
+                "ventanaActual", 0,
+                "motor", motorRes,
+                "seed", seedRes
         );
     }
 
@@ -938,7 +974,8 @@ public class PlanificadorService {
         TemporalContext ctx = sc1Plan.get(sc1Idx);
         sc1Idx++;
 
-        ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog, sc1AuditAcc);
+        Random rngBloque = rngParaBloque(sc1Seed, sc1Motor, ctx.bloqueIdx);
+        ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog, sc1AuditAcc, sc1Motor, rngBloque);
         sc1Bloques.add(rv.bloque);
         sc1TaStats.acumular(ctx.taMs);
 
@@ -996,6 +1033,143 @@ public class PlanificadorService {
     public SimulacionResponse.BloqueSimulacion getBloqueEsc1(int index) {
         if (sc1Bloques == null || index < 0 || index >= sc1Bloques.size()) return null;
         return sc1Bloques.get(index);
+    }
+
+    /**
+     * Ejecuta el escenario 1 como un job continuo: K=1 día-a-día, sleep
+     * {@code Sa - Ta} entre bloques cuando {@code simularTiempoReal1=true}.
+     * Publica bloques incrementalmente vía {@code JobState.publicarBloque} y
+     * arma un {@link SimulacionResponse} agregado al final.
+     */
+    public SimulacionResponse ejecutarEscenario1(double cancelProb, JobState job, String motor, long seed) {
+        String motorRes = resolverMotor(motor);
+        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
+        int k = props.getScenario().getKDefault1();
+        int saMin = props.getScenario().getSaMinutos();
+        long taFijoMs = props.getScenario().getTaSegundos() * 1000L;
+        int scMin = Math.max(saMin, k * saMin);
+        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, cancelProb={}%, async={}) ...",
+                motorRes, seed, k, saMin, scMin,
+                String.format("%.1f", cancelProb * 100), job != null);
+        long inicio = System.currentTimeMillis();
+
+        List<TemporalContext> plan = construirPlanBloques(k);
+        if (plan.isEmpty()) {
+            bloquesCacheados = new ArrayList<>();
+            SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
+            r.setK(k);
+            r.setSaMinutos(saMin);
+            return r;
+        }
+
+        Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
+
+        int totalVuelosCancelados = 0;
+        if (cancelProb > 0.0) {
+            long startDay = plan.get(0).scStart.toLocalDate().toEpochDay();
+            long endDay = plan.get(plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
+            Random rngCancel = new Random(seed ^ 0x9E3779B97F4A7C15L);
+            Set<Long> cancelados = FlightCancellationSimulator.generate(
+                    graph.edges, startDay, endDay, cancelProb, rngCancel);
+            enrutador.setCancelledFlights(cancelados);
+            totalVuelosCancelados = cancelados.size();
+            log.info("E1 cancelaciones: {} vuelo-días (seed cancel)", totalVuelosCancelados);
+        }
+
+        List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(plan.size());
+        Map<String, int[]> odStats = new HashMap<>();
+        int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
+                totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
+        long totalMaletas = 0L;
+        TaStats taStats = new TaStats();
+        boolean simularTiempoReal = props.getScenario().isSimularTiempoReal1();
+        long saMs = saMin * 60_000L;
+        int totalBloques = plan.size();
+        BacklogManager backlog = crearBacklogSinPerdida();
+        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        int intervaloReporte = Math.max(1, totalBloques / 10);
+
+        for (TemporalContext ctx : plan) {
+            bloqueActual++;
+            Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
+
+            rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
+
+            bloques.add(rv.bloque);
+            taStats.acumular(ctx.taMs);
+
+            TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
+            totalEnvios = totales.envios();
+            totalEnrutadas = totales.enrutadas();
+            totalSinRuta = totales.sinRuta();
+            totalCumpleSLA = totales.cumpleSLA();
+            totalTardadas = totales.tardadas();
+            totalMaletas = totales.maletas();
+
+            if (job != null) {
+                job.bloqueActual = bloqueActual;
+                job.totalBloques = totalBloques;
+                job.taPromedioMs = taStats.promedio();
+                job.publicarBloque(rv.bloque);
+                if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
+                    log.info("E1 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
+                    break;
+                }
+            }
+
+            if (bloqueActual < plan.size()) {
+                double tasa = rv.envios > 0 ? (double) rv.sinRuta / rv.envios : 0.0;
+                plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
+            }
+
+            if (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques) {
+                log.info("Progreso E1 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
+                        motorRes,
+                        (int) Math.round(bloqueActual * 100.0 / totalBloques),
+                        bloqueActual, totalBloques,
+                        totalEnvios, totalMaletas,
+                        totalCumpleSLA, totalTardadas, totalSinRuta, ctx.taMs);
+            }
+
+            if (simularTiempoReal && bloqueActual < totalBloques) {
+                long dormirMs = saMs - ctx.taMs;
+                if (dormirMs > 0) {
+                    try {
+                        Thread.sleep(dormirMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.warn("E1 interrumpido en bloque {}/{}", bloqueActual, totalBloques);
+                        break;
+                    }
+                } else {
+                    log.warn("Ta={}ms > Sa={}ms en bloque {} — calibrar Ta hacia abajo", ctx.taMs, saMs, bloqueActual);
+                }
+            }
+        }
+
+        bloquesCacheados = bloques;
+        long tiempoMs = System.currentTimeMillis() - inicio;
+        log.info("E1 completado en {} ms — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms (Sa={} ms) | backlog: pico={} actual={} definitivo={}",
+                tiempoMs, bloques.size(), totalEnvios, totalMaletas,
+                totalCumpleSLA, totalTardadas, totalSinRuta,
+                taStats.min(), taStats.promedio(), taStats.max(), saMs,
+                backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
+        logDiagnosticos(odStats, graph, enrutador);
+
+        SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
+                dataLoader.getVuelos(), bloques.size(), plan.get(0).scStart.toLocalDate());
+        llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
+                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados, false, -1);
+        llenarMetricasTa(res.getMetricas(), taStats, saMs);
+        llenarMetricasBacklog(res.getMetricas(), backlog);
+        res.setK(k);
+        res.setSaMinutos(saMin);
+
+        publicarAuditoria(job, auditAcc);
+        return res;
     }
 
     // =========================================================

@@ -49,6 +49,8 @@ public class PlanificadorProperties {
         private double umbralColapso = 0.20;
         /** Tope absoluto de backlog que también dispara colapso por saturación. */
         private int umbralColapsoBacklog = 8000;
+        /** Si true, escenario 1 duerme (Sa - Ta) entre bloques. Por diseño (día a día). */
+        private boolean simularTiempoReal1 = true;
         /** Si true, escenario 2 duerme (Sa - Ta) entre bloques para simular tiempo real. */
         private boolean simularTiempoReal2 = true;
         /** Si true, escenario 3 también duerme entre bloques (no recomendado). */
