@@ -367,6 +367,56 @@ public class PlanificadorController {
         return ResponseEntity.ok(body);
     }
 
+    @GetMapping("/jobs/{jobId}/dashboard")
+    public ResponseEntity<Map<String, Object>> dashboardJob(@PathVariable String jobId) {
+        Map<String, Object> body = service.getDashboardJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/indicadores")
+    public ResponseEntity<Map<String, Object>> indicadoresJob(@PathVariable String jobId) {
+        Map<String, Object> body = service.getIndicadoresJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/vuelos/carga")
+    public ResponseEntity<Map<String, Object>> cargaVuelosJob(@PathVariable String jobId) {
+        Map<String, Object> body = service.getCargaVuelosJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/almacenes/ocupacion")
+    public ResponseEntity<Map<String, Object>> ocupacionAlmacenesJob(@PathVariable String jobId) {
+        Map<String, Object> body = service.getOcupacionAlmacenesJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/asignaciones")
+    public ResponseEntity<Map<String, Object>> asignacionesJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde,
+            @RequestParam(required = false) String aeropuerto,
+            @RequestParam(required = false) String vueloId,
+            @RequestParam(defaultValue = "false") boolean soloEnrutadas) {
+        Map<String, Object> body = service.getAsignacionesJob(jobId, desde, aeropuerto, vueloId, soloEnrutadas);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/demanda/resumen")
+    public ResponseEntity<Map<String, Object>> demandaResumen(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta,
+            @RequestParam(defaultValue = "20") int top) {
+        return ResponseEntity.ok(service.getDemandaResumen(desde, hasta, top));
+    }
+
     /**
      * Bloques publicados de forma incremental por el job (escenarios 2 y 3).
      *

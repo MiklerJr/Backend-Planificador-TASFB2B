@@ -88,6 +88,8 @@ public class SimulacionResponse {
         /** Acumulado entregado hasta horaFin, en maletas individuales reales. */
         private long maletasEntregadasAcum;
         private List<AsignacionMaleta> asignaciones;
+        private List<CargaVuelo> cargasVuelos;
+        private List<OcupacionAlmacen> ocupacionAlmacenes;
 
         // ── Modelo Ta/Sa: campos del eje real ──────────────────────────────
         /** Índice 0-based de este bloque en la simulación. */
@@ -133,5 +135,28 @@ public class SimulacionResponse {
         private String salidaLocal;
         /** ISO datetime sin offset (hora local del dataset). Aterrizaje del tramo. */
         private String llegadaLocal;
+    }
+
+    @Data
+    public static class CargaVuelo {
+        private String vueloId;
+        private String origen;
+        private String destino;
+        private String fechaSalida;
+        private String fechaLlegada;
+        private int capacidadMaxima;
+        private int cargaAsignada;
+        private double porcentajeCarga;
+        private String semaforo;
+    }
+
+    @Data
+    public static class OcupacionAlmacen {
+        private String aeropuerto;
+        private String fecha;
+        private int capacidadMaxima;
+        private int ocupacionAsignada;
+        private double porcentajeOcupacion;
+        private String semaforo;
     }
 }

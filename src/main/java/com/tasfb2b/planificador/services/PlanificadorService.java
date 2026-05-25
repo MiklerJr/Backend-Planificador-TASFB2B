@@ -321,6 +321,188 @@ public class PlanificadorService {
         return out;
     }
 
+    /**
+     * Read model liviano para dashboard operativo. No modifica el job ni fuerza
+     * recalculos del motor; usa el resultado final si existe o los bloques ya
+     * publicados si el job sigue corriendo.
+     */
+    public Map<String, Object> getDashboardJob(String jobId) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+
+        SimulacionResponse.Metricas metricas = job.resultado != null
+                ? job.resultado.getMetricas()
+                : metricasDesdeBloques(job.bloquesDesde(0));
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", job.getJobId());
+        body.put("escenario", job.getEscenario());
+        body.put("algoritmo", job.algoritmo);
+        body.put("estado", job.estado);
+        body.put("k", job.getK());
+        body.put("seed", job.seed);
+        if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
+        body.put("inicio", job.inicio.toString());
+        if (job.fin != null) body.put("fin", job.fin.toString());
+        body.put("progreso", job.getProgreso());
+        body.put("progresoWarmup", job.getProgresoWarmup());
+        body.put("bloqueActual", job.bloqueActual);
+        body.put("totalBloques", job.totalBloques);
+        body.put("bloquesPublicados", job.bloquesPublicados());
+        body.put("posicionEnCola", posicionEnCola(jobId));
+        body.put("canceladoPorUsuario", job.canceladoPorUsuario);
+        if (job.error != null) body.put("error", job.error);
+        body.put("metricas", metricas);
+        body.put("tasas", tasas(metricas));
+        body.put("ultimoBloque", ultimoBloqueResumen(job));
+        return body;
+    }
+
+    public Map<String, Object> getIndicadoresJob(String jobId) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", jobId);
+        body.put("umbrales", Map.of(
+                "verdeHasta", CostFunction.UMBRAL_VERDE,
+                "ambarHasta", CostFunction.UMBRAL_AMBAR
+        ));
+        body.put("vuelos", getCargaVuelosJob(jobId).get("vuelos"));
+        body.put("almacenes", getOcupacionAlmacenesJob(jobId).get("almacenes"));
+        return body;
+    }
+
+    public Map<String, Object> getCargaVuelosJob(String jobId) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+
+        List<Map<String, Object>> vuelos = new ArrayList<>();
+        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(0)) {
+            for (SimulacionResponse.CargaVuelo carga : cargasDelBloque(bloque)) {
+                Map<String, Object> row = cargaVueloToMap(carga);
+                row.put("bloqueIdx", bloque.getBloqueIdx());
+                row.put("horaInicio", bloque.getHoraInicio());
+                row.put("horaFin", bloque.getHoraFin());
+                vuelos.add(row);
+            }
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", jobId);
+        body.put("total", vuelos.size());
+        body.put("vuelos", vuelos);
+        return body;
+    }
+
+    public Map<String, Object> getOcupacionAlmacenesJob(String jobId) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+
+        List<Map<String, Object>> almacenes = new ArrayList<>();
+        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(0)) {
+            for (SimulacionResponse.OcupacionAlmacen ocupacion : ocupacionesDelBloque(bloque)) {
+                Map<String, Object> row = ocupacionAlmacenToMap(ocupacion);
+                row.put("bloqueIdx", bloque.getBloqueIdx());
+                row.put("horaInicio", bloque.getHoraInicio());
+                row.put("horaFin", bloque.getHoraFin());
+                almacenes.add(row);
+            }
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", jobId);
+        body.put("total", almacenes.size());
+        body.put("almacenes", almacenes);
+        return body;
+    }
+
+    public Map<String, Object> getAsignacionesJob(String jobId, int desde,
+                                                  String aeropuerto,
+                                                  String vueloId,
+                                                  boolean soloEnrutadas) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+
+        String aeropuertoNorm = normalizarCodigo(aeropuerto);
+        String vueloNorm = normalizarTexto(vueloId);
+        List<Map<String, Object>> asignaciones = new ArrayList<>();
+
+        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(desde)) {
+            if (bloque.getAsignaciones() == null) continue;
+            for (SimulacionResponse.AsignacionMaleta asignacion : bloque.getAsignaciones()) {
+                if (soloEnrutadas && !asignacion.isEnrutada()) continue;
+                if (aeropuertoNorm != null && !pasaFiltroAeropuerto(asignacion, aeropuertoNorm)) continue;
+                if (vueloNorm != null && !pasaFiltroVuelo(asignacion, vueloNorm)) continue;
+
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("bloqueIdx", bloque.getBloqueIdx());
+                row.put("horaInicio", bloque.getHoraInicio());
+                row.put("horaFin", bloque.getHoraFin());
+                row.put("asignacion", asignacion);
+                asignaciones.add(row);
+            }
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", jobId);
+        body.put("desde", Math.max(0, desde));
+        body.put("aeropuerto", aeropuertoNorm);
+        body.put("vueloId", vueloNorm);
+        body.put("soloEnrutadas", soloEnrutadas);
+        body.put("total", asignaciones.size());
+        body.put("asignaciones", asignaciones);
+        return body;
+    }
+
+    public Map<String, Object> getDemandaResumen(LocalDateTime desde,
+                                                 LocalDateTime hasta,
+                                                 int top) {
+        LocalDateTime primera = dataLoader.getPrimeraVentana();
+        LocalDateTime ultima = dataLoader.getUltimaVentana();
+        LocalDateTime inicio = desde != null ? desde : primera;
+        LocalDateTime fin = hasta != null ? hasta : (ultima != null ? ultima.plusMinutes(1) : null);
+        int limite = Math.max(1, Math.min(top <= 0 ? 20 : top, 200));
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("desde", inicio != null ? inicio.toString() : null);
+        body.put("hasta", fin != null ? fin.toString() : null);
+        body.put("top", limite);
+
+        if (inicio == null || fin == null || !inicio.isBefore(fin)) {
+            body.put("totalEnvios", 0);
+            body.put("totalMaletas", 0L);
+            body.put("porOrigen", List.of());
+            body.put("porDestino", List.of());
+            body.put("porOD", List.of());
+            return body;
+        }
+
+        Map<String, long[]> porOrigen = new HashMap<>();
+        Map<String, long[]> porDestino = new HashMap<>();
+        Map<String, long[]> porOd = new HashMap<>();
+        long totalMaletas = 0L;
+        int totalEnvios = 0;
+
+        for (Maleta maleta : dataLoader.getMaletasEnRango(inicio, fin)) {
+            String origen = maleta.getAeropuertoOrigen() != null ? maleta.getAeropuertoOrigen().getCodigo() : "";
+            String destino = maleta.getAeropuertoDestino() != null ? maleta.getAeropuertoDestino().getCodigo() : "";
+            long cantidad = maleta.getCantidad() != null ? maleta.getCantidad() : 0L;
+            totalEnvios++;
+            totalMaletas += cantidad;
+            acumularDemanda(porOrigen, origen, cantidad);
+            acumularDemanda(porDestino, destino, cantidad);
+            acumularDemanda(porOd, origen + "->" + destino, cantidad);
+        }
+
+        body.put("totalEnvios", totalEnvios);
+        body.put("totalMaletas", totalMaletas);
+        body.put("porOrigen", demandaRows(porOrigen, limite));
+        body.put("porDestino", demandaRows(porDestino, limite));
+        body.put("porOD", demandaRows(porOd, limite));
+        return body;
+    }
+
     // =========================================================
     // Escenario 2: Simulación de período (batch completo)
     // =========================================================
@@ -1494,6 +1676,8 @@ public class PlanificadorService {
         // 3. Motor: ALNS (Greedy + Dijkstra + ALNS) o ACO (AlgorithmACO por batch).
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
+        Map<Long, Integer> telemetryFlight = blockFlight;
+        Map<Long, Integer> telemetryAirport = blockAirport;
         List<LuggageBatch> finalBatches;
 
         // Presupuesto de tiempo Ta — variable del modelo (configurable, NO medida).
@@ -1550,7 +1734,9 @@ public class PlanificadorService {
 
                 alns.run(iteraciones);
                 finalBatches = alns.getBestSolution().getBatches();
-                enrutador.commitBlock(alns.getBestBlockFlight(), alns.getBestBlockAirport());
+                telemetryFlight = alns.getBestBlockFlight();
+                telemetryAirport = alns.getBestBlockAirport();
+                enrutador.commitBlock(telemetryFlight, telemetryAirport);
             } else {
                 finalBatches = bloqueBatches;
                 enrutador.commitBlock(blockFlight, blockAirport);
@@ -1624,6 +1810,8 @@ public class PlanificadorService {
         bloque.setMaletasProcesadas(finalBatches.size());
         bloque.setMaletasEnrutadas(enrutadas);
         bloque.setAsignaciones(asignaciones);
+        bloque.setCargasVuelos(buildCargasVuelos(telemetryFlight, graph));
+        bloque.setOcupacionAlmacenes(buildOcupacionAlmacenes(telemetryAirport, graph));
         bloque.setBloqueIdx(ctx.bloqueIdx);
         bloque.setTaMs(ctx.taMs);
         bloque.setScMinutos(ctx.scMinutos);
@@ -1865,6 +2053,352 @@ public class PlanificadorService {
         log.info("=======================");
     }
 
+    private SimulacionResponse.Metricas metricasDesdeBloques(List<SimulacionResponse.BloqueSimulacion> bloques) {
+        SimulacionResponse.Metricas m = new SimulacionResponse.Metricas();
+        if (bloques == null || bloques.isEmpty()) return m;
+
+        int procesadas = 0;
+        int enrutadas = 0;
+        int cumpleSla = 0;
+        long maletas = 0L;
+        long taMin = Long.MAX_VALUE;
+        long taMax = 0L;
+        long taTotal = 0L;
+        int taCount = 0;
+
+        for (SimulacionResponse.BloqueSimulacion bloque : bloques) {
+            procesadas += bloque.getMaletasProcesadas();
+            enrutadas += bloque.getMaletasEnrutadas();
+            if (bloque.getAsignaciones() != null) {
+                for (SimulacionResponse.AsignacionMaleta a : bloque.getAsignaciones()) {
+                    maletas += a.getCantidad();
+                    if (a.isEnrutada() && a.isCumpleSLA()) cumpleSla++;
+                }
+            }
+            if (bloque.getTaMs() > 0) {
+                taMin = Math.min(taMin, bloque.getTaMs());
+                taMax = Math.max(taMax, bloque.getTaMs());
+                taTotal += bloque.getTaMs();
+                taCount++;
+            }
+        }
+
+        m.setProcesadas(procesadas);
+        m.setEnrutadas(enrutadas);
+        m.setSinRuta(Math.max(0, procesadas - enrutadas));
+        m.setCumpleSLA(cumpleSla);
+        m.setTardadas(enrutadas - cumpleSla);
+        m.setMaletasIndividuales(maletas);
+        if (taCount > 0) {
+            m.setTaMinMs(taMin);
+            m.setTaMaxMs(taMax);
+            m.setTaPromedioMs(taTotal / taCount);
+            m.setTiempoTotalAlgMs(taTotal);
+        }
+        return m;
+    }
+
+    private static Map<String, Object> tasas(SimulacionResponse.Metricas m) {
+        Map<String, Object> tasas = new LinkedHashMap<>();
+        int procesadas = m != null ? m.getProcesadas() : 0;
+        tasas.put("enrutamientoPct", porcentaje(m != null ? m.getEnrutadas() : 0, procesadas));
+        tasas.put("sinRutaPct", porcentaje(m != null ? m.getSinRuta() : 0, procesadas));
+        tasas.put("cumpleSlaPct", porcentaje(m != null ? m.getCumpleSLA() : 0, procesadas));
+        tasas.put("tardadasPct", porcentaje(m != null ? m.getTardadas() : 0, procesadas));
+        return tasas;
+    }
+
+    private static Map<String, Object> ultimoBloqueResumen(JobState job) {
+        if (job == null || job.bloquesPublicados() == 0) return null;
+        List<SimulacionResponse.BloqueSimulacion> ultimos =
+                job.bloquesDesde(job.bloquesPublicados() - 1);
+        if (ultimos.isEmpty()) return null;
+        SimulacionResponse.BloqueSimulacion b = ultimos.get(0);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("bloqueIdx", b.getBloqueIdx());
+        out.put("horaInicio", b.getHoraInicio());
+        out.put("horaFin", b.getHoraFin());
+        out.put("maletasProcesadas", b.getMaletasProcesadas());
+        out.put("maletasEnrutadas", b.getMaletasEnrutadas());
+        out.put("maletasProcesadasAcum", b.getMaletasProcesadasAcum());
+        out.put("maletasEnrutadasAcum", b.getMaletasEnrutadasAcum());
+        out.put("maletasEntregadasAcum", b.getMaletasEntregadasAcum());
+        out.put("taMs", b.getTaMs());
+        out.put("scMinutos", b.getScMinutos());
+        return out;
+    }
+
+    private List<SimulacionResponse.CargaVuelo> cargasDelBloque(SimulacionResponse.BloqueSimulacion bloque) {
+        if (bloque == null) return List.of();
+        if (bloque.getCargasVuelos() != null && !bloque.getCargasVuelos().isEmpty()) {
+            return bloque.getCargasVuelos();
+        }
+        return derivarCargasDesdeAsignaciones(bloque);
+    }
+
+    private List<SimulacionResponse.OcupacionAlmacen> ocupacionesDelBloque(SimulacionResponse.BloqueSimulacion bloque) {
+        if (bloque == null) return List.of();
+        if (bloque.getOcupacionAlmacenes() != null && !bloque.getOcupacionAlmacenes().isEmpty()) {
+            return bloque.getOcupacionAlmacenes();
+        }
+        return derivarOcupacionesDesdeAsignaciones(bloque);
+    }
+
+    private List<SimulacionResponse.CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Graph graph) {
+        if (blockFlight == null || blockFlight.isEmpty() || graph == null) return List.of();
+
+        Map<Integer, Edge> edgesByIdx = new HashMap<>();
+        for (Edge edge : graph.edges) edgesByIdx.put(edge.idx, edge);
+
+        List<SimulacionResponse.CargaVuelo> out = new ArrayList<>();
+        for (Map.Entry<Long, Integer> entry : blockFlight.entrySet()) {
+            int carga = entry.getValue();
+            if (carga <= 0) continue;
+            Edge edge = edgesByIdx.get(resourceIdx(entry.getKey()));
+            if (edge == null) continue;
+
+            LocalDateTime salida = LocalDate.ofEpochDay(epochDay(entry.getKey()))
+                    .atStartOfDay()
+                    .plusMinutes(edge.depMinuteOfDay);
+            LocalDateTime llegada = salida.plusMinutes(edge.durationMinutes);
+
+            SimulacionResponse.CargaVuelo dto = new SimulacionResponse.CargaVuelo();
+            dto.setVueloId(edge.id);
+            dto.setOrigen(edge.from != null ? edge.from.code : "");
+            dto.setDestino(edge.to != null ? edge.to.code : "");
+            dto.setFechaSalida(salida.toString());
+            dto.setFechaLlegada(llegada.toString());
+            dto.setCapacidadMaxima(edge.capacity);
+            dto.setCargaAsignada(carga);
+            completarCargaVuelo(dto);
+            out.add(dto);
+        }
+        out.sort(Comparator.comparing(SimulacionResponse.CargaVuelo::getFechaSalida)
+                .thenComparing(SimulacionResponse.CargaVuelo::getVueloId));
+        return out;
+    }
+
+    private List<SimulacionResponse.OcupacionAlmacen> buildOcupacionAlmacenes(Map<Long, Integer> blockAirport,
+                                                                               Graph graph) {
+        if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
+
+        Map<Integer, Node> nodesByIdx = new HashMap<>();
+        for (Node node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
+
+        List<SimulacionResponse.OcupacionAlmacen> out = new ArrayList<>();
+        for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
+            int ocupacion = entry.getValue();
+            if (ocupacion <= 0) continue;
+            Node node = nodesByIdx.get(resourceIdx(entry.getKey()));
+            if (node == null) continue;
+
+            SimulacionResponse.OcupacionAlmacen dto = new SimulacionResponse.OcupacionAlmacen();
+            dto.setAeropuerto(node.code);
+            dto.setFecha(LocalDate.ofEpochDay(epochDay(entry.getKey())).toString());
+            dto.setCapacidadMaxima(node.capacity);
+            dto.setOcupacionAsignada(ocupacion);
+            completarOcupacionAlmacen(dto);
+            out.add(dto);
+        }
+        out.sort(Comparator.comparing(SimulacionResponse.OcupacionAlmacen::getFecha)
+                .thenComparing(SimulacionResponse.OcupacionAlmacen::getAeropuerto));
+        return out;
+    }
+
+    private List<SimulacionResponse.CargaVuelo> derivarCargasDesdeAsignaciones(
+            SimulacionResponse.BloqueSimulacion bloque) {
+        if (bloque == null || bloque.getAsignaciones() == null) return List.of();
+        Map<String, Integer> capacidades = capacidadesVuelosPorId();
+        Map<String, SimulacionResponse.CargaVuelo> acc = new LinkedHashMap<>();
+
+        for (SimulacionResponse.AsignacionMaleta asignacion : bloque.getAsignaciones()) {
+            if (!asignacion.isEnrutada() || asignacion.getTramos() == null) continue;
+            for (SimulacionResponse.TramoRuta tramo : asignacion.getTramos()) {
+                String vueloId = safe(tramo.getVueloId());
+                String salida = safe(tramo.getSalidaLocal());
+                String key = vueloId + "|" + salida;
+                SimulacionResponse.CargaVuelo dto = acc.computeIfAbsent(key, k -> {
+                    SimulacionResponse.CargaVuelo nuevo = new SimulacionResponse.CargaVuelo();
+                    nuevo.setVueloId(vueloId);
+                    nuevo.setOrigen(safe(tramo.getOrigen()));
+                    nuevo.setDestino(safe(tramo.getDestino()));
+                    nuevo.setFechaSalida(salida);
+                    nuevo.setFechaLlegada(safe(tramo.getLlegadaLocal()));
+                    nuevo.setCapacidadMaxima(capacidades.getOrDefault(vueloId, 0));
+                    return nuevo;
+                });
+                dto.setCargaAsignada(dto.getCargaAsignada() + asignacion.getCantidad());
+            }
+        }
+
+        acc.values().forEach(PlanificadorService::completarCargaVuelo);
+        return new ArrayList<>(acc.values());
+    }
+
+    private List<SimulacionResponse.OcupacionAlmacen> derivarOcupacionesDesdeAsignaciones(
+            SimulacionResponse.BloqueSimulacion bloque) {
+        if (bloque == null || bloque.getAsignaciones() == null) return List.of();
+        Map<String, Integer> capacidades = capacidadesAlmacenPorCodigo();
+        Map<String, SimulacionResponse.OcupacionAlmacen> acc = new LinkedHashMap<>();
+
+        for (SimulacionResponse.AsignacionMaleta asignacion : bloque.getAsignaciones()) {
+            if (!asignacion.isEnrutada()
+                    || asignacion.getTramos() == null
+                    || asignacion.getTramos().isEmpty()) continue;
+
+            SimulacionResponse.TramoRuta ultimo =
+                    asignacion.getTramos().get(asignacion.getTramos().size() - 1);
+            String aeropuerto = safe(ultimo.getDestino());
+            String fecha = fechaDe(ultimo.getLlegadaLocal());
+            String key = aeropuerto + "|" + fecha;
+            SimulacionResponse.OcupacionAlmacen dto = acc.computeIfAbsent(key, k -> {
+                SimulacionResponse.OcupacionAlmacen nuevo = new SimulacionResponse.OcupacionAlmacen();
+                nuevo.setAeropuerto(aeropuerto);
+                nuevo.setFecha(fecha);
+                nuevo.setCapacidadMaxima(capacidades.getOrDefault(aeropuerto, 0));
+                return nuevo;
+            });
+            dto.setOcupacionAsignada(dto.getOcupacionAsignada() + asignacion.getCantidad());
+        }
+
+        acc.values().forEach(PlanificadorService::completarOcupacionAlmacen);
+        return new ArrayList<>(acc.values());
+    }
+
+    private Map<String, Integer> capacidadesVuelosPorId() {
+        Map<String, Integer> out = new HashMap<>();
+        for (Vuelo vuelo : dataLoader.getVuelos()) {
+            out.put(vueloFrontId(vuelo), vuelo.getCapacidad() != null ? vuelo.getCapacidad() : 0);
+        }
+        return out;
+    }
+
+    private Map<String, Integer> capacidadesAlmacenPorCodigo() {
+        Map<String, Integer> out = new HashMap<>();
+        for (Aeropuerto aeropuerto : dataLoader.getAeropuertos()) {
+            out.put(aeropuerto.getCodigo(), aeropuerto.getCapacidad() != null ? aeropuerto.getCapacidad() : 0);
+        }
+        return out;
+    }
+
+    private static void completarCargaVuelo(SimulacionResponse.CargaVuelo dto) {
+        double porcentaje = porcentaje(dto.getCargaAsignada(), dto.getCapacidadMaxima());
+        dto.setPorcentajeCarga(porcentaje);
+        dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
+    }
+
+    private static void completarOcupacionAlmacen(SimulacionResponse.OcupacionAlmacen dto) {
+        double porcentaje = porcentaje(dto.getOcupacionAsignada(), dto.getCapacidadMaxima());
+        dto.setPorcentajeOcupacion(porcentaje);
+        dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
+    }
+
+    private static Map<String, Object> cargaVueloToMap(SimulacionResponse.CargaVuelo c) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("vueloId", c.getVueloId());
+        out.put("origen", c.getOrigen());
+        out.put("destino", c.getDestino());
+        out.put("fechaSalida", c.getFechaSalida());
+        out.put("fechaLlegada", c.getFechaLlegada());
+        out.put("capacidadMaxima", c.getCapacidadMaxima());
+        out.put("cargaAsignada", c.getCargaAsignada());
+        out.put("porcentajeCarga", c.getPorcentajeCarga());
+        out.put("semaforo", c.getSemaforo());
+        return out;
+    }
+
+    private static Map<String, Object> ocupacionAlmacenToMap(SimulacionResponse.OcupacionAlmacen o) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("aeropuerto", o.getAeropuerto());
+        out.put("fecha", o.getFecha());
+        out.put("capacidadMaxima", o.getCapacidadMaxima());
+        out.put("ocupacionAsignada", o.getOcupacionAsignada());
+        out.put("porcentajeOcupacion", o.getPorcentajeOcupacion());
+        out.put("semaforo", o.getSemaforo());
+        return out;
+    }
+
+    private static boolean pasaFiltroAeropuerto(SimulacionResponse.AsignacionMaleta a, String aeropuerto) {
+        if (aeropuerto.equalsIgnoreCase(safe(a.getOrigen()))
+                || aeropuerto.equalsIgnoreCase(safe(a.getDestino()))) return true;
+        if (a.getTramos() == null) return false;
+        for (SimulacionResponse.TramoRuta tramo : a.getTramos()) {
+            if (aeropuerto.equalsIgnoreCase(safe(tramo.getOrigen()))
+                    || aeropuerto.equalsIgnoreCase(safe(tramo.getDestino()))) return true;
+        }
+        return false;
+    }
+
+    private static boolean pasaFiltroVuelo(SimulacionResponse.AsignacionMaleta a, String vueloId) {
+        if (a.getTramos() == null) return false;
+        for (SimulacionResponse.TramoRuta tramo : a.getTramos()) {
+            if (vueloId.equalsIgnoreCase(safe(tramo.getVueloId()))) return true;
+        }
+        return false;
+    }
+
+    private static void acumularDemanda(Map<String, long[]> acc, String key, long cantidad) {
+        long[] stats = acc.computeIfAbsent(safe(key), k -> new long[2]);
+        stats[0]++;
+        stats[1] += cantidad;
+    }
+
+    private static List<Map<String, Object>> demandaRows(Map<String, long[]> acc, int limite) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        acc.entrySet().stream()
+                .sorted((a, b) -> {
+                    int byMaletas = Long.compare(b.getValue()[1], a.getValue()[1]);
+                    if (byMaletas != 0) return byMaletas;
+                    return Long.compare(b.getValue()[0], a.getValue()[0]);
+                })
+                .limit(limite)
+                .forEach(e -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("clave", e.getKey());
+                    row.put("envios", e.getValue()[0]);
+                    row.put("maletas", e.getValue()[1]);
+                    rows.add(row);
+                });
+        return rows;
+    }
+
+    private static int resourceIdx(long key) {
+        return (int) (key >> FlightKeyEncoder.DAY_BITS);
+    }
+
+    private static long epochDay(long key) {
+        return key & FlightKeyEncoder.DAY_MASK;
+    }
+
+    private static double porcentaje(long valor, long total) {
+        if (total <= 0) return 0.0;
+        return Math.round((valor * 10000.0) / total) / 100.0;
+    }
+
+    private static String semaforoPorPorcentaje(double porcentaje) {
+        double ratio = porcentaje / 100.0;
+        if (ratio <= CostFunction.UMBRAL_VERDE) return "VERDE";
+        if (ratio <= CostFunction.UMBRAL_AMBAR) return "AMBAR";
+        return "ROJO";
+    }
+
+    private static String normalizarCodigo(String value) {
+        String text = normalizarTexto(value);
+        return text != null ? text.toUpperCase() : null;
+    }
+
+    private static String normalizarTexto(String value) {
+        if (value == null) return null;
+        String text = value.trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static String fechaDe(String isoDateTime) {
+        if (isoDateTime == null || isoDateTime.isBlank()) return "";
+        int t = isoDateTime.indexOf('T');
+        return t > 0 ? isoDateTime.substring(0, t) : isoDateTime;
+    }
+
     // =========================================================
     // Helpers de respuesta
     // =========================================================
@@ -1886,11 +2420,13 @@ public class PlanificadorService {
         Map<String, SimulacionResponse.AeropuertoDTO> infoAero = new HashMap<>();
         for (Vuelo v : vuelosReales) {
             SimulacionResponse.VueloBackend vb = new SimulacionResponse.VueloBackend();
-            vb.setId(String.valueOf(v.getId()));
+            vb.setId(vueloFrontId(v));
             vb.setOrigen(v.getOrigen());
             vb.setDestino(v.getDestino());
             vb.setFechaSalida(v.getFechaHoraSalida().plusDays(dayShift).toString());
             vb.setFechaLlegada(v.getFechaHoraLlegada().plusDays(dayShift).toString());
+            vb.setCapacidadMaxima(v.getCapacidad() != null ? v.getCapacidad() : 0);
+            vb.setCargaAsignada(0);
             vuelosFront.add(vb);
             agregarInfoAeropuerto(infoAero, v.getOrigen(), v.getAeropuertoOrigen());
             agregarInfoAeropuerto(infoAero, v.getDestino(), v.getAeropuertoDestino());
@@ -2013,6 +2549,15 @@ public class PlanificadorService {
                 safe(b.getDestCode()),
                 b.getReadyTime() != null ? b.getReadyTime().toString() : "",
                 String.valueOf(b.getQuantity()));
+    }
+
+    private static String vueloFrontId(Vuelo v) {
+        if (v == null) return "";
+        if (v.getId() != null) return v.getId().toString();
+        String origen = v.getAeropuertoOrigen() != null ? v.getAeropuertoOrigen().getCodigo() : safe(v.getOrigen());
+        String destino = v.getAeropuertoDestino() != null ? v.getAeropuertoDestino().getCodigo() : safe(v.getDestino());
+        String salida = v.getFechaHoraSalida() != null ? v.getFechaHoraSalida().toLocalTime().toString() : "";
+        return origen + "-" + destino + "-" + salida;
     }
 
     private static String safe(String value) {
