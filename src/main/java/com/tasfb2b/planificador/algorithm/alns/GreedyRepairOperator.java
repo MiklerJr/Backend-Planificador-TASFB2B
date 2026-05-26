@@ -351,6 +351,33 @@ public class GreedyRepairOperator implements RepairOperator {
         return toEpochMin(dt);
     }
 
+    /**
+     * Fast path para motores externos (ACO): intenta resolver el batch con el
+     * mismo Dijkstra earliest-arrival que usa el {@code repair()} del ALNS.
+     * Si encuentra ruta, asigna {@code assignedRoute}, {@code assignedDepartures}
+     * y {@code cumpleSLA} al batch y retorna {@code true}. NO aplica el bloque
+     * — el caller debe invocar {@link #aplicarAsignacionBloque} cuando decida
+     * confirmar la asignación.
+     *
+     * <p>Pensado para que {@code AcoBlockEngine} ejerza Dijkstra-first y reserve
+     * la corrida completa de ACO para casos donde Dijkstra no logra ruta o no
+     * cumple SLA. La earliest-arrival devuelta también es óptima en tiempo de
+     * tránsito, por lo que cuando cumple SLA es la mejor ruta posible.
+     *
+     * @return {@code true} si se asignó ruta (mire {@code batch.isCumpleSLA()}
+     * para saber si la ruta es on-time o tardía).
+     */
+    public boolean intentarDijkstraDirecto(LuggageBatch batch,
+                                            Map<Long, Integer> blockFlight,
+                                            Map<Long, Integer> blockAirport) {
+        RouteResult r = findShortestPath(batch, blockFlight, blockAirport);
+        if (r == null || r.edges == null || r.edges.isEmpty()) return false;
+        batch.setAssignedRoute(r.edges);
+        batch.setAssignedDepartures(r.actualDepartures);
+        batch.setCumpleSLA(r.cumpleSLA);
+        return true;
+    }
+
     private static long flightKey(int edgeIdx, long epochMin) {
         return FlightKeyEncoder.flightKey(edgeIdx, epochMin);
     }

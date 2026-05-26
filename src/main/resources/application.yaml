@@ -22,7 +22,7 @@ data:
 planificador:
   scenario:
     sa-minutos: 5                       # Salto del algoritmo (Sa, en min)
-    ta-segundos: 30                     # Tiempo de algoritmo (Ta) FIJO por bloque. Debe ser < Sa·60.
+    ta-segundos: 10                     # Tiempo de algoritmo (Ta) FIJO por bloque. Debe ser < Sa·60.
                                         # Cada bloque corre Ta segundos y duerme (Sa·60 - Ta) → wall-clock = Sa.
 
     # Acota la simulación a un número máximo de ventanas de Sa minutos.

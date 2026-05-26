@@ -1,9 +1,8 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 
 /**
@@ -30,17 +29,37 @@ public class AlgorithmACO {
 
     private final Graph graph;
     private final ConfigACO config;
-    private final CostFunction.EnvioContext envioContext;
+    private CostFunction.EnvioContext envioContext;
     private AcoRouteEvaluator routeEvaluator;
-    private Map<Edge, Double> localPheromones;
     private static final int TOP_K_CANDIDATES = 8;
     private static final double GOOD_ENOUGH_COST = 360.0;
 
+    // Hot path: feromonas locales del modo PRODUCCIÓN se mantienen en un double[]
+    // indexado por edge.idx en vez de Map<Edge,Double>, evitando hashing/boxing.
+    // dirtyList registra los idx que se han tocado, así evaporación y clamping
+    // solo iteran sobre lo modificado y el reset entre corridas es O(dirtyCount).
+    private double[] localPheromonesByIdx;
+    private boolean[] localDirtyFlag;
+    private int[] localDirtyList;
+    private int localDirtyCount;
+
     private final List<Ant> ants = new ArrayList<>();
+    private final Ant mejorGlobalReused = new Ant();
+    private final Ant heuristicaAnt = new Ant();
     private Ant mejorGlobal = null;
     private double mejorCostoGlobal = Double.MAX_VALUE;
     private Random rng = new Random();
     private long deadlineNano = Long.MAX_VALUE;
+
+    // Buffer reutilizable para candidatos en buildSolution/buscarRutaGreedy.
+    // Evita ArrayList<Candidate> y new Candidate(...) en el inner loop.
+    private Candidate[] candidates = new Candidate[32];
+    private int candidatesCount;
+    // Buffer reutilizable para la secuencia de Transition de la hormiga actual.
+    // Se limpia al inicio de buildSolution/buscarRutaGreedy y se descarta tras
+    // pasarlo a routeCost; no se comparte entre hormigas concurrentes (ACO es
+    // secuencial por construcción dentro de cada run).
+    private final ArrayList<AcoRouteEvaluator.Transition> transitionsBuffer = new ArrayList<>();
 
     public AlgorithmACO(Graph graph, ConfigACO config, CostFunction.EnvioContext envioContext) {
         this.graph = graph;
@@ -50,6 +69,7 @@ public class AlgorithmACO {
         for (int i = 0; i < config.antCount; i++) {
             ants.add(new Ant());
         }
+        prepararArrayFeromonas();
     }
 
     public void setRandom(Random rng) {
@@ -64,11 +84,25 @@ public class AlgorithmACO {
         this.deadlineNano = deadlineNano > 0 ? deadlineNano : Long.MAX_VALUE;
     }
 
+    /**
+     * Permite reutilizar una instancia de {@code AlgorithmACO} entre batches sin
+     * reasignar hormigas, buffers, ni el array de feromonas. Llamar antes de
+     * {@link #run(String, String)} con el contexto del nuevo batch.
+     */
+    public void setEnvioContext(CostFunction.EnvioContext envioContext) {
+        this.envioContext = envioContext;
+    }
+
     public void run(String start, String end) {
         Node startNode = graph.nodes.get(start);
         Node endNode = graph.nodes.get(end);
         if (startNode == null || endNode == null) return;
         if (timeExpired()) return;
+
+        // Reset entre corridas para que la instancia pueda ser reusada (ver AcoBlockEngine).
+        mejorGlobal = null;
+        mejorCostoGlobal = Double.MAX_VALUE;
+        resetLocalPheromones();
 
         if (buscarMejorDirecto(startNode, endNode)) return;
         if (timeExpired()) return;
@@ -76,10 +110,8 @@ public class AlgorithmACO {
         if (routeEvaluator == null) {
             inicializarFeromonas();
             precomputarHeuristicas();
-        } else {
-            localPheromones = new HashMap<>();
         }
-        
+
         int sinMejora = 0;
 
         if (routeEvaluator != null) {
@@ -100,7 +132,7 @@ public class AlgorithmACO {
 
                 if (cumpleRestricciones(ant) && ant.totalCost < mejorCostoGlobal) {
                     mejorCostoGlobal = ant.totalCost;
-                    mejorGlobal = copiarAnt(ant);
+                    actualizarMejorGlobal(ant);
                     huboMejora = true;
                     if (routeEvaluator != null && isGoodEnough(mejorGlobal)) return;
                 }
@@ -125,7 +157,7 @@ public class AlgorithmACO {
                 && cumpleRestricciones(mejorPostGreedy)
                 && mejorPostGreedy.totalCost < mejorCostoGlobal) {
             mejorCostoGlobal = mejorPostGreedy.totalCost;
-            mejorGlobal = copiarAnt(mejorPostGreedy);
+            actualizarMejorGlobal(mejorPostGreedy);
         }
     }
 
@@ -168,11 +200,13 @@ public class AlgorithmACO {
 
         if (mejorEdge == null) return false;
 
-        mejorGlobal = new Ant();
-        mejorGlobal.addNode(startNode);
-        mejorGlobal.addNode(endNode);
-        mejorGlobal.edgesPath.add(mejorEdge);
-        mejorGlobal.totalCost = mejorCosto;
+        Ant dst = mejorGlobalReused;
+        dst.reset();
+        dst.addNode(startNode);
+        dst.addNode(endNode);
+        dst.edgesPath.add(mejorEdge);
+        dst.totalCost = mejorCosto;
+        mejorGlobal = dst;
         mejorCostoGlobal = mejorCosto;
         return routeEvaluator == null || mejorOnTime;
     }
@@ -187,11 +221,13 @@ public class AlgorithmACO {
         start.storeLoad(envioContext.cantidadMaletas);
 
         Node current = start;
-        Ant ant = new Ant();
+        Ant ant = ants.get(0);
+        ant.reset();
         ant.addNode(current);
         Edge lastEdge = null;
         long currentArrivalMin = routeEvaluator != null ? routeEvaluator.initialReadyMin() : 0L;
-        List<AcoRouteEvaluator.Transition> transitions = new ArrayList<>();
+        List<AcoRouteEvaluator.Transition> transitions = transitionsBuffer;
+        transitions.clear();
 
         while (!current.equals(end)) {
             if (timeExpired()) break;
@@ -250,13 +286,9 @@ public class AlgorithmACO {
             ant.totalCost = routeEvaluator != null
                     ? routeEvaluator.routeCost(ant.edgesPath, transitions)
                     : CostFunction.calcularCostoRuta(ant, graph.edges, ant.edgesPath, envioContext);
-            Ant a = ants.get(0);
-            a.path = new ArrayList<>(ant.path);
-            a.edgesPath = new ArrayList<>(ant.edgesPath);
-            a.totalCost = ant.totalCost;
-            if (cumpleRestricciones(a) && a.totalCost < mejorCostoGlobal) {
-                mejorCostoGlobal = a.totalCost;
-                mejorGlobal = copiarAnt(a);
+            if (cumpleRestricciones(ant) && ant.totalCost < mejorCostoGlobal) {
+                mejorCostoGlobal = ant.totalCost;
+                actualizarMejorGlobal(ant);
             }
         }
     }
@@ -286,7 +318,8 @@ public class AlgorithmACO {
         ant.addNode(current);
         Edge lastEdge = null;
         long currentArrivalMin = routeEvaluator != null ? routeEvaluator.initialReadyMin() : 0L;
-        List<AcoRouteEvaluator.Transition> transitions = new ArrayList<>();
+        List<AcoRouteEvaluator.Transition> transitions = transitionsBuffer;
+        transitions.clear();
         int maxEscalas = 10;
         int escalas = 0;
         boolean llego = false;
@@ -296,29 +329,38 @@ public class AlgorithmACO {
             List<Edge> options = graph.getEdgesFrom(current.code);
             if (options.isEmpty()) break;
 
-            List<Candidate> validOptions = new ArrayList<>();
-            for (Edge e : options) {
+            candidatesCount = 0;
+            int optSize = options.size();
+            int demanda = envioContext.cantidadMaletas;
+            for (int i = 0; i < optSize; i++) {
+                Edge e = options.get(i);
                 if (ant.visited(e.to)) continue;
+                // Pre-filter por capacidad física del vuelo: ahorra el cache
+                // lookup del evaluator y la verificación detallada de capacidad
+                // cuando la demanda nominal ya excede la capacidad del avión.
+                if (e.capacity > 0 && e.capacity < demanda) continue;
 
+                AcoRouteEvaluator.Transition transition = null;
                 if (routeEvaluator != null) {
-                    AcoRouteEvaluator.Transition transition = routeEvaluator.evaluate(e, currentArrivalMin, ant.edgesPath.size());
+                    transition = routeEvaluator.evaluate(e, currentArrivalMin, ant.edgesPath.size());
                     if (transition == null) continue;
-                    validOptions.add(new Candidate(e, transition));
                 } else {
-                    if (!e.hasCapacity(envioContext.cantidadMaletas)) continue;
-                    if (!e.to.hasStorageCapacity(envioContext.cantidadMaletas)) continue;
+                    if (!e.hasCapacity(demanda)) continue;
+                    if (!e.to.hasStorageCapacity(demanda)) continue;
                     if (lastEdge != null && !CostFunction.tieneTiempoMinimoEscala(lastEdge, e)) continue;
-                    validOptions.add(new Candidate(e, null));
                 }
+                addCandidate(e, transition);
             }
 
-            if (validOptions.isEmpty() || escalas >= maxEscalas) break;
-            if (useTopK && validOptions.size() > TOP_K_CANDIDATES) {
-                validOptions.sort((a, b) -> Double.compare(weightOf(b), weightOf(a)));
-                validOptions = new ArrayList<>(validOptions.subList(0, TOP_K_CANDIDATES));
+            if (candidatesCount == 0 || escalas >= maxEscalas) break;
+            if (useTopK && candidatesCount > TOP_K_CANDIDATES) {
+                // Sort in-place sobre el buffer; sin alocar sublistas ni copias.
+                Arrays.sort(candidates, 0, candidatesCount,
+                        (a, b) -> Double.compare(weightOf(b), weightOf(a)));
+                candidatesCount = TOP_K_CANDIDATES;
             }
 
-            Candidate chosen = selectEdge(validOptions);
+            Candidate chosen = selectEdge(candidatesCount);
             if (chosen == null) break;
 
             current.releaseLoad(envioContext.cantidadMaletas);
@@ -340,7 +382,7 @@ public class AlgorithmACO {
             lastEdge = chosen.edge;
             escalas++;
 
-            // JFLXX: La hormiga actualiza su reloj al aterrizar
+            // La hormiga actualiza su reloj al aterrizar
             ant.horaLlegadaActual = chosen.edge.arrivalTime;
         }
 
@@ -359,19 +401,32 @@ public class AlgorithmACO {
         }
     }
 
+    private void addCandidate(Edge edge, AcoRouteEvaluator.Transition transition) {
+        if (candidatesCount == candidates.length) {
+            candidates = Arrays.copyOf(candidates, candidates.length * 2);
+        }
+        Candidate slot = candidates[candidatesCount];
+        if (slot == null) {
+            slot = new Candidate();
+            candidates[candidatesCount] = slot;
+        }
+        slot.edge = edge;
+        slot.transition = transition;
+        candidatesCount++;
+    }
+
 
     // SELECCIÓN PROBABILÍSTICA
     // Hot path: sin HashMap, sin Math.pow, una sola pasada con array temporal.
     // Heurística^β ya viene cacheada en edge.heuristicCache (precomputarHeuristicas).
     // Para α==1.0 (config por defecto y único uso actual) se evita pow sobre la feromona.
     // SELECCIÓN PROBABILÍSTICA DINÁMICA
-    private Candidate selectEdge(List<Candidate> edges) {
-        int n = edges.size();
+    private Candidate selectEdge(int n) {
         if (n == 0) return null;
 
         double sum = 0.0;
         for (int i = 0; i < n; i++) {
-            sum += weightOf(edges.get(i));
+            sum += weightOf(candidates[i]);
         }
 
         if (sum <= 0.0) return null;
@@ -379,10 +434,10 @@ public class AlgorithmACO {
         double rand = rng.nextDouble() * sum;
         double acc = 0.0;
         for (int i = 0; i < n; i++) {
-            acc += weightOf(edges.get(i));
-            if (acc >= rand) return edges.get(i);
+            acc += weightOf(candidates[i]);
+            if (acc >= rand) return candidates[i];
         }
-        return edges.get(n - 1);
+        return candidates[n - 1];
     }
 
     private double weightOf(Candidate c) {
@@ -395,18 +450,23 @@ public class AlgorithmACO {
     private void precomputarHeuristicas() {
         boolean betaDos = config.beta == 2.0;
         for (Edge e : graph.edges) {
-            double h = CostFunction.heuristica(e, envioContext, new Ant());
+            double h = CostFunction.heuristica(e, envioContext, heuristicaAnt);
             e.heuristicCache = betaDos ? (h * h) : Math.pow(h, config.beta);
         }
     }
 
     private void updatePheromones() {
+        double tauMax = 10.0;
+        double tauMin = 0.5;
         if (routeEvaluator == null) {
             for (Edge e : graph.edges) {
                 e.pheromone *= (1 - config.evaporation);
             }
         } else {
-            localPheromones.replaceAll((edge, pheromone) -> pheromone * (1 - config.evaporation));
+            // Evaporación solo sobre los edges tocados por hormigas en esta corrida.
+            for (int i = 0; i < localDirtyCount; i++) {
+                localPheromonesByIdx[localDirtyList[i]] *= (1 - config.evaporation);
+            }
         }
 
         for (Ant ant : ants) {
@@ -419,17 +479,18 @@ public class AlgorithmACO {
         }
 
         // 3. LÍMITES MAX-MIN: Evita la convergencia prematura
-        // Ninguna ruta será 100% ignorada, ni 100% dominante
-        double tauMax = 10.0;
-        double tauMin = 0.5;
-
         if (routeEvaluator == null) {
             for (Edge e : graph.edges) {
                 if (e.pheromone > tauMax) e.pheromone = tauMax;
                 else if (e.pheromone < tauMin) e.pheromone = tauMin;
             }
         } else {
-            localPheromones.replaceAll((e, p) -> Math.min(tauMax, Math.max(tauMin, p)));
+            for (int i = 0; i < localDirtyCount; i++) {
+                int idx = localDirtyList[i];
+                double v = localPheromonesByIdx[idx];
+                if (v > tauMax) localPheromonesByIdx[idx] = tauMax;
+                else if (v < tauMin) localPheromonesByIdx[idx] = tauMin;
+            }
         }
     }
 
@@ -439,25 +500,62 @@ public class AlgorithmACO {
         }
     }
 
+    private void prepararArrayFeromonas() {
+        int max = -1;
+        for (Edge e : graph.edges) if (e.idx > max) max = e.idx;
+        int size = Math.max(0, max + 1);
+        localPheromonesByIdx = new double[size];
+        localDirtyFlag = new boolean[size];
+        localDirtyList = new int[size];
+        localDirtyCount = 0;
+    }
+
+    private void resetLocalPheromones() {
+        for (int i = 0; i < localDirtyCount; i++) {
+            int idx = localDirtyList[i];
+            localPheromonesByIdx[idx] = 0.0;
+            localDirtyFlag[idx] = false;
+        }
+        localDirtyCount = 0;
+    }
+
     private double getPheromone(Edge edge) {
         if (routeEvaluator == null) return edge.pheromone;
-        return localPheromones.getOrDefault(edge, config.initialPheromone);
+        int idx = edge.idx;
+        if (idx < 0 || idx >= localDirtyFlag.length || !localDirtyFlag[idx]) {
+            return config.initialPheromone;
+        }
+        return localPheromonesByIdx[idx];
     }
 
     private void addPheromone(Edge edge, double delta) {
         if (routeEvaluator == null) {
             edge.pheromone += delta;
-        } else {
-            localPheromones.put(edge, getPheromone(edge) + delta);
+            return;
         }
+        int idx = edge.idx;
+        if (idx < 0 || idx >= localDirtyFlag.length) {
+            return;
+        }
+        if (!localDirtyFlag[idx]) {
+            localPheromonesByIdx[idx] = config.initialPheromone;
+            localDirtyFlag[idx] = true;
+            localDirtyList[localDirtyCount++] = idx;
+        }
+        localPheromonesByIdx[idx] += delta;
     }
 
-    private Ant copiarAnt(Ant original) {
-        Ant copia = new Ant();
-        copia.path = new ArrayList<>(original.path);
-        copia.edgesPath = new ArrayList<>(original.edgesPath);
-        copia.totalCost = original.totalCost;
-        return copia;
+    private void actualizarMejorGlobal(Ant origen) {
+        Ant dst = mejorGlobalReused;
+        if (origen == dst) {
+            mejorGlobal = dst; // ya estamos apuntando al mismo objeto
+            return;
+        }
+        dst.reset();
+        for (Node n : origen.path) dst.addNode(n);
+        dst.edgesPath.addAll(origen.edgesPath);
+        dst.totalCost = origen.totalCost;
+        mejorGlobal = dst;
     }
 
     private boolean cumpleRestricciones(Ant ant) {
@@ -504,13 +602,9 @@ public class AlgorithmACO {
         LOWEST_COST
     }
 
+    // Reciclable: edge y transition se reasignan cada vez que addCandidate lo usa.
     private static final class Candidate {
-        final Edge edge;
-        final AcoRouteEvaluator.Transition transition;
-
-        Candidate(Edge edge, AcoRouteEvaluator.Transition transition) {
-            this.edge = edge;
-            this.transition = transition;
-        }
+        Edge edge;
+        AcoRouteEvaluator.Transition transition;
     }
 }

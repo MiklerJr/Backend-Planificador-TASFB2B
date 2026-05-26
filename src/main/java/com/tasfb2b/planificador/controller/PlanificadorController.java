@@ -489,9 +489,11 @@ public class PlanificadorController {
     }
 
     /**
-     * Descarga el CSV de auditoría de un job completado. 23 columnas con
+     * Descarga el CSV de auditoría de un job completado. 25 columnas con
      * validación formal por envío de las restricciones del cliente
-     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100).
+     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100) y
+     * los timestamps ISO de inicio (readyTime) y fin del envío (llegada
+     * + DEST_STORAGE_MIN).
      *
      * <p>Devuelve 204 si el job aún ejecuta, 404 si no existe.
      */

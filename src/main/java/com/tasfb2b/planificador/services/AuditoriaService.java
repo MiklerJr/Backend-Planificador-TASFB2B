@@ -6,6 +6,9 @@ import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -26,6 +29,8 @@ import java.util.Set;
 public class AuditoriaService {
 
     private static final int TIEMPO_MIN_ESCALA = CostFunction.TIEMPO_MIN_ESCALA;
+    /** Minutos de procesamiento en el almacén destino antes de quedar disponible. */
+    private static final long DEST_STORAGE_MIN = 10L;
 
     /**
      * Construye el registro de auditoría a partir de un batch ya procesado.
@@ -38,6 +43,9 @@ public class AuditoriaService {
         audit.setDestino(batch.getDestCode());
         audit.setRegistroHHMM(String.format("%02d:%02d",
                 batch.getReadyTime().getHour(), batch.getReadyTime().getMinute()));
+        // Inicio del envío: momento de registro del batch. Disponible siempre,
+        // haya o no ruta asignada.
+        audit.setFechaHoraInicio(batch.getReadyTime());
 
         long readyMin = toEpochMin(batch.getReadyTime());
         int slaMin = batch.getSlaLimitHours() * 60;
@@ -51,6 +59,7 @@ public class AuditoriaService {
             audit.setMotivoFalla("No se encontró ruta válida");
             audit.setRuta("");
             audit.setSlackSlaMin(slaMin);
+            // Sin ruta → no hay fin de envío.
             return audit;
         }
 
@@ -88,6 +97,11 @@ public class AuditoriaService {
         int llegadaDesdeReady = (int) (llegadaEpoch - readyMin);
         audit.setLlegadaMin(llegadaDesdeReady);
 
+        // Fin del envío: instante en que la maleta queda disponible en el
+        // almacén destino (aterrizaje del último vuelo + DEST_STORAGE_MIN).
+        // Coherente con el cómputo de SLA en AcoBlockRouteEvaluator.
+        audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + DEST_STORAGE_MIN));
+
         int slack = slaMin - llegadaDesdeReady;
         audit.setSlackSlaMin(slack);
 
@@ -119,13 +133,17 @@ public class AuditoriaService {
     }
 
     /**
-     * Convierte una lista de auditorías a CSV con la cabecera estándar (23 columnas).
+     * Convierte una lista de auditorías a CSV con la cabecera estándar (25 columnas).
+     * Las últimas dos columnas son {@code fechaHoraInicio} y {@code fechaHoraFin}
+     * (ISO LocalDateTime). {@code fechaHoraFin} queda vacía cuando el envío no
+     * encontró ruta.
      */
     public String aCsv(List<AuditoriaEnvio> filas) {
         StringBuilder sb = new StringBuilder();
         sb.append("idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,")
                 .append("tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,")
-                .append("cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad\n");
+                .append("cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad,")
+                .append("fechaHoraInicio,fechaHoraFin\n");
         for (AuditoriaEnvio r : filas) {
             sb.append(csv(r.getIdEnvio())).append(',')
                     .append(csv(r.getOrigen())).append(',')
@@ -149,7 +167,9 @@ public class AuditoriaService {
                     .append(r.isEscalaMinOK()).append(',')
                     .append(r.isCapacidadVuelosOK()).append(',')
                     .append(r.isAlmacenDestinoOK()).append(',')
-                    .append(r.getScoreCalidad())
+                    .append(r.getScoreCalidad()).append(',')
+                    .append(formatoFecha(r.getFechaHoraInicio())).append(',')
+                    .append(formatoFecha(r.getFechaHoraFin()))
                     .append('\n');
         }
         return sb.toString();
@@ -226,5 +246,19 @@ public class AuditoriaService {
 
     private static long toEpochMin(java.time.LocalDateTime dt) {
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
+    }
+
+    /** Inversa de {@link #toEpochMin}: epoch-min absolutos → {@link LocalDateTime}. */
+    private static LocalDateTime epochMinToLocalDateTime(long epochMin) {
+        long epochDay = Math.floorDiv(epochMin, 1440L);
+        long minuteOfDay = Math.floorMod(epochMin, 1440L);
+        LocalDate date = LocalDate.ofEpochDay(epochDay);
+        LocalTime time = LocalTime.of((int) (minuteOfDay / 60), (int) (minuteOfDay % 60));
+        return LocalDateTime.of(date, time);
+    }
+
+    /** Serialización ISO de un {@link LocalDateTime} para CSV. {@code null} → vacío. */
+    private static String formatoFecha(LocalDateTime dt) {
+        return dt == null ? "" : dt.toString();
     }
 }
