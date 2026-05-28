@@ -19,6 +19,7 @@ import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
 import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
 import com.tasfb2b.planificador.util.DataLoader;
 import com.tasfb2b.planificador.util.FlightCancellationSimulator;
@@ -393,6 +394,77 @@ public class PlanificadorService {
         body.put("total", vuelos.size());
         body.put("vuelos", vuelos);
         return body;
+    }
+
+    public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+
+        int desdeNormalizado = Math.max(0, desde);
+        Map<String, VueloUsadoAccumulator> acc = new LinkedHashMap<>();
+
+        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(desdeNormalizado)) {
+            if (bloque.getAsignaciones() == null) continue;
+
+            for (int asignacionIdx = 0; asignacionIdx < bloque.getAsignaciones().size(); asignacionIdx++) {
+                SimulacionResponse.AsignacionMaleta asignacion = bloque.getAsignaciones().get(asignacionIdx);
+                if (asignacion == null
+                        || !asignacion.isEnrutada()
+                        || asignacion.getTramos() == null
+                        || asignacion.getTramos().isEmpty()) continue;
+
+                String envioId = safe(asignacion.getBatchId());
+                String envioKey = !envioId.isEmpty()
+                        ? envioId
+                        : "sin-id:" + bloque.getBloqueIdx() + ":" + asignacionIdx;
+
+                for (SimulacionResponse.TramoRuta tramo : asignacion.getTramos()) {
+                    if (tramo == null) continue;
+
+                    String vueloId = safe(tramo.getVueloId());
+                    String salida = safe(tramo.getSalidaLocal());
+                    String llegada = safe(tramo.getLlegadaLocal());
+                    String key = bloque.getBloqueIdx() + "|" + vueloId + "|" + salida;
+
+                    VueloUsadoAccumulator vuelo = acc.computeIfAbsent(key, k -> {
+                        VueloUsadoAccumulator nuevo = new VueloUsadoAccumulator();
+                        nuevo.row.setFlightKey(vueloId + "|" + salida);
+                        nuevo.row.setBloqueIdx(bloque.getBloqueIdx());
+                        nuevo.row.setHoraInicio(bloque.getHoraInicio());
+                        nuevo.row.setHoraFin(bloque.getHoraFin());
+                        nuevo.row.setVueloId(vueloId);
+                        nuevo.row.setOrigen(safe(tramo.getOrigen()));
+                        nuevo.row.setDestino(safe(tramo.getDestino()));
+                        nuevo.row.setFechaSalida(salida);
+                        nuevo.row.setFechaLlegada(llegada);
+                        return nuevo;
+                    });
+
+                    if (vuelo.envioKeys.add(envioKey)) {
+                        vuelo.row.setCantidadMaletas(vuelo.row.getCantidadMaletas() + asignacion.getCantidad());
+                        if (!envioId.isEmpty()) {
+                            vuelo.envioIds.add(envioId);
+                        }
+                    }
+                }
+            }
+        }
+
+        List<VuelosUsadosResponse.VueloUsado> vuelos = acc.values().stream()
+                .map(VueloUsadoAccumulator::toDto)
+                .sorted(Comparator.comparingInt(VuelosUsadosResponse.VueloUsado::getBloqueIdx)
+                        .thenComparing(VuelosUsadosResponse.VueloUsado::getFechaSalida)
+                        .thenComparing(VuelosUsadosResponse.VueloUsado::getVueloId))
+                .collect(Collectors.toList());
+
+        VuelosUsadosResponse response = new VuelosUsadosResponse();
+        response.setJobId(jobId);
+        response.setDesde(desdeNormalizado);
+        response.setBloquesPublicados(job.bloquesPublicados());
+        response.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
+        response.setTotal(vuelos.size());
+        response.setVuelos(vuelos);
+        return response;
     }
 
     public Map<String, Object> getOcupacionAlmacenesJob(String jobId) {
@@ -2291,6 +2363,18 @@ public class PlanificadorService {
         double porcentaje = porcentaje(dto.getOcupacionAsignada(), dto.getCapacidadMaxima());
         dto.setPorcentajeOcupacion(porcentaje);
         dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
+    }
+
+    private static class VueloUsadoAccumulator {
+        private final VuelosUsadosResponse.VueloUsado row = new VuelosUsadosResponse.VueloUsado();
+        private final Set<String> envioKeys = new LinkedHashSet<>();
+        private final List<String> envioIds = new ArrayList<>();
+
+        private VuelosUsadosResponse.VueloUsado toDto() {
+            row.setCantidadEnvios(envioKeys.size());
+            row.setEnvioIds(List.copyOf(envioIds));
+            return row;
+        }
     }
 
     private static Map<String, Object> cargaVueloToMap(SimulacionResponse.CargaVuelo c) {

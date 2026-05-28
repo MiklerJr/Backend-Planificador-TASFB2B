@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.controller;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -384,6 +385,15 @@ public class PlanificadorController {
     @GetMapping("/jobs/{jobId}/vuelos/carga")
     public ResponseEntity<Map<String, Object>> cargaVuelosJob(@PathVariable String jobId) {
         Map<String, Object> body = service.getCargaVuelosJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/vuelos/usados")
+    public ResponseEntity<VuelosUsadosResponse> vuelosUsadosJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde) {
+        VuelosUsadosResponse body = service.getVuelosUsadosJob(jobId, desde);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
