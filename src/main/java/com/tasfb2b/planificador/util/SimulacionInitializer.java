@@ -8,7 +8,7 @@ import com.tasfb2b.planificador.services.PlanificadorService;
 import java.util.Map;
 import java.util.Scanner;
 
-@Component
+//@Component
 public class SimulacionInitializer implements CommandLineRunner {
 
     private final PlanificadorService planificadorService;
