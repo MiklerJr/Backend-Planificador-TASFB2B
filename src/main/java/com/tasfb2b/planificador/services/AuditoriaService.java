@@ -6,10 +6,17 @@ import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -31,6 +38,11 @@ public class AuditoriaService {
     private static final int TIEMPO_MIN_ESCALA = CostFunction.TIEMPO_MIN_ESCALA;
     /** Minutos de procesamiento en el almacén destino antes de quedar disponible. */
     private static final long DEST_STORAGE_MIN = 10L;
+    private static final String CSV_HEADER =
+            "idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,"
+                    + "tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,"
+                    + "cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad,"
+                    + "fechaHoraInicio,fechaHoraFin\n";
 
     /**
      * Construye el registro de auditoría a partir de un batch ya procesado.
@@ -140,39 +152,29 @@ public class AuditoriaService {
      */
     public String aCsv(List<AuditoriaEnvio> filas) {
         StringBuilder sb = new StringBuilder();
-        sb.append("idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,")
-                .append("tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,")
-                .append("cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad,")
-                .append("fechaHoraInicio,fechaHoraFin\n");
+        sb.append(CSV_HEADER);
         for (AuditoriaEnvio r : filas) {
-            sb.append(csv(r.getIdEnvio())).append(',')
-                    .append(csv(r.getOrigen())).append(',')
-                    .append(csv(r.getDestino())).append(',')
-                    .append(csv(r.getRegistroHHMM())).append(',')
-                    .append(r.getDeadlineMin()).append(',')
-                    .append(r.isExitoso()).append(',')
-                    .append(csv(r.getMotivoFalla())).append(',')
-                    .append(csv(r.getRuta())).append(',')
-                    .append(r.getNumTramos()).append(',')
-                    .append(r.getNumEscalas()).append(',')
-                    .append(r.getTiempoVueloMin()).append(',')
-                    .append(r.getTiempoEsperaMin()).append(',')
-                    .append(r.getTiempoTotalMin()).append(',')
-                    .append(r.getLlegadaMin()).append(',')
-                    .append(r.getSlackSlaMin()).append(',')
-                    .append(r.getCostoTotal()).append(',')
-                    .append(r.isCumpleSLA()).append(',')
-                    .append(r.isSinCiclos()).append(',')
-                    .append(r.isSinDirecto()).append(',')
-                    .append(r.isEscalaMinOK()).append(',')
-                    .append(r.isCapacidadVuelosOK()).append(',')
-                    .append(r.isAlmacenDestinoOK()).append(',')
-                    .append(r.getScoreCalidad()).append(',')
-                    .append(formatoFecha(r.getFechaHoraInicio())).append(',')
-                    .append(formatoFecha(r.getFechaHoraFin()))
-                    .append('\n');
+            sb.append(lineaCsv(r));
         }
         return sb.toString();
+    }
+
+    public int escribirCsv(Collection<LuggageBatch> batches, Path path) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            return escribirCsv(batches, writer);
+        }
+    }
+
+    public int escribirCsv(Collection<LuggageBatch> batches, Writer writer) throws IOException {
+        writer.write(CSV_HEADER);
+        int filas = 0;
+        if (batches == null) return filas;
+        for (LuggageBatch b : batches) {
+            if (b == null) continue;
+            writer.write(lineaCsv(construir(b)));
+            filas++;
+        }
+        return filas;
     }
 
     public List<AuditoriaEnvio> construirLote(List<LuggageBatch> batches) {
@@ -234,6 +236,34 @@ public class AuditoriaService {
         score -= tiempoEsperaMin * 0.05;
         if (slackSlaMin < 60) score -= 20.0;
         return (int) Math.max(0, Math.round(score));
+    }
+
+    private static String lineaCsv(AuditoriaEnvio r) {
+        return csv(r.getIdEnvio()) + ','
+                + csv(r.getOrigen()) + ','
+                + csv(r.getDestino()) + ','
+                + csv(r.getRegistroHHMM()) + ','
+                + r.getDeadlineMin() + ','
+                + r.isExitoso() + ','
+                + csv(r.getMotivoFalla()) + ','
+                + csv(r.getRuta()) + ','
+                + r.getNumTramos() + ','
+                + r.getNumEscalas() + ','
+                + r.getTiempoVueloMin() + ','
+                + r.getTiempoEsperaMin() + ','
+                + r.getTiempoTotalMin() + ','
+                + r.getLlegadaMin() + ','
+                + r.getSlackSlaMin() + ','
+                + r.getCostoTotal() + ','
+                + r.isCumpleSLA() + ','
+                + r.isSinCiclos() + ','
+                + r.isSinDirecto() + ','
+                + r.isEscalaMinOK() + ','
+                + r.isCapacidadVuelosOK() + ','
+                + r.isAlmacenDestinoOK() + ','
+                + r.getScoreCalidad() + ','
+                + formatoFecha(r.getFechaHoraInicio()) + ','
+                + formatoFecha(r.getFechaHoraFin()) + '\n';
     }
 
     private static String csv(String texto) {

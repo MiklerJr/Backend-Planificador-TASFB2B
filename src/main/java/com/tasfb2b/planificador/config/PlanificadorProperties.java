@@ -121,6 +121,13 @@ public class PlanificadorProperties {
         private double umbralReplanificacionSlack = 0.10;
         /** Máximo de replanificaciones preventivas por bloque (cota de cómputo). */
         private int maxReplanificacionesPorBloque = 20;
+        /**
+         * Fase M (anti-thrash): máximo de envíos del backlog a reprocesar por bloque,
+         * tomando los de deadline más cercano. El resto se difiere al siguiente bloque
+         * (sin perderse). 0 = sin tope (comportamiento original). Acota que un backlog
+         * grande le robe Ta a la demanda nueva y dispare violaciones de Ta.
+         */
+        private int maxReprocesoPorBloque = 0;
     }
 
     /** Configuración del endpoint de calibración (fase 6). */

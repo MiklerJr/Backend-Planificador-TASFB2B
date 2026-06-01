@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import lombok.Data;
 
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -73,6 +74,8 @@ public class JobState {
      * descargable vía {@code GET /api/planificador/jobs/{jobId}/auditoria.csv}.
      */
     public volatile String auditoriaCsv;
+    /** Ruta temporal del CSV de auditoria cuando es demasiado grande para mantenerlo en heap. */
+    public volatile Path auditoriaCsvPath;
     /** Tamaño en filas de la auditoría (sin contar la cabecera). */
     public volatile int auditoriaFilas;
 

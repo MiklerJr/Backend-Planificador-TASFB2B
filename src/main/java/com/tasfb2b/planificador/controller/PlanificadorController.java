@@ -7,12 +7,15 @@ import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -508,17 +511,23 @@ public class PlanificadorController {
      * <p>Devuelve 204 si el job aún ejecuta, 404 si no existe.
      */
     @GetMapping(value = "/jobs/{jobId}/auditoria.csv", produces = "text/csv")
-    public ResponseEntity<byte[]> auditoriaJob(@PathVariable String jobId) {
+    public ResponseEntity<?> auditoriaJob(@PathVariable String jobId) {
         JobState job = service.getJob(jobId);
         if (job == null)              return ResponseEntity.notFound().build();
-        if (job.auditoriaCsv == null) return ResponseEntity.noContent().build();
 
-        byte[] body = job.auditoriaCsv.getBytes(StandardCharsets.UTF_8);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("text/csv; charset=UTF-8"));
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename=\"auditoria_" + jobId + ".csv\"");
         headers.set("X-Audit-Rows", String.valueOf(job.auditoriaFilas));
+
+        if (job.auditoriaCsvPath != null && Files.exists(job.auditoriaCsvPath)) {
+            Resource body = new FileSystemResource(job.auditoriaCsvPath.toFile());
+            return ResponseEntity.ok().headers(headers).body(body);
+        }
+
+        if (job.auditoriaCsv == null) return ResponseEntity.noContent().build();
+        byte[] body = job.auditoriaCsv.getBytes(StandardCharsets.UTF_8);
         return ResponseEntity.ok().headers(headers).body(body);
     }
 }

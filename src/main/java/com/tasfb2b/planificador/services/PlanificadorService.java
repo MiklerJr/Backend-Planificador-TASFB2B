@@ -687,7 +687,8 @@ public class PlanificadorService {
         TaStats taStats = new TaStats();
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal2();
         long saMs = saMin * 60_000L;
-        BacklogManager backlog = crearBacklogSinPerdida();
+        // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
+        BacklogManager backlog = crearBacklogConPurga();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         // ── Fase warm-up ────────────────────────────────────────────────────
@@ -759,8 +760,23 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            if (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques) {
-                log.info("Progreso E2 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
+            // G2: purga por vencimiento — los envios cuyo deadline (readyTime+SLA)
+            // ya paso dejan de reintentarse (pasan a sinRutaDefinitivo), acotando el
+            // backlog y liberando Ta para los enrutables. E1/E2 no colapsan.
+            backlog.purgarVencidas(ctx.scEnd);
+
+            logBloque(motorRes, bloqueActual, totalBloques,
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), false);
+
+            // K3: instrumentación de saturación (flight-day vs airport-day) para observar el
+            // onset del primer fallo y dirigir la Fase L (¿satura vuelo o almacén de hub?).
+            if (bloqueActual % 50 == 0 || bloqueActual == totalBloques) {
+                log.info("--- Saturación tras bloque {}/{} ---", bloqueActual, totalBloques);
+                enrutador.logEstadisticasCapacidad();
+            }
+
+            if (log.isDebugEnabled() && (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques)) {
+                log.debug("Progreso E2 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
                         motorRes,
                         (int) Math.round(bloqueActual * 100.0 / totalBloques),
                         bloqueActual, totalBloques,
@@ -804,6 +820,7 @@ public class PlanificadorService {
         res.setK(k);
         res.setSaMinutos(saMin);
 
+        if (job != null) job.resultado = res;
         publicarAuditoria(job, auditAcc);
         // Muestra: solo escenario 2 con motor ALNS, hasta 25 envíos.
         publicarMuestra(job, motorRes, "2", auditAcc);
@@ -841,7 +858,7 @@ public class PlanificadorService {
         sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
         sc1Maletas = 0L;
         sc1TaStats = new TaStats();
-        sc1Backlog = crearBacklogSinPerdida();
+        sc1Backlog = crearBacklogConPurga(); // G2: purga activa (acota backlog)
         sc1Bloques = new ArrayList<>();
         sc1AuditAcc = new LinkedHashMap<>();
         sc1Motor = motorRes;
@@ -1246,10 +1263,12 @@ public class PlanificadorService {
             sc1Plan.get(sc1Idx).tasaSinRutaPrevia = tasa;
         }
 
-        log.info("E1 bloque {}/{}: envíos:{} | enrutados:{} | tardados:{} | sinRuta:{} | Ta={}ms | backlog={}",
-                sc1Idx, sc1Plan.size(),
-                rv.envios, rv.enrutadas, rv.tardadas, rv.sinRuta, ctx.taMs,
-                sc1Backlog != null ? sc1Backlog.size() : 0);
+        // G2: purga por vencimiento (acota el backlog del escenario 1 por pasos).
+        if (sc1Backlog != null) sc1Backlog.purgarVencidas(ctx.scEnd);
+
+        logBloque(sc1Motor, sc1Idx, sc1Plan.size(),
+                rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs,
+                sc1Backlog != null ? sc1Backlog.size() : 0, false);
 
         // Al terminar todos los bloques, emitir diagnóstico
         if (sc1Idx == sc1Plan.size()) {
@@ -1341,7 +1360,8 @@ public class PlanificadorService {
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal1();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
-        BacklogManager backlog = crearBacklogSinPerdida();
+        // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
+        BacklogManager backlog = crearBacklogConPurga();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         int intervaloReporte = Math.max(1, totalBloques / 10);
 
@@ -1379,8 +1399,16 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            if (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques) {
-                log.info("Progreso E1 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
+            // G2: purga por vencimiento — los envios cuyo deadline (readyTime+SLA)
+            // ya paso dejan de reintentarse (pasan a sinRutaDefinitivo), acotando el
+            // backlog y liberando Ta para los enrutables. E1/E2 no colapsan.
+            backlog.purgarVencidas(ctx.scEnd);
+
+            logBloque(motorRes, bloqueActual, totalBloques,
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), false);
+
+            if (log.isDebugEnabled() && (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques)) {
+                log.debug("Progreso E1 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
                         motorRes,
                         (int) Math.round(bloqueActual * 100.0 / totalBloques),
                         bloqueActual, totalBloques,
@@ -1422,6 +1450,7 @@ public class PlanificadorService {
         res.setK(k);
         res.setSaMinutos(saMin);
 
+        if (job != null) job.resultado = res;
         publicarAuditoria(job, auditAcc);
         return res;
     }
@@ -1497,7 +1526,9 @@ public class PlanificadorService {
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal3();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
-        BacklogManager backlog = crearBacklogSinPerdida();
+        // E3 con purga activa: los envios cuyo SLA vence (readyTime+SLA) sin entrega
+        // on-time pasan a sinRutaDefinitivo y disparan el colapso (Politica 1).
+        BacklogManager backlog = crearBacklogConPurga();
         int umbralBacklog = props.getScenario().getUmbralColapsoBacklog();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
@@ -1534,23 +1565,24 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            // Detectar colapso: tasa de sinRuta de este bloque supera el umbral
-            // (mínimo 5 envíos en el bloque para evitar falsos positivos)
-            if (rv.envios >= 5 && (double) rv.sinRuta / rv.envios >= umbralColapso) {
-                collapsoDetectado = true;
-                bloqueColapso = bloqueActual;
-                log.warn("COLAPSO en bloque {} — sinRuta:{}/{} ({}%)",
-                        bloqueActual, rv.sinRuta, rv.envios,
-                        String.format("%.0f", rv.sinRuta * 100.0 / rv.envios));
-                break;
-            }
+            // Regla de dominio (colapso logístico, Política 1): el PRIMER envío que
+            // VENCE su SLA —readyTime+SLA alcanzado sin entrega on-time— detiene la
+            // simulación, esté esperando en el backlog o (si el motor fuese ALNS)
+            // confirmado con ruta tardía. Un sinRuta de la ventana actual NO es
+            // incumplimiento mientras le quede tiempo: se reintenta vía backlog.
+            //   - vencidos: envíos cuyo deadline ya pasó (purga del backlog).
+            //   - rv.tardadas: respaldo por si se confirmó una ruta tardía (ALNS).
+            //   - backlog descontrolado: red de seguridad opcional.
+            int vencidos = backlog.purgarVencidas(ctx.scEnd);
+            boolean colapsoBacklog = umbralBacklog > 0 && backlog.size() >= umbralBacklog;
+            boolean colapsoEste = vencidos > 0 || rv.tardadas > 0 || colapsoBacklog;
 
-            // Detección alternativa: backlog descontrolado (saturación sostenida)
-            if (umbralBacklog > 0 && backlog.size() >= umbralBacklog) {
+            logBloque(motorRes, bloqueActual, totalBloques,
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), colapsoEste);
+
+            if (colapsoEste) {
                 collapsoDetectado = true;
                 bloqueColapso = bloqueActual;
-                log.warn("COLAPSO en bloque {} — backlog={} >= umbral={}",
-                        bloqueActual, backlog.size(), umbralBacklog);
                 break;
             }
 
@@ -1590,6 +1622,7 @@ public class PlanificadorService {
         res.setK(k);
         res.setSaMinutos(saMin);
 
+        if (job != null) job.resultado = res;
         publicarAuditoria(job, auditAcc);
         return res;
     }
@@ -1600,6 +1633,22 @@ public class PlanificadorService {
      */
     private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc) {
         if (auditoria == null || auditAcc == null || auditAcc.isEmpty()) return;
+        log.info("Generando auditoria CSV: {} envios{}",
+                auditAcc.size(), job != null ? " (job " + job.getJobId() + ")" : "");
+        if (job != null) {
+            try {
+                Path path = Files.createTempFile("planificador-auditoria-" + job.getJobId() + "-", ".csv");
+                path.toFile().deleteOnExit();
+                int filas = auditoria.escribirCsv(auditAcc.values(), path);
+                job.auditoriaCsvPath = path;
+                job.auditoriaCsv = null;
+                job.auditoriaFilas = filas;
+                log.info("Auditoria generada: {} filas (job {}) en {}", filas, job.getJobId(), path);
+            } catch (IOException e) {
+                throw new IllegalStateException("No se pudo generar auditoria CSV", e);
+            }
+            return;
+        }
         List<AuditoriaEnvio> filas = auditoria.construirLote(new ArrayList<>(auditAcc.values()));
         String csv = auditoria.aCsv(filas);
         log.info("Auditoría generada: {} filas{}",
@@ -1729,7 +1778,8 @@ public class PlanificadorService {
 
         // 2. Backlog: traer pendientes de bloques anteriores sin descarte definitivo.
         if (backlog != null) {
-            List<LuggageBatch> pendientes = backlog.pollPendientes();
+            List<LuggageBatch> pendientes = backlog.pollPendientesUrgentes(
+                    props.getBacklog().getMaxReprocesoPorBloque());
 
             // Liberar capacidad global de los replanificables (ya commiteados).
             for (LuggageBatch b : pendientes) {
@@ -2549,10 +2599,14 @@ public class PlanificadorService {
     }
 
     /**
-     * Llena las métricas del backlog acumulativo en la respuesta.
+     * Backlog con purga por SLA vencido activa (sin tope), usado por todos los
+     * escenarios (G2). Cada bloque se llama {@code purgarVencidas(scNow)}: los
+     * envios cuyo {@code readyTime + SLA} ya paso sin entrega on-time pasan a
+     * {@code sinRutaDefinitivo} y dejan de reintentarse — esto acota el backlog y
+     * libera Ta para los enrutables. En E3 ese vencimiento dispara el colapso.
      */
-    private static BacklogManager crearBacklogSinPerdida() {
-        return new BacklogManager(0, false);
+    private static BacklogManager crearBacklogConPurga() {
+        return new BacklogManager(0, true);
     }
 
     private static Random rngParaBloque(long seed, String motor, int bloqueIdx) {
@@ -2678,6 +2732,19 @@ public class PlanificadorService {
     // =========================================================
     // Clases internas de apoyo
     // =========================================================
+    /**
+     * Una sola línea de consola por bloque con lo relevante para seguir la
+     * simulación: índice de bloque, envíos del bloque, on-time (cumpleSLA),
+     * tardadas, sinRuta, Ta y backlog. Sufijo {@code COLAPSO} cuando el bloque
+     * dispara el colapso logístico.
+     */
+    private void logBloque(String motor, int bloque, int total, int envios, int onTime,
+                           int tardadas, int sinRuta, long taMs, int backlog, boolean colapso) {
+        log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
+                bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
+                colapso ? " | COLAPSO" : "");
+    }
+
     private record ResultadoVentana(
             SimulacionResponse.BloqueSimulacion bloque,
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas) {

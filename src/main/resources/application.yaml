@@ -5,6 +5,11 @@ spring:
     active: "default"
   application:
     name: planificador
+  devtools:
+    restart:
+      # El dataset en resources/data pesa cientos de MB y se copia a target/classes.
+      # Evita que DevTools levante el File Watcher y consuma heap en ejecuciones locales.
+      enabled: false
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
@@ -70,6 +75,10 @@ planificador:
     purgar-vencidas: true
     umbral-replanificacion-slack: 0.10
     max-replanificaciones-por-bloque: 20
+    # Fase M (anti-thrash): tope de envíos del backlog reprocesados por bloque (los más
+    # urgentes por deadline; el resto se difiere sin perderse). 0 = sin tope. Acota que el
+    # backlog le robe Ta a la demanda nueva y dispare violaciones de Ta. Tunear con la medición.
+    max-reproceso-por-bloque: 3000
 
   benchmark:
     # Configuramos el grid para que no sea infinito
