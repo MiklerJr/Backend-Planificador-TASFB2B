@@ -647,14 +647,20 @@ public class PlanificadorService {
             return r;
         }
 
-        // Warm-up: si la fechaInicio del usuario está por delante de la primera
-        // ventana del dataset, simulamos primero [primera, fechaInicio) para que
-        // el motor llegue a fechaInicio con backlog/ocupaciones realistas. Los
-        // bloques de warm-up NO se publican al front ni cuentan en la auditoría.
-        List<TemporalContext> warmupPlan = construirPlanWarmup(k, fechaInicio, saOverride);
+        // Warm-up (procesamiento previo): si la fechaInicio del usuario está por delante de la
+        // primera ventana del dataset, simulamos primero [primera, fechaInicio) para que el motor
+        // llegue a fechaInicio con backlog/ocupaciones realistas. Los bloques de warm-up NO se
+        // publican al front ni cuentan en la auditoría. DESACTIVADO POR DEFECTO: solo se ejecuta
+        // si la petición lo pide explícitamente (params.procesamientoPrevio); si no, la simulación
+        // arranca directamente en fechaInicio sin procesar el período anterior.
+        List<TemporalContext> warmupPlan = params.isProcesamientoPrevio()
+                ? construirPlanWarmup(k, fechaInicio, saOverride)
+                : Collections.emptyList();
 
         Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
+                props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
         int totalBloques = plan.size();
@@ -857,6 +863,8 @@ public class PlanificadorService {
 
         sc1Graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         sc1Enrutador = new GreedyRepairOperator(sc1Graph);
+        sc1Enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
+                props.getStorageAware().getPrecioHubExponente());   // Fase P
         sc1Dummy = new AlnsSolution(Collections.emptyList());
         sc1Idx = 0;
         sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
@@ -1341,6 +1349,8 @@ public class PlanificadorService {
 
         Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
+                props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
         int totalVuelosCancelados = 0;
@@ -1507,6 +1517,8 @@ public class PlanificadorService {
 
         Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
+                props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
         if (cancelProb > 0.0) {
@@ -1874,6 +1886,12 @@ public class PlanificadorService {
         // Excepción: en warm-up (fastForward=true) saltamos el padding para
         // alcanzar fechaInicio en el menor tiempo de wall-clock posible.
         if (taFijoMs > 0 && !fastForward) {
+            // Fase Q: re-seed de esqueletos hub-avoiding usando el tiempo OCIOSO del bloque,
+            // acotado por el deadline de Ta (deadlineMotorNs) → Ta-safe, no añade wall-clock.
+            // Solo agrega opciones a la caché; el bucle caliente sigue siendo materialización pura.
+            if (MOTOR_ACO.equalsIgnoreCase(motor)) {
+                enrutador.reSeedHubAvoiding(props.getStorageAware().getReSeedSlice(), deadlineMotorNs);
+            }
             long transcurridoMs = System.currentTimeMillis() - inicioMotorMs;
             long faltanteMs = taFijoMs - transcurridoMs;
             if (faltanteMs > 0) {

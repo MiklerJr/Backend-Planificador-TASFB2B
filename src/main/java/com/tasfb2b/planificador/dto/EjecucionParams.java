@@ -43,4 +43,12 @@ public class EjecucionParams {
 
     /** Para escenario 3: umbral de tasa sinRuta que dispara colapso. */
     private Double umbralColapso;
+
+    /**
+     * Escenario 2: si true y {@code fechaInicio} está por delante del inicio del dataset, hace un
+     * <b>procesamiento previo (warm-up)</b> simulando {@code [inicio dataset, fechaInicio)} para
+     * llegar a {@code fechaInicio} con backlog/ocupaciones realistas. Por <b>defecto desactivado</b>:
+     * la simulación arranca directamente en {@code fechaInicio} sin procesar el período anterior.
+     */
+    private boolean procesamientoPrevio = false;
 }

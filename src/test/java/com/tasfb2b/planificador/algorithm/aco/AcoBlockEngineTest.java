@@ -200,7 +200,7 @@ class AcoBlockEngineTest {
         // > qty (pasa el chequeo base) pero menor que qty + colchón (falla la reserva).
         Edge escala = viaHub.getEdges().get(0);
         long llegadaEscala = viaHub.getActualDepartures().get(0) + escala.durationMinutes;
-        long claveEscala = FlightKeyEncoder.airportKey(escala.to.idx, llegadaEscala);
+        long claveEscala = GreedyRepairOperator.claveAlmacenDeSlot(escala.to.idx, llegadaEscala);
         int remanente = 22;   // qty=20 < 22 ; colchón (≈10% de 500 escalado por holgura) ≫ 2
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveEscala, escala.to.capacity - remanente);
@@ -232,13 +232,47 @@ class AcoBlockEngineTest {
 
         Edge ultimo = directo.getEdges().get(0);
         long llegadaDestino = directo.getActualDepartures().get(0) + ultimo.durationMinutes;
-        long claveDestino = FlightKeyEncoder.airportKey(ultimo.to.idx, llegadaDestino);
+        long claveDestino = GreedyRepairOperator.claveAlmacenDeSlot(ultimo.to.idx, llegadaDestino);
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveDestino, ultimo.to.capacity - 22);   // casi lleno, remanente 22 >= qty
 
         assertTrue(
                 enrutador.rutaSirveParaBatch(directo, flexible, new HashMap<>(), blockAirport, 0.0, 0.10),
                 "el destino final hub NO lleva colchón de reserva: la entrega no se penaliza");
+    }
+
+    @Test
+    void almacenEsOcupacionConcurrentePorSlotNoCupoDiario() {
+        // Fase R: el almacén modela OCUPACIÓN CONCURRENTE (maletas presentes a la vez ≤ capacidad),
+        // NO un tope de throughput por día. Una franja horaria distinta a la de llegada, aunque esté
+        // llena, NO afecta a la maleta (no coinciden en el tiempo); solo el SLOT de su estadía importa.
+        Graph graph = graphConRutasAlternativas();
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+
+        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+        RouteCandidate directo = enrutador
+                .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
+                .filter(c -> c.getEdges().size() == 1)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("se esperaba la ruta directa AAA->CCC"));
+
+        Edge ultimo = directo.getEdges().get(0);
+        long llegada = directo.getActualDepartures().get(0) + ultimo.durationMinutes;
+        int cap = ultimo.to.capacity;
+
+        // (a) OTRA franja (5 h después) saturada → NO bloquea: el almacén es concurrente por slot.
+        Map<Long, Integer> otraFranjaLlena = new HashMap<>();
+        otraFranjaLlena.put(GreedyRepairOperator.claveAlmacenDeSlot(ultimo.to.idx, llegada + 5 * 60), cap);
+        assertTrue(
+                enrutador.rutaSirveParaBatch(directo, flexible, new HashMap<>(), otraFranjaLlena, 0.0, 0.0),
+                "una franja horaria distinta llena no afecta: NO es un cupo diario");
+
+        // (b) El SLOT de llegada saturado → SÍ bloquea: no cabe la maleta concurrentemente.
+        Map<Long, Integer> slotLlegadaLleno = new HashMap<>();
+        slotLlegadaLleno.put(GreedyRepairOperator.claveAlmacenDeSlot(ultimo.to.idx, llegada), cap);
+        assertFalse(
+                enrutador.rutaSirveParaBatch(directo, flexible, new HashMap<>(), slotLlegadaLleno, 0.0, 0.0),
+                "el slot de la estadía lleno sí bloquea (ocupación concurrente > capacidad)");
     }
 
     @Test
@@ -260,7 +294,7 @@ class AcoBlockEngineTest {
 
         Edge escala = viaTransito.getEdges().get(0);
         long llegadaEscala = viaTransito.getActualDepartures().get(0) + escala.durationMinutes;
-        long claveEscala = FlightKeyEncoder.airportKey(escala.to.idx, llegadaEscala);
+        long claveEscala = GreedyRepairOperator.claveAlmacenDeSlot(escala.to.idx, llegadaEscala);
 
         // Antes de reclasificar: el nodo de tránsito NO es hub → la reserva NO aplica aunque el
         // almacén-día esté casi lleno; la ruta pasa (remanente 22 >= qty 20).
@@ -281,6 +315,49 @@ class AcoBlockEngineTest {
         assertTrue(
                 enrutador.rutaSirveParaBatch(viaTransito, flexible, new HashMap<>(), new HashMap<>(), 0.0, 0.0),
                 "la 2.ª pasada (reserva=0) recupera la ruta: nunca un sinRuta evitable");
+    }
+
+    @Test
+    void configurarStorageAwarePropagaElUmbralALaReclasificacionAutomatica() {
+        // Fase P: configurarStorageAware fija el umbral que usa la reclasificación dinámica DENTRO
+        // de commitBlock. Un nodo a pico ~0.96: con umbral 0.55 pasa a hub (la reserva L2 lo protege
+        // → rutaSirveParaBatch RECHAZA al flexible); con umbral 0.99 NO llega a hub (sin reserva →
+        // pasa). Demuestra que el valor configurado llega al camino real de clasificación.
+        assertFalse(rutaSirveTrasSembrarHub(0.55),
+                "con umbral 0.55 el nodo caliente es hub: la reserva bloquea al flexible");
+        assertTrue(rutaSirveTrasSembrarHub(0.99),
+                "con umbral 0.99 el nodo no llega a hub: la reserva no aplica");
+    }
+
+    /**
+     * Configura el umbral, siembra el almacén-día de una escala a pico ~0.96 y dispara la
+     * reclasificación automática de {@code commitBlock} (cada 10 commits). Devuelve si la ruta
+     * via-escala sirve para un 48h flexible con reserva de almacén 0.10.
+     */
+    private static boolean rutaSirveTrasSembrarHub(double umbralHubPico) {
+        Graph graph = graphConRutasAlternativas();
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        enrutador.configurarStorageAware(umbralHubPico, 1.7);
+
+        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+        RouteCandidate viaTransito = enrutador
+                .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
+                .filter(c -> c.getEdges().size() == 2)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("se esperaba una ruta multi-tramo"));
+
+        Edge escala = viaTransito.getEdges().get(0);
+        long llegada = viaTransito.getActualDepartures().get(0) + escala.durationMinutes;
+        long clave = GreedyRepairOperator.claveAlmacenDeSlot(escala.to.idx, llegada);
+
+        // Pico ~0.96 (remanente 22) en el almacén-slot de la escala, commiteado a la ocupación global.
+        Map<Long, Integer> seed = new HashMap<>();
+        seed.put(clave, escala.to.capacity - 22);
+        enrutador.commitBlock(new HashMap<>(), seed);
+        // 9 commits vacíos más → el 10.º dispara reclasificarHubsPorUtilizacion(umbralHubPico).
+        for (int i = 0; i < 9; i++) enrutador.commitBlock(new HashMap<>(), new HashMap<>());
+
+        return enrutador.rutaSirveParaBatch(viaTransito, flexible, new HashMap<>(), new HashMap<>(), 0.0, 0.10);
     }
 
     @Test

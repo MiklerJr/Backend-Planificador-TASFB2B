@@ -14,12 +14,17 @@ public class GreedyRepairOperator implements RepairOperator {
 
     private static final long CONNECTION_MIN   = 10L;
     private static final long DEST_STORAGE_MIN = 10L;
+    // Fase R — el almacén es OCUPACIÓN CONCURRENTE (maletas presentes a la vez ≤ capacidad), NO
+    // throughput diario. Se discretiza el tiempo en slots de STORAGE_SLOT_MIN: una maleta ocupa
+    // los slots de su estadía [llegada, salida) — destino final ≈ DEST_STORAGE_MIN (se retira),
+    // escala = hasta la salida de su siguiente vuelo. Menor slot = más exacto, más claves.
+    private static final long STORAGE_SLOT_MIN = 60L;
     private static final long MAX_HORIZON_MIN  = 3 * 24 * 60L;
     private static final long DAY_MIN          = FlightKeyEncoder.DAY_MIN;
     private static final int  DAY_BITS         = FlightKeyEncoder.DAY_BITS;
     private static final int  MAX_CANDIDATE_LEGS = 10;
     private static final long SKELETON_BUCKET_MIN = 60L;   // bucket de hora-del-día para la cache cross-bloque
-    private static final int  MAX_SKELETONS_POR_CLAVE = 6;
+    private static final int  MAX_SKELETONS_POR_CLAVE = 8;   // Fase Q: +sitio para esqueletos hub-avoiding
 
     // Fase O (hubs 100% dinámicos): NO hay lista hardcodeada de hubs. Un aeropuerto se marca hub
     // cuando su día más cargado alcanza esta fracción de su capacidad de almacén — los hubs salen
@@ -27,8 +32,11 @@ public class GreedyRepairOperator implements RepairOperator {
     // (aeropuertos/demanda distintos). reclasificarHubsPorUtilizacion() corre periódicamente desde
     // commitBlock para cubrir todos los escenarios. El hardcode anterior (13 ICAO fijos) sub-cubría:
     // la auditoría mostró ~45% de los fallos del onset en aeropuertos calientes NO listados.
-    private static final double UMBRAL_HUB_PICO = 0.65;
     private static final int    HUB_RECLASIFICAR_CADA = 10;   // bloques entre reclasificaciones
+    // Fase P — perillas storage-aware configurables (planificador.storage-aware vía
+    // configurarStorageAware()). Defaults conservadores = comportamiento previo a P.
+    private double umbralHubPico      = 0.65;   // O: fracción de cap a la que un nodo pasa a hub
+    private double precioHubExponente = 2.0;    // L1/P: exponente p de u^p/(1−u) en el precio de hub
     private boolean[] hubByIdx;          // consulta O(1) en el bucle caliente; arranca vacío
     private int commitsDesdeReclasificar = 0;
 
@@ -55,7 +63,9 @@ public class GreedyRepairOperator implements RepairOperator {
     // solo se revalida capacidad/cancelaciones al materializar. Evita re-ejecutar
     // Dijkstra para patrones recurrentes. Instancia por simulación (GreedyRepairOperator
     // se crea una vez por escenario) y uso single-thread → HashMap normal es seguro.
-    private final Map<Long, List<int[]>> rutaSkeletonCache = new HashMap<>();
+    final Map<Long, List<int[]>> rutaSkeletonCache = new HashMap<>();   // package-private para tests
+    // Fase Q: claves de esqueleto ya intentadas por el re-seed hub-avoiding (una vez cada una).
+    private final Set<Long> reSeeded = new HashSet<>();
 
     public GreedyRepairOperator(Graph graph) {
         this.graph = graph;
@@ -99,6 +109,17 @@ public class GreedyRepairOperator implements RepairOperator {
      */
     public void setHubs(Set<String> codigos) {
         marcarHubs(codigos == null ? Collections.emptySet() : codigos);
+    }
+
+    /**
+     * Fase P — fija las perillas storage-aware desde la config (planificador.storage-aware).
+     * {@code umbralHubPico}: fracción de capacidad a la que un aeropuerto pasa a hub (reclasificación
+     * dinámica). {@code precioHubExponente}: exponente p de la curva de precio de almacén-hub
+     * {@code u^p/(1−u)} (p<2 muerde antes). Llamado por el servicio tras construir el operador.
+     */
+    public void configurarStorageAware(double umbralHubPico, double precioHubExponente) {
+        if (umbralHubPico > 0.0) this.umbralHubPico = umbralHubPico;
+        if (precioHubExponente > 0.0) this.precioHubExponente = precioHubExponente;
     }
 
     private void marcarHubs(Set<String> codigos) {
@@ -147,6 +168,92 @@ public class GreedyRepairOperator implements RepairOperator {
         this.hubByIdx = flags;
     }
 
+    /**
+     * Fase Q1 — esqueleto (secuencia de edge-idx) que ALCANZA el destino on-time EVITANDO el
+     * tránsito por hubs. Dijkstra earliest-arrival que (a) salta toda expansión hacia un nodo hub
+     * que NO sea el destino (el hub-destino no es evitable) y (b) ignora capacidad → es una
+     * PLANTILLA reutilizable (la materialización revalida capacidad/cancelaciones por bloque).
+     * Devuelve {@code null} si no existe ruta hub-free on-time (p.ej. 24h: mantiene el hub).
+     */
+    private int[] esqueletoEvitandoHubs(int startIdx, int targetIdx, long readyMin, int slaHours) {
+        if (startIdx < 0 || targetIdx < 0 || startIdx == targetIdx) return null;
+        long readyDay = readyMin / DAY_MIN;
+        long slaMaxMinutes = (long) slaHours * 60;
+
+        long[] bestTimes = new long[nodeCount * DAY_SLOTS];
+        Arrays.fill(bestTimes, Long.MAX_VALUE);
+        PriorityQueue<RouteState> pq = new PriorityQueue<>(Comparator.comparingLong(s -> s.arrivalMin));
+
+        long horizonDays = MAX_HORIZON_MIN / DAY_MIN;
+        for (long d = 0; d <= horizonDays; d++) {
+            long startMin = readyMin + d * DAY_MIN;
+            bestTimes[startIdx * DAY_SLOTS + (int) d] = startMin;
+            pq.add(new RouteState(startIdx, startMin, -1L, null, null));
+        }
+
+        while (!pq.isEmpty()) {
+            RouteState current = pq.poll();
+            if (current.nodeIdx == targetIdx) {
+                long transitMinutes = (current.arrivalMin + DEST_STORAGE_MIN) - readyMin;
+                if (transitMinutes > slaMaxMinutes) return null;   // la mejor llegada ya es tardía
+                int[] sk = new int[current.legs];
+                int i = current.legs - 1;
+                for (RouteState s = current; s.edge != null; s = s.parent) sk[i--] = s.edge.idx;
+                return sk;
+            }
+            if (current.legs >= MAX_CANDIDATE_LEGS) continue;
+            for (Edge flight : adjByIdx[current.nodeIdx]) {
+                int nextIdx = (flight.to == null) ? -1 : flight.to.idx;
+                if (nextIdx < 0) continue;
+                if (nextIdx != targetIdx && esHub(nextIdx)) continue;   // Q: no transitar por hubs
+                long minWait  = (current.edge == null) ? 0L : CONNECTION_MIN;
+                long actualDep = nextDepartureMin(flight.depMinuteOfDay, current.arrivalMin + minWait);
+                long actualArr = actualDep + flight.durationMinutes;
+                long dayOffset = actualArr / DAY_MIN - readyDay;
+                if (dayOffset < 0 || dayOffset >= DAY_SLOTS) continue;
+                if (actualArr - readyMin > MAX_HORIZON_MIN) continue;
+                // capacity-free: NO se chequea vuelo ni almacén (plantilla cross-bloque).
+                int cell = nextIdx * DAY_SLOTS + (int) dayOffset;
+                if (actualArr < bestTimes[cell]) {
+                    bestTimes[cell] = actualArr;
+                    pq.add(new RouteState(nextIdx, actualArr, actualDep, flight, current));
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Fase Q2 — inyecta en {@link #rutaSkeletonCache} esqueletos hub-avoiding para las claves de
+     * demanda ya vistas, de forma AMORTIZADA y ACOTADA por tiempo (Ta-safe): procesa hasta
+     * {@code maxClaves} claves nuevas o hasta {@code deadlineNs}. Cada clave se intenta una sola vez
+     * ({@link #reSeeded}). SOLO AGREGA opciones (jamás quita la ruta rápida-por-hub → urgentes
+     * intactos); la selección J1 elegirá la sin-hub para los flexibles bajo congestión, SIN Dijkstra
+     * extra en el bucle caliente (el fast-path materializa lo cacheado). El servicio la llama con el
+     * tiempo ocioso del bloque, así que no añade wall-clock (no repite la regresión K1).
+     */
+    public void reSeedHubAvoiding(int maxClaves, long deadlineNs) {
+        if (maxClaves <= 0 || rutaSkeletonCache.isEmpty()) return;
+        int procesadas = 0;
+        for (Map.Entry<Long, List<int[]>> e : rutaSkeletonCache.entrySet()) {
+            if (procesadas >= maxClaves || System.nanoTime() >= deadlineNs) break;
+            long key = e.getKey();
+            if (!reSeeded.add(key)) continue;        // ya intentada
+            procesadas++;
+            int startIdx   = (int) (key >>> 40);
+            int targetIdx  = (int) ((key >>> 24) & 0xFFFFL);
+            int hourBucket = (int) ((key >>> 8) & 0xFFFFL);
+            int slaHours   = (int) (key & 0xFFL);
+            int[] sk = esqueletoEvitandoHubs(startIdx, targetIdx, hourBucket * SKELETON_BUCKET_MIN, slaHours);
+            if (sk == null || sk.length == 0) continue;
+            List<int[]> lista = e.getValue();
+            if (lista == null || lista.size() >= MAX_SKELETONS_POR_CLAVE) continue;
+            boolean existe = false;
+            for (int[] s : lista) if (Arrays.equals(s, sk)) { existe = true; break; }
+            if (!existe) lista.add(sk);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Interface RepairOperator
     // -----------------------------------------------------------------------
@@ -183,16 +290,13 @@ public class GreedyRepairOperator implements RepairOperator {
             blockFlight.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
+            // Fase R — libera exactamente los slots de estadía que cargó applyToBlock.
             if (!esFinalLeg && e.to.idx >= 0) {
-                long arrDay     = arrMin / DAY_MIN;
-                long nextDepMin = deps.get(i + 1);
-                long depDay     = nextDepMin / DAY_MIN;
-                for (long day = arrDay; day <= depDay; day++) {
-                    blockAirport.merge(airportKey(e.to.idx, day * DAY_MIN),
-                            -batch.getQuantity(), Integer::sum);
-                }
+                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, deps.get(i + 1),
+                        -batch.getQuantity());
             } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                blockAirport.merge(airportKey(e.to.idx, arrMin), -batch.getQuantity(), Integer::sum);
+                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
+                        -batch.getQuantity());
             }
         }
     }
@@ -214,7 +318,7 @@ public class GreedyRepairOperator implements RepairOperator {
         // Fuera del bucle caliente por-batch → Ta-safe; el conjunto solo crece (sin flapping).
         if (++commitsDesdeReclasificar >= HUB_RECLASIFICAR_CADA) {
             commitsDesdeReclasificar = 0;
-            reclasificarHubsPorUtilizacion(UMBRAL_HUB_PICO);
+            reclasificarHubsPorUtilizacion(umbralHubPico);
         }
     }
 
@@ -239,17 +343,13 @@ public class GreedyRepairOperator implements RepairOperator {
             flightOccupancy.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
+            // Fase R — libera por slots de estadía (mismo intervalo que cargó applyToBlock).
             if (!esFinalLeg && e.to.idx >= 0) {
-                long arrDay     = arrMin / DAY_MIN;
-                long nextDepMin = deps.get(i + 1);
-                long depDay     = nextDepMin / DAY_MIN;
-                for (long day = arrDay; day <= depDay; day++) {
-                    airportOccupancy.merge(airportKey(e.to.idx, day * DAY_MIN),
-                            -batch.getQuantity(), Integer::sum);
-                }
+                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, deps.get(i + 1),
+                        -batch.getQuantity());
             } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                airportOccupancy.merge(airportKey(e.to.idx, arrMin),
-                        -batch.getQuantity(), Integer::sum);
+                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
+                        -batch.getQuantity());
             }
         }
     }
@@ -319,18 +419,13 @@ public class GreedyRepairOperator implements RepairOperator {
                 int nextIdx = flight.to.idx;
                 if (nextIdx < 0) continue;
                 if (flight.to.capacity > 0) {
+                    // Fase R — chequeo barato del SLOT de llegada (ocupación concurrente). El
+                    // intervalo completo de estadía se valida en la materialización.
                     int qty = batch.getQuantity();
-                    int cap = flight.to.capacity;
                     long ak = airportKey(nextIdx, actualArr);
-                    if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty > cap)
+                    if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty
+                            > flight.to.capacity)
                         continue;
-                    // Escala intermedia: verificar también el día siguiente (estadía overnight).
-                    // Destino final: la maleta sale en DEST_STORAGE_MIN (10 min) → no overnight.
-                    if (nextIdx != targetNodeIdx) {
-                        long akD1 = airportKey(nextIdx, actualArr + DAY_MIN);
-                        if (airportOccupancy.getOrDefault(akD1, 0) + blockAirport.getOrDefault(akD1, 0) + qty > cap)
-                            continue;
-                    }
                 }
 
                 int cell = nextIdx * DAY_SLOTS + (int)dayOffset;
@@ -494,7 +589,7 @@ public class GreedyRepairOperator implements RepairOperator {
     }
 
     /** Clave de la cache de esqueletos: origen, destino, hora-del-día y SLA (independiente del día). */
-    private static long skeletonKey(int startIdx, int targetIdx, long readyMin, int slaHours) {
+    static long skeletonKey(int startIdx, int targetIdx, long readyMin, int slaHours) {   // package-private para tests
         long hourBucket = (readyMin % DAY_MIN) / SKELETON_BUCKET_MIN;   // 0..23
         return ((long) startIdx << 40)
                 | ((long) targetIdx << 24)
@@ -532,17 +627,14 @@ public class GreedyRepairOperator implements RepairOperator {
             blockFlight.merge(flightKey(e.idx, depMin), batch.getQuantity(), Integer::sum);
 
             boolean esFinalLeg = (i == result.edges.size() - 1);
+            // Fase R — carga por OCUPACIÓN concurrente: cada slot de la estadía real de la pierna.
             if (!esFinalLeg && e.to.idx >= 0) {
-                long arrDay     = arrMin / DAY_MIN;
-                long nextDepMin = result.actualDepartures.get(i + 1);
-                long depDay     = nextDepMin / DAY_MIN;
-                for (long day = arrDay; day <= depDay; day++) {
-                    blockAirport.merge(airportKey(e.to.idx, day * DAY_MIN),
-                            batch.getQuantity(), Integer::sum);
-                }
+                long salida = result.actualDepartures.get(i + 1);   // hasta que sale el siguiente vuelo
+                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, salida, batch.getQuantity());
             } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                // Destino final: la maleta entra al almacén al aterrizar (10 min, mismo día).
-                blockAirport.merge(airportKey(e.to.idx, arrMin), batch.getQuantity(), Integer::sum);
+                // Destino final: la maleta se retira ~DEST_STORAGE_MIN tras aterrizar (1 slot).
+                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
+                        batch.getQuantity());
             }
         }
     }
@@ -790,16 +882,20 @@ public class GreedyRepairOperator implements RepairOperator {
             if (remainingFlight(e, depMin, blockFlight) < qty + colchonVuelo) return false;
             boolean finalLeg = (i == edges.size() - 1);
             long llegada = depMin + e.durationMinutes;
-            if (!hasAirportCapacity(e.to, finalLeg, llegada, qty, blockAirport)) {
+            // Fase R — capacidad CONCURRENTE: la estadía real ocupa [llegada, salida); cada slot
+            // del intervalo debe caber. Destino final ≈ DEST_STORAGE_MIN; escala = hasta salir.
+            long salida = finalLeg ? llegada + DEST_STORAGE_MIN : deps.get(i + 1);
+            if (!cabeAlmacenPierna(e.to, llegada, salida, qty, blockAirport)) {
                 return false;
             }
-            // L2: colchón en almacén-día de HUB para la estadía overnight de una ESCALA
-            // (no destino final). Protege el storage de hub para los envíos urgentes/24h.
+            // L2: colchón en almacén de HUB para la estadía de una ESCALA (no destino final).
+            // Protege el storage concurrente de hub para los envíos urgentes/24h.
             if (!finalLeg && reservaAlmacen > 0.0 && e.to != null && e.to.capacity > 0
                     && esHub(e.to.idx)) {
                 int colchonAlm = (int) Math.ceil(reservaAlmacen * e.to.capacity);
-                if (capacidadAlmacen(e.to, llegada, blockAirport) < qty + colchonAlm) return false;
-                if (capacidadAlmacen(e.to, llegada + DAY_MIN, blockAirport) < qty + colchonAlm) return false;
+                if (!cabeAlmacenPierna(e.to, llegada, salida, qty + colchonAlm, blockAirport)) {
+                    return false;
+                }
             }
         }
         return true;
@@ -828,14 +924,11 @@ public class GreedyRepairOperator implements RepairOperator {
             keys.add(flightKey(e.idx, depMin));
 
             boolean esFinalLeg = (i == edges.size() - 1);
+            // Fase R — claves por SLOT de la estadía concurrente (mismo intervalo que applyToBlock).
             if (!esFinalLeg && e.to.idx >= 0) {
-                long arrDay = arrMin / DAY_MIN;
-                long depDay = deps.get(i + 1) / DAY_MIN;
-                for (long day = arrDay; day <= depDay; day++) {
-                    keys.add(airportKey(e.to.idx, day * DAY_MIN));
-                }
+                agregarSlotsEstadia(keys, e.to.idx, arrMin, deps.get(i + 1));
             } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                keys.add(airportKey(e.to.idx, arrMin));
+                agregarSlotsEstadia(keys, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN);
             }
         }
         return keys;
@@ -845,14 +938,82 @@ public class GreedyRepairOperator implements RepairOperator {
         return FlightKeyEncoder.flightKey(edgeIdx, epochMin);
     }
 
+    // Fase R — clave de almacén por SLOT de tiempo (no por día): el instante t cae en el slot
+    // t/STORAGE_SLOT_MIN, así la ocupación es CONCURRENTE (maletas presentes a la vez), no diaria.
     private static long airportKey(int nodeIdx, long epochMin) {
-        return FlightKeyEncoder.airportKey(nodeIdx, epochMin);
+        return slotKey(nodeIdx, epochMin / STORAGE_SLOT_MIN);
+    }
+
+    /** Clave (nodo, slot) para la ocupación de almacén concurrente. */
+    private static long slotKey(int nodeIdx, long slot) {
+        return (((long) nodeIdx) << DAY_BITS) | (slot & FlightKeyEncoder.DAY_MASK);
+    }
+
+    /**
+     * Fase R — clave de almacén (slot de tiempo) para un instante {@code epochMin}. Pública para
+     * que los tests siembren {@code airportOccupancy}/{@code blockAirport} en la MISMA franja que
+     * usa la contabilidad interna (sustituye a {@code FlightKeyEncoder.airportKey}, que era diaria).
+     */
+    public static long claveAlmacenDeSlot(int nodeIdx, long epochMin) {
+        return airportKey(nodeIdx, epochMin);
+    }
+
+    /** Último slot que contiene un instante < {@code salida} (salida exclusiva). */
+    private static long ultimoSlot(long llegada, long salida) {
+        return (Math.max(llegada + 1, salida) - 1) / STORAGE_SLOT_MIN;
+    }
+
+    /** Añade a {@code keys} todas las claves de slot de la estadía {@code [llegada, salida)}. */
+    private void agregarSlotsEstadia(Set<Long> keys, int nodeIdx, long llegada, long salida) {
+        if (nodeIdx < 0) return;
+        long s1 = ultimoSlot(llegada, salida);
+        for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
+            keys.add(slotKey(nodeIdx, s));
+        }
+    }
+
+    /**
+     * Fase R — suma {@code delta} (carga +qty / libera −qty) a cada slot de almacén que la estadía
+     * {@code [llegada, salida)} de una pierna ocupa en {@code mapa}. Destino final: salida ≈
+     * llegada+DEST_STORAGE_MIN (1 slot). Escala: salida = depMin del siguiente vuelo.
+     */
+    private void cargarAlmacenPierna(Map<Long, Integer> mapa, int nodeIdx,
+                                     long llegada, long salida, int delta) {
+        if (nodeIdx < 0) return;
+        long s1 = ultimoSlot(llegada, salida);
+        for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
+            mapa.merge(slotKey(nodeIdx, s), delta, Integer::sum);
+        }
+    }
+
+    /**
+     * Fase R — true si caben {@code qty} maletas en TODOS los slots de la estadía
+     * {@code [llegada, salida)} de la pierna (ocupación concurrente global + bloque ≤ capacidad).
+     */
+    private boolean cabeAlmacenPierna(Node node, long llegada, long salida, int qty,
+                                      Map<Long, Integer> blockAirport) {
+        if (node == null || node.idx < 0 || node.capacity <= 0) return true;
+        long s1 = ultimoSlot(llegada, salida);
+        for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
+            long k = slotKey(node.idx, s);
+            if (airportOccupancy.getOrDefault(k, 0) + blockAirport.getOrDefault(k, 0) + qty > node.capacity) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static long toEpochMin(LocalDateTime dt) {
         return dt.toLocalDate().toEpochDay() * DAY_MIN + dt.getHour() * 60L + dt.getMinute();
     }
 
+    /**
+     * Fase R — chequeo barato del SLOT de llegada para la expansión del Dijkstra (capacidad
+     * concurrente). El intervalo completo de estadía se valida en la materialización
+     * ({@link #rutaSirveParaBatch}/{@link #cabeAlmacenPierna}), que ya conoce la salida siguiente.
+     * El parámetro {@code destinoFinal} se conserva por compatibilidad de firma pero ya no altera
+     * el chequeo: el bloqueo overnight por día (+DAY_MIN) era propio del modelo de cubo-diario.
+     */
     private boolean hasAirportCapacity(Node node,
                                        boolean destinoFinal,
                                        long arrMin,
@@ -860,14 +1021,7 @@ public class GreedyRepairOperator implements RepairOperator {
                                        Map<Long, Integer> blockAirport) {
         if (node == null || node.idx < 0 || node.capacity <= 0) return true;
         long ak = airportKey(node.idx, arrMin);
-        if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty > node.capacity) {
-            return false;
-        }
-        if (!destinoFinal) {
-            long akD1 = airportKey(node.idx, arrMin + DAY_MIN);
-            return airportOccupancy.getOrDefault(akD1, 0) + blockAirport.getOrDefault(akD1, 0) + qty <= node.capacity;
-        }
-        return true;
+        return airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty <= node.capacity;
     }
 
     private RouteCandidate toRouteCandidate(RouteState state,
@@ -919,18 +1073,19 @@ public class GreedyRepairOperator implements RepairOperator {
     }
 
     /**
-     * Fase L1 — precio de congestión para ALMACÉN-día de HUB: muerde DESDE ~0.45 (u² en vez de
-     * u³) porque la saturación de almacén de hub es local/temporal (celdas-día al 100% mientras
-     * el promedio global sigue <60%). Así una ruta que apila tránsito overnight en un hub cuesta
-     * notablemente más, y los envíos FLEXIBLES (escalado por holgura en {@code costoSeleccion})
-     * la evitan desviándose a aeropuertos no-hub; los urgentes la siguen tomando.
+     * Fase L1/P — precio de congestión para ALMACÉN-día de HUB: {@code u^p/(1−u)} con exponente
+     * {@code p = precioHubExponente} configurable (Fase P). p<2 muerde antes (p=2 ⇒ desde ~0.45;
+     * p=1.7 ⇒ desde ~0.35) porque la saturación de almacén de hub es local/temporal (celdas-día al
+     * 100% mientras el promedio global sigue <60%). Así una ruta que apila tránsito overnight en un
+     * hub cuesta notablemente más, y los envíos FLEXIBLES (escalado por holgura en
+     * {@code costoSeleccion}) la evitan desviándose a aeropuertos no-hub; los urgentes la siguen tomando.
      */
-    static double precioCongestionAlmacenHub(int usado, int capacidad) {
+    double precioCongestionAlmacenHub(int usado, int capacidad) {
         if (capacidad <= 0) return 0.0;
         double u = (double) usado / capacidad;
         if (u <= 0.0) return 0.0;
         if (u >= 1.0) return 1000.0;
-        return (u * u) / Math.max(0.05, 1.0 - u);   // ≈0 hasta ~0.45, sube fuerte antes que u³
+        return Math.pow(u, precioHubExponente) / Math.max(0.05, 1.0 - u);
     }
 
     /** Suma del precio de congestión a lo largo de los vuelos y estadías en almacén de la ruta. */
@@ -958,7 +1113,8 @@ public class GreedyRepairOperator implements RepairOperator {
                         ? precioCongestionAlmacenHub(usadoArr, e.to.capacity)
                         : precioCongestion(usadoArr, e.to.capacity);
                 if (transito) {
-                    int remNext = capacidadAlmacen(e.to, arrMin + DAY_MIN, blockAirport);
+                    // Fase R — muestrea el slot de fin de estadía (salida del siguiente vuelo).
+                    int remNext = capacidadAlmacen(e.to, deps.get(i + 1), blockAirport);
                     int usadoNext = e.to.capacity - remNext;
                     sum += hubTransito
                             ? precioCongestionAlmacenHub(usadoNext, e.to.capacity)
@@ -985,7 +1141,8 @@ public class GreedyRepairOperator implements RepairOperator {
             int remaining = capacidadAlmacen(edge.to, arrMin, blockAirport);
             max = Math.max(max, (double) (edge.to.capacity - remaining + qty) / edge.to.capacity);
             if (!destinoFinal) {
-                int remainingNextDay = capacidadAlmacen(edge.to, arrMin + DAY_MIN, blockAirport);
+                // Fase R — proxy de presencia continua: muestrea el slot siguiente al de llegada.
+                int remainingNextDay = capacidadAlmacen(edge.to, arrMin + STORAGE_SLOT_MIN, blockAirport);
                 max = Math.max(max, (double) (edge.to.capacity - remainingNextDay + qty) / edge.to.capacity);
             }
         }
@@ -1012,7 +1169,8 @@ public class GreedyRepairOperator implements RepairOperator {
                 int remaining = capacidadAlmacen(e.to, arrMin, blockAirport);
                 max = Math.max(max, (double) (e.to.capacity - remaining + qty) / e.to.capacity);
                 if (i < edges.size() - 1) {
-                    int remainingNextDay = capacidadAlmacen(e.to, arrMin + DAY_MIN, blockAirport);
+                    // Fase R — muestrea el slot de fin de estadía (salida del siguiente vuelo).
+                    int remainingNextDay = capacidadAlmacen(e.to, deps.get(i + 1), blockAirport);
                     max = Math.max(max, (double) (e.to.capacity - remainingNextDay + qty) / e.to.capacity);
                 }
             }
@@ -1143,9 +1301,10 @@ public class GreedyRepairOperator implements RepairOperator {
                 if (asignado > cap)  airportDaysSobre++;
             }
         }
-        log.info("  Airport-days con ocupación  : {}", airportDaysUsados);
-        log.info("  Airport-days al 100 %        : {}", airportDaysLlenos);
-        log.info("  Airport-days sobre capacidad : {}", airportDaysSobre);
+        // Fase R — claves por SLOT de tiempo: estos contadores miden PICO CONCURRENTE, no suma diaria.
+        log.info("  Airport-slots con ocupación : {}", airportDaysUsados);
+        log.info("  Airport-slots al 100 %       : {}", airportDaysLlenos);
+        log.info("  Airport-slots sobre capacidad: {}", airportDaysSobre);
         if (totalAirportCap > 0)
             log.info("  Utilización global aerop.    : {}/{} ({} %)",
                     totalAirportAsig, totalAirportCap, totalAirportAsig * 100 / totalAirportCap);

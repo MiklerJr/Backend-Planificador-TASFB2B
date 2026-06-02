@@ -288,7 +288,8 @@ public class PlanificadorController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
             @RequestParam(required = false)        Integer sa,
             @RequestParam(required = false)        Integer ta,
-            @RequestParam(required = false)        Integer dias) {
+            @RequestParam(required = false)        Integer dias,
+            @RequestParam(defaultValue = "false")  boolean procesamientoPrevio) {
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
 
         EjecucionParams params = new EjecucionParams();
@@ -300,6 +301,7 @@ public class PlanificadorController {
         params.setSaMin(sa);
         params.setTaSegundos(ta);
         params.setDias(dias);
+        params.setProcesamientoPrevio(procesamientoPrevio);   // por defecto false → sin warm-up
 
         JobState job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
@@ -312,6 +314,7 @@ public class PlanificadorController {
         if (sa != null)   body.put("sa", sa);
         if (ta != null)   body.put("ta", ta);
         if (dias != null) body.put("dias", dias);
+        body.put("procesamientoPrevio", procesamientoPrevio);
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }
