@@ -176,6 +176,114 @@ class AcoBlockEngineTest {
     }
 
     @Test
+    void reservaAlmacenHubBloqueaFlexiblePeroSegundaPasadaLaRecupera() {
+        // Fase L2: con la estadía de escala en un HUB de almacén casi lleno, un envío
+        // FLEXIBLE (48h, mucha holgura) debe ser rechazado por la reserva de colchón
+        // (1.ª pasada reservaAlmacen>0), pero la 2.ª pasada (reservaAlmacen=0) le DEBE
+        // devolver la misma ruta: la reserva nunca causa un sinRuta evitable (anti-J3/K1).
+        Graph graph = graphConRutasAlternativas();
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        // Los nodos de tránsito del grafo de prueba (BBB, DDD) se designan hub:
+        // así cualquier candidato multi-tramo transita un hub de almacén.
+        enrutador.setHubs(Set.of("BBB", "DDD", "CCC"));
+
+        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+
+        // Candidato de 2 tramos (transita un hub). El Dijkstra hijo no aplica reserva.
+        RouteCandidate viaHub = enrutador
+                .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
+                .filter(c -> c.getEdges().size() == 2)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("se esperaba una ruta multi-tramo via hub"));
+
+        // Saturar el almacén-día de la escala (nodo de tránsito) dejando un remanente
+        // > qty (pasa el chequeo base) pero menor que qty + colchón (falla la reserva).
+        Edge escala = viaHub.getEdges().get(0);
+        long llegadaEscala = viaHub.getActualDepartures().get(0) + escala.durationMinutes;
+        long claveEscala = FlightKeyEncoder.airportKey(escala.to.idx, llegadaEscala);
+        int remanente = 22;   // qty=20 < 22 ; colchón (≈10% de 500 escalado por holgura) ≫ 2
+        Map<Long, Integer> blockAirport = new HashMap<>();
+        blockAirport.put(claveEscala, escala.to.capacity - remanente);
+
+        assertFalse(
+                enrutador.rutaSirveParaBatch(viaHub, flexible, new HashMap<>(), blockAirport, 0.0, 0.10),
+                "con reserva de almacén el flexible no cabe en el hub casi lleno");
+        assertTrue(
+                enrutador.rutaSirveParaBatch(viaHub, flexible, new HashMap<>(), blockAirport, 0.0, 0.0),
+                "la 2.ª pasada (reserva=0) recupera la ruta: nunca un sinRuta evitable");
+    }
+
+    @Test
+    void reservaAlmacenNoPenalizaCuandoElDestinoFinalEsHub() {
+        // Fase L2 (alcance): la reserva de almacén-hub protege el TRÁNSITO overnight,
+        // no a quien TERMINA en el hub. Un envío cuyo destino final es hub no sufre la
+        // reserva aunque ese almacén-día esté casi lleno (la entrega no es desviable).
+        Graph graph = graphConRutasAlternativas();
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        enrutador.setHubs(Set.of("CCC"));   // el destino final CCC es hub
+
+        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+
+        RouteCandidate directo = enrutador
+                .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
+                .filter(c -> c.getEdges().size() == 1)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("se esperaba la ruta directa AAA->CCC"));
+
+        Edge ultimo = directo.getEdges().get(0);
+        long llegadaDestino = directo.getActualDepartures().get(0) + ultimo.durationMinutes;
+        long claveDestino = FlightKeyEncoder.airportKey(ultimo.to.idx, llegadaDestino);
+        Map<Long, Integer> blockAirport = new HashMap<>();
+        blockAirport.put(claveDestino, ultimo.to.capacity - 22);   // casi lleno, remanente 22 >= qty
+
+        assertTrue(
+                enrutador.rutaSirveParaBatch(directo, flexible, new HashMap<>(), blockAirport, 0.0, 0.10),
+                "el destino final hub NO lleva colchón de reserva: la entrega no se penaliza");
+    }
+
+    @Test
+    void reclasificarHubsMarcaAeropuertoCalienteYActivaLaReserva() {
+        // Fase O: un aeropuerto que NO está en la lista estática de hubs pero cuya ocupación-pico
+        // de almacén supera el umbral debe pasar a tratarse como hub (la reserva L2 empieza a
+        // protegerlo). Verifica el descubrimiento dinámico vía el comportamiento de rutaSirveParaBatch.
+        Graph graph = graphConRutasAlternativas();
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        // NO llamamos setHubs: el operador arranca SIN hubs (no hay lista hardcodeada); los hubs
+        // solo se descubren por utilización real vía reclasificarHubsPorUtilizacion().
+
+        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+        RouteCandidate viaTransito = enrutador
+                .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
+                .filter(c -> c.getEdges().size() == 2)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("se esperaba una ruta multi-tramo"));
+
+        Edge escala = viaTransito.getEdges().get(0);
+        long llegadaEscala = viaTransito.getActualDepartures().get(0) + escala.durationMinutes;
+        long claveEscala = FlightKeyEncoder.airportKey(escala.to.idx, llegadaEscala);
+
+        // Antes de reclasificar: el nodo de tránsito NO es hub → la reserva NO aplica aunque el
+        // almacén-día esté casi lleno; la ruta pasa (remanente 22 >= qty 20).
+        Map<Long, Integer> sembrado = new HashMap<>();
+        sembrado.put(claveEscala, escala.to.capacity - 22);   // ocupación-pico 478/500 = 0.956
+        enrutador.commitBlock(new HashMap<>(), sembrado);     // -> airportOccupancy global
+
+        assertTrue(
+                enrutador.rutaSirveParaBatch(viaTransito, flexible, new HashMap<>(), new HashMap<>(), 0.0, 0.10),
+                "antes de reclasificar el nodo no es hub: la reserva no aplica");
+
+        // Reclasificar: el nodo de tránsito supera 0.65 de utilización-pico → pasa a hub.
+        enrutador.reclasificarHubsPorUtilizacion(0.65);
+
+        assertFalse(
+                enrutador.rutaSirveParaBatch(viaTransito, flexible, new HashMap<>(), new HashMap<>(), 0.0, 0.10),
+                "tras reclasificar el nodo caliente es hub: la reserva bloquea al flexible");
+        assertTrue(
+                enrutador.rutaSirveParaBatch(viaTransito, flexible, new HashMap<>(), new HashMap<>(), 0.0, 0.0),
+                "la 2.ª pasada (reserva=0) recupera la ruta: nunca un sinRuta evitable");
+    }
+
+    @Test
     void acoNoConfirmaRutasTardiasLasDifiere() {
         Graph graph = graphConRutasAlternativas();
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);

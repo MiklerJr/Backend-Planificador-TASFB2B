@@ -21,6 +21,17 @@ public class GreedyRepairOperator implements RepairOperator {
     private static final long SKELETON_BUCKET_MIN = 60L;   // bucket de hora-del-día para la cache cross-bloque
     private static final int  MAX_SKELETONS_POR_CLAVE = 6;
 
+    // Fase O (hubs 100% dinámicos): NO hay lista hardcodeada de hubs. Un aeropuerto se marca hub
+    // cuando su día más cargado alcanza esta fracción de su capacidad de almacén — los hubs salen
+    // siempre de los DATOS (utilización real), así el algoritmo no se rompe si cambia el dataset
+    // (aeropuertos/demanda distintos). reclasificarHubsPorUtilizacion() corre periódicamente desde
+    // commitBlock para cubrir todos los escenarios. El hardcode anterior (13 ICAO fijos) sub-cubría:
+    // la auditoría mostró ~45% de los fallos del onset en aeropuertos calientes NO listados.
+    private static final double UMBRAL_HUB_PICO = 0.65;
+    private static final int    HUB_RECLASIFICAR_CADA = 10;   // bloques entre reclasificaciones
+    private boolean[] hubByIdx;          // consulta O(1) en el bucle caliente; arranca vacío
+    private int commitsDesdeReclasificar = 0;
+
     private final Graph graph;
 
     private final int      nodeCount;
@@ -75,6 +86,65 @@ public class GreedyRepairOperator implements RepairOperator {
             if (e.from != null && e.from.idx >= 0) adj[e.from.idx].add(e);
         }
         adjByIdx = adj;
+
+        // Fase O: sin hubs hardcodeados — arranca vacío y se descubren por datos (commitBlock →
+        // reclasificarHubsPorUtilizacion). setHubs() permite una sobre-escritura explícita (tests).
+        this.hubByIdx = new boolean[nodeCount];
+    }
+
+    /**
+     * Define explícitamente qué nodos son hub (sobre-escritura manual; usado por tests o por una
+     * lista externa). Con {@code codigos} null/vacío deja el conjunto vacío → 100% dinámico vía
+     * {@link #reclasificarHubsPorUtilizacion(double)}.
+     */
+    public void setHubs(Set<String> codigos) {
+        marcarHubs(codigos == null ? Collections.emptySet() : codigos);
+    }
+
+    private void marcarHubs(Set<String> codigos) {
+        boolean[] flags = new boolean[nodeCount];
+        for (int idx = 0; idx < nodeCount; idx++) {
+            flags[idx] = nodeByIdx[idx] != null && codigos.contains(nodeByIdx[idx]);
+        }
+        this.hubByIdx = flags;
+    }
+
+    /** Fase L — true si el nodo (por idx) es un hub de almacén cuello-de-botella. O(1). */
+    private boolean esHub(int nodeIdx) {
+        return nodeIdx >= 0 && nodeIdx < hubByIdx.length && hubByIdx[nodeIdx];
+    }
+
+    /**
+     * Fase O — reclasifica el conjunto de hubs a partir de la ocupación REAL del almacén.
+     *
+     * <p>Recorre {@link #airportOccupancy} (cada entrada es un nodo-día) y, por nodo, calcula su
+     * <b>utilización-pico</b> = {@code max} sobre sus días de {@code ocupación / capacidad}. Marca
+     * como hub a todo nodo con pico {@code >= umbralPico} — <b>solo desde los datos</b>, sin lista
+     * hardcodeada (robusto ante cambios de dataset). Como el pico es un {@code max} sobre ocupación
+     * acumulada, el conjunto crece monótonamente (sin flapping).
+     *
+     * <p>O(airportOccupancy.size()); se invoca periódicamente desde el servicio (no en el bucle
+     * caliente por-batch) → no añade cómputo al presupuesto {@code Ta} de enrutado.
+     *
+     * @param umbralPico fracción de capacidad a partir de la cual un aeropuerto se considera hub
+     */
+    public void reclasificarHubsPorUtilizacion(double umbralPico) {
+        double[] picoUtil = new double[nodeCount];
+        for (Map.Entry<Long, Integer> entry : airportOccupancy.entrySet()) {
+            int nodeIdx = (int) (entry.getKey() >> DAY_BITS);
+            if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
+            String code = nodeByIdx[nodeIdx];
+            Node nodo = code != null ? graph.nodes.get(code) : null;
+            if (nodo == null || nodo.capacity <= 0) continue;
+            double util = entry.getValue() / (double) nodo.capacity;
+            if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
+        }
+
+        boolean[] flags = new boolean[nodeCount];
+        for (int idx = 0; idx < nodeCount; idx++) {
+            flags[idx] = picoUtil[idx] >= umbralPico;
+        }
+        this.hubByIdx = flags;
     }
 
     // -----------------------------------------------------------------------
@@ -140,6 +210,12 @@ public class GreedyRepairOperator implements RepairOperator {
         blockAirport.forEach((key, qty) -> {
             if (qty != 0) airportOccupancy.merge(key, qty, Integer::sum);
         });
+        // Fase O: redescubrir hubs desde la ocupación real cada N bloques (todos los escenarios).
+        // Fuera del bucle caliente por-batch → Ta-safe; el conjunto solo crece (sin flapping).
+        if (++commitsDesdeReclasificar >= HUB_RECLASIFICAR_CADA) {
+            commitsDesdeReclasificar = 0;
+            reclasificarHubsPorUtilizacion(UMBRAL_HUB_PICO);
+        }
     }
 
     /**
@@ -657,21 +733,33 @@ public class GreedyRepairOperator implements RepairOperator {
                                       LuggageBatch batch,
                                       Map<Long, Integer> blockFlight,
                                       Map<Long, Integer> blockAirport) {
-        return rutaSirveParaBatch(candidate, batch, blockFlight, blockAirport, 0.0);
+        return rutaSirveParaBatch(candidate, batch, blockFlight, blockAirport, 0.0, 0.0);
     }
 
-    /**
-     * Variante con <b>reserva (J4)</b>: para un envío flexible exige que cada vuelo
-     * conserve un colchón de capacidad libre (`reservaBase · capacidad`, escalado por la
-     * holgura del envío), protegiendo los vuelos cuello-de-botella para los envíos de SLA
-     * corto. Con `reservaBase = 0` equivale al chequeo normal. El caller debe reintentar
-     * con `reservaBase = 0` si ninguna ruta pasa, para no crear un sinRuta evitable.
-     */
+    /** Compat: reserva de vuelos (J4) sin reserva de almacén. */
     public boolean rutaSirveParaBatch(RouteCandidate candidate,
                                       LuggageBatch batch,
                                       Map<Long, Integer> blockFlight,
                                       Map<Long, Integer> blockAirport,
                                       double reservaBase) {
+        return rutaSirveParaBatch(candidate, batch, blockFlight, blockAirport, reservaBase, 0.0);
+    }
+
+    /**
+     * Variante con <b>reserva (J4 + Fase L2)</b>: para un envío flexible exige un colchón de
+     * capacidad libre escalado por su holgura en (a) cada VUELO (`reservaBase`, J4) y (b) el
+     * ALMACÉN-día de cada escala de HUB en su estadía overnight (`reservaAlmacenBase`, L2 — el
+     * recurso cuello verificado). Los envíos urgentes (holgura baja) casi no reservan; el
+     * destino final y las escalas no-hub no llevan reserva de almacén. Con ambas bases en 0
+     * equivale al chequeo normal. El caller DEBE reintentar con bases=0 si ninguna ruta pasa,
+     * para no crear un sinRuta evitable (invariante anti-J3/K1).
+     */
+    public boolean rutaSirveParaBatch(RouteCandidate candidate,
+                                      LuggageBatch batch,
+                                      Map<Long, Integer> blockFlight,
+                                      Map<Long, Integer> blockAirport,
+                                      double reservaBase,
+                                      double reservaAlmacenBase) {
         if (candidate == null || batch == null) return false;
         List<Edge> edges = candidate.getEdges();
         List<Long> deps = candidate.getActualDepartures();
@@ -686,21 +774,32 @@ public class GreedyRepairOperator implements RepairOperator {
 
         // Colchón de reserva proporcional a la holgura (urgente ⇒ 0 ⇒ sin reserva).
         double slackRatio = 0.0;
-        if (reservaBase > 0.0) {
+        if (reservaBase > 0.0 || reservaAlmacenBase > 0.0) {
             double slaMin = Math.max(1.0, batch.getSlaLimitHours() * 60.0);
             slackRatio = Math.max(0.0, Math.min(1.0, candidate.getSlackMin() / slaMin));
         }
-        double reserva = reservaBase * slackRatio;
+        double reservaVuelo = reservaBase * slackRatio;
+        double reservaAlmacen = reservaAlmacenBase * slackRatio;
 
         int qty = batch.getQuantity();
         for (int i = 0; i < edges.size(); i++) {
             Edge e = edges.get(i);
             long depMin = deps.get(i);
-            int colchon = reserva > 0.0 && e.capacity > 0 ? (int) Math.ceil(reserva * e.capacity) : 0;
-            if (remainingFlight(e, depMin, blockFlight) < qty + colchon) return false;
+            int colchonVuelo = reservaVuelo > 0.0 && e.capacity > 0
+                    ? (int) Math.ceil(reservaVuelo * e.capacity) : 0;
+            if (remainingFlight(e, depMin, blockFlight) < qty + colchonVuelo) return false;
             boolean finalLeg = (i == edges.size() - 1);
-            if (!hasAirportCapacity(e.to, finalLeg, depMin + e.durationMinutes, qty, blockAirport)) {
+            long llegada = depMin + e.durationMinutes;
+            if (!hasAirportCapacity(e.to, finalLeg, llegada, qty, blockAirport)) {
                 return false;
+            }
+            // L2: colchón en almacén-día de HUB para la estadía overnight de una ESCALA
+            // (no destino final). Protege el storage de hub para los envíos urgentes/24h.
+            if (!finalLeg && reservaAlmacen > 0.0 && e.to != null && e.to.capacity > 0
+                    && esHub(e.to.idx)) {
+                int colchonAlm = (int) Math.ceil(reservaAlmacen * e.to.capacity);
+                if (capacidadAlmacen(e.to, llegada, blockAirport) < qty + colchonAlm) return false;
+                if (capacidadAlmacen(e.to, llegada + DAY_MIN, blockAirport) < qty + colchonAlm) return false;
             }
         }
         return true;
@@ -819,6 +918,21 @@ public class GreedyRepairOperator implements RepairOperator {
         return (u * u * u) / Math.max(0.02, 1.0 - u);   // ≈0 hasta ~0.6, explota cerca de 1
     }
 
+    /**
+     * Fase L1 — precio de congestión para ALMACÉN-día de HUB: muerde DESDE ~0.45 (u² en vez de
+     * u³) porque la saturación de almacén de hub es local/temporal (celdas-día al 100% mientras
+     * el promedio global sigue <60%). Así una ruta que apila tránsito overnight en un hub cuesta
+     * notablemente más, y los envíos FLEXIBLES (escalado por holgura en {@code costoSeleccion})
+     * la evitan desviándose a aeropuertos no-hub; los urgentes la siguen tomando.
+     */
+    static double precioCongestionAlmacenHub(int usado, int capacidad) {
+        if (capacidad <= 0) return 0.0;
+        double u = (double) usado / capacidad;
+        if (u <= 0.0) return 0.0;
+        if (u >= 1.0) return 1000.0;
+        return (u * u) / Math.max(0.05, 1.0 - u);   // ≈0 hasta ~0.45, sube fuerte antes que u³
+    }
+
     /** Suma del precio de congestión a lo largo de los vuelos y estadías en almacén de la ruta. */
     private double projectedScarcity(List<Edge> edges,
                                      List<Long> deps,
@@ -834,11 +948,21 @@ public class GreedyRepairOperator implements RepairOperator {
             }
             if (e.to != null && e.to.idx >= 0 && e.to.capacity > 0) {
                 long arrMin = depMin + e.durationMinutes;
+                boolean transito = i < edges.size() - 1;   // escala (no destino final)
+                // L1: en una escala de HUB el almacén es el cuello → curva que muerde antes.
+                // El destino final (delivery) y las escalas no-hub conservan la curva base.
+                boolean hubTransito = transito && esHub(e.to.idx);
                 int remaining = capacidadAlmacen(e.to, arrMin, blockAirport);
-                sum += precioCongestion(e.to.capacity - remaining, e.to.capacity);
-                if (i < edges.size() - 1) {
+                int usadoArr = e.to.capacity - remaining;
+                sum += hubTransito
+                        ? precioCongestionAlmacenHub(usadoArr, e.to.capacity)
+                        : precioCongestion(usadoArr, e.to.capacity);
+                if (transito) {
                     int remNext = capacidadAlmacen(e.to, arrMin + DAY_MIN, blockAirport);
-                    sum += precioCongestion(e.to.capacity - remNext, e.to.capacity);
+                    int usadoNext = e.to.capacity - remNext;
+                    sum += hubTransito
+                            ? precioCongestionAlmacenHub(usadoNext, e.to.capacity)
+                            : precioCongestion(usadoNext, e.to.capacity);
                 }
             }
         }

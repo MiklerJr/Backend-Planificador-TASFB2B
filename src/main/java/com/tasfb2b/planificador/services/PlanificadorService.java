@@ -768,6 +768,10 @@ public class PlanificadorService {
             logBloque(motorRes, bloqueActual, totalBloques,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), false);
 
+            // Fase O (hubs dinámicos): la reclasificación de hubs por utilización real corre dentro
+            // de enrutador.commitBlock() cada N bloques (cubre E1/E2/E3 uniformemente). Sin lista
+            // hardcodeada → robusto ante cambios de dataset.
+
             // K3: instrumentación de saturación (flight-day vs airport-day) para observar el
             // onset del primer fallo y dirigir la Fase L (¿satura vuelo o almacén de hub?).
             if (bloqueActual % 50 == 0 || bloqueActual == totalBloques) {

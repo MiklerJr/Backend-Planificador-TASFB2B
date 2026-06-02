@@ -51,6 +51,7 @@ public class AcoBlockEngine {
     private static final double PHEROMONE_MAX = 20.0;
     // Fase J — política congestión/holgura.
     private static final double RESERVA_BASE = 0.15;              // J4: colchón en vuelos para flexibles
+    private static final double RESERVA_ALMACEN_BASE = 0.10;      // L2: colchón en almacén-día de hub (escalas overnight)
     private static final double UMBRAL_CONGESTION_DEFER = 2.0;    // J3: ruta "cara" en congestión
     private static final long   MARGEN_DEFER_MIN = 1440L;         // J3: solo diferir si slack > 24h (urgentes nunca)
     private static final int    GROUP_ROUTE_CANDIDATES = 5;       // J2: más candidatos por grupo → más diversidad de congestión
@@ -343,12 +344,13 @@ public class AcoBlockEngine {
                                            List<RouteCandidate> candidatos,
                                            Map<Long, Integer> simFlight,
                                            Map<Long, Integer> simAirport) {
-        // J4: primera pasada respetando la reserva (colchón en vuelos cuello-de-botella).
-        RouteCandidate best = mejorPorCosto(enrutador, batch, candidatos, simFlight, simAirport, RESERVA_BASE);
-        // Invariante: si la reserva no deja ninguna ruta, se levanta para este envío
-        // (la reserva nunca causa un sinRuta evitable).
-        if (best == null && RESERVA_BASE > 0.0) {
-            best = mejorPorCosto(enrutador, batch, candidatos, simFlight, simAirport, 0.0);
+        // J4 + L2: 1ª pasada respetando la reserva (colchón en vuelos Y en almacén-día de hub).
+        RouteCandidate best = mejorPorCosto(enrutador, batch, candidatos, simFlight, simAirport,
+                RESERVA_BASE, RESERVA_ALMACEN_BASE);
+        // Invariante (anti-J3/K1): si la reserva no deja ninguna ruta, se levanta para este
+        // envío (la reserva nunca causa un sinRuta evitable).
+        if (best == null && (RESERVA_BASE > 0.0 || RESERVA_ALMACEN_BASE > 0.0)) {
+            best = mejorPorCosto(enrutador, batch, candidatos, simFlight, simAirport, 0.0, 0.0);
         }
         return best;
     }
@@ -358,12 +360,14 @@ public class AcoBlockEngine {
                                          List<RouteCandidate> candidatos,
                                          Map<Long, Integer> simFlight,
                                          Map<Long, Integer> simAirport,
-                                         double reservaBase) {
+                                         double reservaBase,
+                                         double reservaAlmacenBase) {
         RouteCandidate best = null;
         double bestCost = Double.MAX_VALUE;
         for (RouteCandidate r : candidatos) {
             if (!r.isCumpleSLA()) continue;                                  // F1
-            if (!enrutador.rutaSirveParaBatch(r, batch, simFlight, simAirport, reservaBase)) continue;
+            if (!enrutador.rutaSirveParaBatch(r, batch, simFlight, simAirport,
+                    reservaBase, reservaAlmacenBase)) continue;
             double c = costoSeleccion(batch, r);
             if (c < bestCost) { bestCost = c; best = r; }
         }
