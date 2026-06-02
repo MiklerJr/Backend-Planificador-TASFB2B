@@ -1,0 +1,7 @@
+.idea/
+.git/
+*.iml
+.gradle/
+.mvn/
+data/
+src/test/

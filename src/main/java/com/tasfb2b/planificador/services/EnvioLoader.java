@@ -1,114 +1,41 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.dto.EnvioDTO;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 
 @Component
 public class EnvioLoader {
 
-    public List<EnvioDTO> cargarEnvios(String origenICAO) {
-        List<EnvioDTO> envios = new ArrayList<>();
+    private final JdbcTemplate jdbcTemplate;
 
-        String filename = "data/_envios_preliminar_/_envios_" + origenICAO + "_.txt";
-
-        try {
-            InputStream is = getClass()
-                    .getClassLoader()
-                    .getResourceAsStream(filename);
-
-            if (is == null) {
-                System.out.println("Archivo no encontrado: " + filename);
-                return envios;
-            }
-
-            BufferedReader br = new BufferedReader(new InputStreamReader(is));
-
-            String linea;
-            while ((linea = br.readLine()) != null) {
-                EnvioDTO envio = parseLinea(linea);
-                if (envio != null) {
-                    envios.add(envio);
-                }
-            }
-
-            br.close();
-
-        } catch (Exception e) {
-            System.out.println("Error cargando envíos: " + e.getMessage());
-        }
-
-        return envios;
+    public EnvioLoader(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
     }
 
-    public int procesarEnvios(String origenICAO, int limite, Consumer<EnvioDTO> onEnvio) {
-        String filename = "data/_envios_preliminar_/_envios_" + origenICAO + "_.txt";
-        int procesados = 0;
+    /**
+     * Método optimizado para cargar envíos desde PostgreSQL.
+     * La base de datos se encarga de ordenar por fecha y limitar los resultados,
+     * ahorrando muchísima memoria RAM en Java.
+     */
+    public List<EnvioDTO> cargarEnviosOptimizados(String origenICAO, int limite) {
+        // Armamos el query. Si el límite es el valor máximo, no aplicamos LIMIT en SQL
+        String limitClause = limite < Integer.MAX_VALUE ? " LIMIT " + limite : "";
+        
+        String sql = "SELECT id_envio, icao_destino, cantidad_maletas, hora_registro, minuto_registro " +
+                     "FROM ENVIO " +
+                     "WHERE icao_origen = ? " +
+                     "ORDER BY fecha_hora_registro ASC" + limitClause;
 
-        if (limite <= 0) {
-            return 0;
-        }
-
-        try {
-            InputStream is = getClass()
-                    .getClassLoader()
-                    .getResourceAsStream(filename);
-
-            if (is == null) {
-                System.out.println("Archivo no encontrado: " + filename);
-                return 0;
-            }
-
-            BufferedReader br = new BufferedReader(new InputStreamReader(is));
-            String linea;
-
-            while ((linea = br.readLine()) != null) {
-                EnvioDTO envio = parseLinea(linea);
-                if (envio == null) {
-                    continue;
-                }
-
-                onEnvio.accept(envio);
-                procesados++;
-
-                if (procesados >= limite) {
-                    break;
-                }
-            }
-
-            br.close();
-
-        } catch (Exception e) {
-            System.out.println("Error cargando envíos: " + e.getMessage());
-        }
-
-        return procesados;
-    }
-
-    private EnvioDTO parseLinea(String linea) {
-        try {
-            String[] parts = linea.split("-");
-
-            if (parts.length < 6) {
-                return null;
-            }
-
-            String id = parts[0].trim();
-            int hh = Integer.parseInt(parts[2].trim());
-            int mm = Integer.parseInt(parts[3].trim());
-            String destino = parts[4].trim();
-            int maletas = Integer.parseInt(parts[5].trim());
-
-            return new EnvioDTO(id, destino, maletas, hh, mm);
-
-        } catch (Exception e) {
-            return null;
-        }
+        // jdbcTemplate.query mapea automáticamente cada fila devuelta a un EnvioDTO
+        return jdbcTemplate.query(sql, (rs, rowNum) -> new EnvioDTO(
+                rs.getString("id_envio"),
+                rs.getString("icao_destino"),
+                rs.getInt("cantidad_maletas"),
+                rs.getInt("hora_registro"),
+                rs.getInt("minuto_registro")
+        ), origenICAO);
     }
 }

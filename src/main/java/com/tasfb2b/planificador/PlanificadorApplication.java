@@ -1,11 +1,14 @@
 package com.tasfb2b.planificador;
 
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
+
+import com.tasfb2b.planificador.services.MigradorEnviosDb;
 
 import java.util.Arrays;
 
@@ -34,4 +37,17 @@ public class PlanificadorApplication {
         source.registerCorsConfiguration("/**", config);
         return new CorsFilter(source);
     }
+
+
+    /*@Bean
+    CommandLineRunner initDatabase(MigradorEnviosDb migrador) {
+        return args -> {
+            // Pon aquí la ruta absoluta de tu computadora
+            String ruta = "E:\\Codes\\GIT\\Backend-Planificador-TASFB2B\\data\\_envios_preliminar_";
+
+            System.out.println("Iniciando migración masiva a PostgreSQL...");
+            // Descomenta la línea de abajo SOLO CUANDO QUIERAS LLENAR LA BASE DE DATOS
+            migrador.migrarDirectorioCompleto(ruta);
+        };
+    }*/
 }

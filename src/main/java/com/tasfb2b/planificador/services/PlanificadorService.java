@@ -6,13 +6,6 @@ import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
-import com.tasfb2b.planificador.algorithm.aco.AlgorithmACO;
-import com.tasfb2b.planificador.algorithm.aco.Ant;
-import com.tasfb2b.planificador.algorithm.aco.ConfigACO;
-import com.tasfb2b.planificador.algorithm.aco.CostFunction;
-import com.tasfb2b.planificador.algorithm.aco.Edge;
-import com.tasfb2b.planificador.algorithm.aco.Graph;
-import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.PlanificacionResultado;
 import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
@@ -39,17 +32,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.PriorityQueue;
-import java.util.Random;
-import java.util.Set;
 
 @Slf4j
 @Service
@@ -1035,16 +1017,13 @@ public class PlanificadorService {
             int offsetOrigen = offsetPorCodigo.getOrDefault(origen, 0);
 
             Graph graph = mapper.mapToGraph(aeropuertos, vuelos);
-            List<EnvioDTO> envios = envioLoader.cargarEnvios(origen);
+            
+            // FASE 2: Obtenemos los envíos directamente desde PostgreSQL ya filtrados y ordenados
+            List<EnvioDTO> envios = envioLoader.cargarEnviosOptimizados(origen, limite);
+            
             if (envios.isEmpty()) {
                 continue;
             }
-
-            if (envios.size() > limite) {
-                envios = envios.subList(0, limite);
-            }
-            envios = new ArrayList<>(envios);
-            envios.sort(Comparator.comparingInt(e -> (e.horaRegistro * 60) + e.minutoRegistro));
 
             ResumenPlanificacionGlobal.EstadisticaOrigen stats = new ResumenPlanificacionGlobal.EstadisticaOrigen();
             stats.origen = origen;
