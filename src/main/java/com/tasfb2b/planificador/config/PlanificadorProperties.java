@@ -58,6 +58,13 @@ public class PlanificadorProperties {
         private boolean simularTiempoReal3 = false;
 
         /**
+         * Fase T (N3) — si true, antes del bucle de bloques de E2 se pre-calienta la caché de
+         * esqueletos con la demanda de la ventana (Dijkstra fuera del presupuesto Ta). Sube el
+         * throughput en arranque limpio (caché fría). Ta-safe; no cambia rutas. {@code false} = off.
+         */
+        private boolean prewarmSkeletons = true;
+
+        /**
          * Límite máximo de ventanas a procesar (para acotar archivos enormes).
          * Ej: 720 ventanas de 10 min = 5 días.
          * Valor por defecto 0 significa que lee todo el archivo.

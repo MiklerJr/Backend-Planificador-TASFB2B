@@ -49,6 +49,9 @@ public class PlanificadorService {
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
 
+    /** Fase T (N3): candidatos por clave al pre-calentar esqueletos (= GROUP_ROUTE_CANDIDATES del hot-path). */
+    private static final int PREWARM_ROUTE_CANDIDATES = 5;
+
     // ── DEPENDENCIAS ANTIGUAS (ACO) ─────────────────────────────────────
     private final AeropuertoLoader aeropuertoLoader;
     private final GraphBuilder graphBuilder;
@@ -715,6 +718,20 @@ public class PlanificadorService {
             if (job != null && !("cancelado".equals(job.estado) || job.canceladoPorUsuario)) {
                 job.estado = "ejecutando";
             }
+        }
+
+        // Fase T (N3) — pre-calienta la caché de esqueletos con la demanda de toda la ventana antes
+        // del bucle de bloques: mueve el costo del Dijkstra FUERA del presupuesto Ta (sube throughput
+        // en arranque limpio / caché fría). Ta-safe y no cambia rutas (la materialización revalida
+        // capacidad por bloque). Reversible con planificador.scenario.prewarm-skeletons=false.
+        if (props.getScenario().isPrewarmSkeletons() && !plan.isEmpty()) {
+            long t0Prewarm = System.currentTimeMillis();
+            List<Maleta> demandaVentana = dataLoader.getMaletasEnRango(
+                    plan.get(0).scStart, plan.get(plan.size() - 1).scEnd);
+            int clavesCalentadas = enrutador.precalentarEsqueletos(
+                    mapper.mapToBatches(demandaVentana), PREWARM_ROUTE_CANDIDATES);
+            log.info("Pre-warm esqueletos (N3): {} claves desde {} envíos en {} ms",
+                    clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
         }
 
         for (TemporalContext ctx : plan) {

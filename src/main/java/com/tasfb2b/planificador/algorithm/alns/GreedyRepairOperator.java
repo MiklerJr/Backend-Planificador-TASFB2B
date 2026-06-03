@@ -588,6 +588,33 @@ public class GreedyRepairOperator implements RepairOperator {
         return new ArrayList<>(candidatos.subList(0, maxCandidatos));
     }
 
+    /**
+     * Fase T (N3) — pre-calienta {@link #rutaSkeletonCache} con las rutas de la demanda de la ventana,
+     * UNA sola vez por clave única (origen, destino, hora-del-día, SLA), <b>antes</b> del bucle de bloques.
+     * Mueve el costo del Dijkstra <b>fuera</b> del presupuesto Ta: el bucle caliente queda como
+     * materialización pura (que revalida capacidad por bloque). No cambia decisiones (mismas rutas).
+     *
+     * @return número de claves distintas intentadas (Dijkstra ejecutado una vez por cada una).
+     */
+    public int precalentarEsqueletos(Iterable<LuggageBatch> batches, int maxCandidatos) {
+        if (batches == null || maxCandidatos <= 0) return 0;
+        Map<Long, Integer> bf = new HashMap<>();   // mapas de bloque vacíos: generarCandidatosRuta solo los lee
+        Map<Long, Integer> ba = new HashMap<>();
+        Set<Long> vistas = new HashSet<>();
+        int calentadas = 0;
+        for (LuggageBatch b : batches) {
+            if (b == null || b.getReadyTime() == null) continue;
+            Node o = graph.nodes.get(b.getOriginCode());
+            Node d = graph.nodes.get(b.getDestCode());
+            if (o == null || d == null || o.idx < 0 || d.idx < 0) continue;
+            long key = skeletonKey(o.idx, d.idx, toEpochMin(b.getReadyTime()), b.getSlaLimitHours());
+            if (!vistas.add(key)) continue;                  // un intento por clave única
+            generarCandidatosRuta(b, bf, ba, maxCandidatos); // popula rutaSkeletonCache en el miss
+            calentadas++;
+        }
+        return calentadas;
+    }
+
     /** Clave de la cache de esqueletos: origen, destino, hora-del-día y SLA (independiente del día). */
     static long skeletonKey(int startIdx, int targetIdx, long readyMin, int slaHours) {   // package-private para tests
         long hourBucket = (readyMin % DAY_MIN) / SKELETON_BUCKET_MIN;   // 0..23
