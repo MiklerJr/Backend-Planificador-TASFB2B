@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -25,7 +26,8 @@ public class BaggageParser {
                               Map<String, Aeropuerto> aeropuertoMap) throws IOException {
         List<String> lineas = FileUtils.leerLineasSeguro(file);
         List<Maleta> result = new ArrayList<>();
-        int descartadosMismoAeropuerto = 0; // RF02: envíos con origen == destino
+        int descartadosMismoAeropuerto = 0;    // RF02: envíos con origen == destino
+        int descartadosCamposIncompletos = 0;  // RF03: envíos con campos obligatorios faltantes o mal formados
 
         for (String line : lineas) {
             line = line.trim();
@@ -34,13 +36,19 @@ public class BaggageParser {
             String[] p = line.split("-");
             if (p.length < 7) continue;
 
-            String idEnvio  = p[0];
-            String dateStr  = p[1];
-            int    hour     = Integer.parseInt(p[2]);
-            int    minute   = Integer.parseInt(p[3]);
-            String destCode = p[4];
-            int    cantidad = Integer.parseInt(p[5]);
-            String idCliente = p[6];
+            String idEnvio   = p[0].trim();   // RF03: el id es opcional (puede venir en blanco)
+            String dateStr   = p[1].trim();
+            String horaStr   = p[2].trim();
+            String minStr    = p[3].trim();
+            String destCode  = p[4].trim();
+            String cantStr   = p[5].trim();
+            String idCliente = p[6].trim();
+
+            // RF03: todos los campos obligatorios (todos menos el id) deben estar presentes.
+            if (!EnvioValidator.camposObligatoriosPresentes(dateStr, horaStr, minStr, destCode, cantStr, idCliente)) {
+                descartadosCamposIncompletos++;
+                continue;
+            }
 
             Aeropuerto destino = aeropuertoMap.get(destCode);
             if (destino == null) continue;
@@ -51,16 +59,28 @@ public class BaggageParser {
                 continue;
             }
 
-            LocalDateTime fechaHoraRegistro = LocalDateTime.of(
-                    LocalDate.parse(dateStr, DateTimeFormatter.BASIC_ISO_DATE), // aaaammdd
-                    LocalTime.of(hour, minute)
-            );
+            // RF03: los campos numéricos y la fecha deben estar bien formados.
+            int hour, minute, cantidad, clienteId;
+            LocalDateTime fechaHoraRegistro;
+            try {
+                hour      = Integer.parseInt(horaStr);
+                minute    = Integer.parseInt(minStr);
+                cantidad  = Integer.parseInt(cantStr);
+                clienteId = Integer.parseInt(idCliente);
+                fechaHoraRegistro = LocalDateTime.of(
+                        LocalDate.parse(dateStr, DateTimeFormatter.BASIC_ISO_DATE), // aaaammdd
+                        LocalTime.of(hour, minute)
+                );
+            } catch (IllegalArgumentException | DateTimeException ex) {
+                descartadosCamposIncompletos++;
+                continue;
+            }
 
             TipoEnvio tipoEnvio = TipoEnvio.derivar(origen, destino);
             int plazo = tipoEnvio == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
 
             Cliente clienteRelacion = new Cliente();
-            clienteRelacion.setId(Integer.parseInt(idCliente));
+            clienteRelacion.setId(clienteId);
 
             Maleta maleta = new Maleta();
             maleta.setIdEnvio(idEnvio);
@@ -77,6 +97,10 @@ public class BaggageParser {
         if (descartadosMismoAeropuerto > 0) {
             log.warn("RF02 [{}]: {} envíos descartados por tener origen == destino.",
                     file.getFileName(), descartadosMismoAeropuerto);
+        }
+        if (descartadosCamposIncompletos > 0) {
+            log.warn("RF03 [{}]: {} envíos descartados por campos obligatorios faltantes o mal formados.",
+                    file.getFileName(), descartadosCamposIncompletos);
         }
         return result;
     }
