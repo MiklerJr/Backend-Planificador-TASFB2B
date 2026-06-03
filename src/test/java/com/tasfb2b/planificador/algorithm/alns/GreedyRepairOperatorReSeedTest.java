@@ -83,6 +83,38 @@ class GreedyRepairOperatorReSeedTest {
         assertEquals(1, op.rutaSkeletonCache.get(key).size());
     }
 
+    @Test
+    void precalentarEsqueletosLlenaLaCacheUnaVezPorClave() {
+        // Fase T (N3): pre-calentar puebla rutaSkeletonCache desde la demanda, una sola vez por clave
+        // única (origen, destino, hora-del-día, SLA). Dos envíos del mismo (O,D,bucket-hora,SLA) →
+        // una sola clave calentada; luego generarCandidatosRuta usa el fast-path (caché caliente).
+        Graph graph = grafoSinDirecto();
+        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+
+        int aaa = graph.nodes.get("AAA").idx;
+        int ccc = graph.nodes.get("CCC").idx;
+        long key = GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24);   // 07:00 → bucket 7, SLA 24h
+
+        assertTrue(op.rutaSkeletonCache.isEmpty(), "la caché arranca vacía (arranque limpio)");
+
+        // 07:00 y 07:30 caen en el MISMO bucket de hora (7) → misma clave de esqueleto.
+        List<LuggageBatch> demanda = List.of(
+                new LuggageBatch("E1", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 0)),
+                new LuggageBatch("E2", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 30)));
+
+        int claves = op.precalentarEsqueletos(demanda, 5);
+
+        assertEquals(1, claves, "dos envíos de la misma clave (O,D,hora-bucket,SLA) → una sola calentada");
+        assertTrue(op.rutaSkeletonCache.containsKey(key), "la caché quedó poblada para AAA→CCC@07h/24h");
+        assertTrue(!op.rutaSkeletonCache.get(key).isEmpty(), "hay al menos un esqueleto cacheado");
+
+        // El fast-path ya dispone de candidatos sin recomputar Dijkstra.
+        List<GreedyRepairOperator.RouteCandidate> cand = op.generarCandidatosRuta(
+                new LuggageBatch("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 15)),
+                new java.util.HashMap<>(), new java.util.HashMap<>(), 5);
+        assertTrue(!cand.isEmpty(), "tras el pre-warm, generarCandidatosRuta devuelve candidatos");
+    }
+
     // ----------------------------------------------------------------------- helpers
     private static boolean contiene(List<int[]> lista, int[] objetivo) {
         for (int[] s : lista) if (Arrays.equals(s, objetivo)) return true;
