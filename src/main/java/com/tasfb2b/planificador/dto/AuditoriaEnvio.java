@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 /**
  * Registro de auditoría por envío para validación formal de restricciones del cliente.
  *
@@ -14,6 +16,11 @@ import lombok.NoArgsConstructor;
  *
  * <p>El {@code scoreCalidad} es un puntaje compuesto 0-100 que combina cumplimiento
  * de SLA, cantidad de escalas y holgura para reportar calidad de la ruta de un vistazo.
+ *
+ * <p>Los timestamps {@code fechaHoraInicio} y {@code fechaHoraFin} acotan el ciclo
+ * de vida del envío extremo a extremo: desde el momento en que el batch queda listo
+ * para ser despachado hasta que la maleta queda disponible en el almacén destino
+ * (llegada + tiempo de procesamiento en destino, {@code DEST_STORAGE_MIN = 10 min}).
  */
 @Data
 @NoArgsConstructor
@@ -42,4 +49,9 @@ public class AuditoriaEnvio {
     private boolean capacidadVuelosOK;
     private boolean almacenDestinoOK;
     private int     scoreCalidad;
+    /** Momento de registro del envío (readyTime del batch). */
+    private LocalDateTime fechaHoraInicio;
+    /** Momento en que la maleta queda disponible en el almacén destino
+     *  (llegada del último vuelo + 10 min de procesamiento). null si no enrutada. */
+    private LocalDateTime fechaHoraFin;
 }

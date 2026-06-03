@@ -3,15 +3,19 @@ package com.tasfb2b.planificador.controller;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -284,7 +288,8 @@ public class PlanificadorController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
             @RequestParam(required = false)        Integer sa,
             @RequestParam(required = false)        Integer ta,
-            @RequestParam(required = false)        Integer dias) {
+            @RequestParam(required = false)        Integer dias,
+            @RequestParam(defaultValue = "false")  boolean procesamientoPrevio) {
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
 
         EjecucionParams params = new EjecucionParams();
@@ -296,6 +301,7 @@ public class PlanificadorController {
         params.setSaMin(sa);
         params.setTaSegundos(ta);
         params.setDias(dias);
+        params.setProcesamientoPrevio(procesamientoPrevio);   // por defecto false → sin warm-up
 
         JobState job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
@@ -308,6 +314,7 @@ public class PlanificadorController {
         if (sa != null)   body.put("sa", sa);
         if (ta != null)   body.put("ta", ta);
         if (dias != null) body.put("dias", dias);
+        body.put("procesamientoPrevio", procesamientoPrevio);
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }
@@ -384,6 +391,15 @@ public class PlanificadorController {
     @GetMapping("/jobs/{jobId}/vuelos/carga")
     public ResponseEntity<Map<String, Object>> cargaVuelosJob(@PathVariable String jobId) {
         Map<String, Object> body = service.getCargaVuelosJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/vuelos/usados")
+    public ResponseEntity<VuelosUsadosResponse> vuelosUsadosJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde) {
+        VuelosUsadosResponse body = service.getVuelosUsadosJob(jobId, desde);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
@@ -489,24 +505,32 @@ public class PlanificadorController {
     }
 
     /**
-     * Descarga el CSV de auditoría de un job completado. 23 columnas con
+     * Descarga el CSV de auditoría de un job completado. 25 columnas con
      * validación formal por envío de las restricciones del cliente
-     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100).
+     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100) y
+     * los timestamps ISO de inicio (readyTime) y fin del envío (llegada
+     * + DEST_STORAGE_MIN).
      *
      * <p>Devuelve 204 si el job aún ejecuta, 404 si no existe.
      */
     @GetMapping(value = "/jobs/{jobId}/auditoria.csv", produces = "text/csv")
-    public ResponseEntity<byte[]> auditoriaJob(@PathVariable String jobId) {
+    public ResponseEntity<?> auditoriaJob(@PathVariable String jobId) {
         JobState job = service.getJob(jobId);
         if (job == null)              return ResponseEntity.notFound().build();
-        if (job.auditoriaCsv == null) return ResponseEntity.noContent().build();
 
-        byte[] body = job.auditoriaCsv.getBytes(StandardCharsets.UTF_8);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("text/csv; charset=UTF-8"));
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename=\"auditoria_" + jobId + ".csv\"");
         headers.set("X-Audit-Rows", String.valueOf(job.auditoriaFilas));
+
+        if (job.auditoriaCsvPath != null && Files.exists(job.auditoriaCsvPath)) {
+            Resource body = new FileSystemResource(job.auditoriaCsvPath.toFile());
+            return ResponseEntity.ok().headers(headers).body(body);
+        }
+
+        if (job.auditoriaCsv == null) return ResponseEntity.noContent().build();
+        byte[] body = job.auditoriaCsv.getBytes(StandardCharsets.UTF_8);
         return ResponseEntity.ok().headers(headers).body(body);
     }
 }

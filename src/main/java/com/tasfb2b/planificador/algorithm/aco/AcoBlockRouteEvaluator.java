@@ -21,7 +21,10 @@ public class AcoBlockRouteEvaluator implements AcoRouteEvaluator {
     private final Map<Long, Integer> blockAirport;
     private final long readyMin;
     private final long slaMaxMin;
-    private final Map<MoveKey, Transition> transitionCache = new HashMap<>();
+    // Cache de (edge, currentArrivalMin, legIndex) → Transition. Clave codificada
+    // en un long para evitar alocaciones de MoveKey y reducir presión en el GC.
+    // Layout: edge.idx (24 bits) | currentArrivalMin (36 bits) | legIndex (4 bits).
+    private final Map<Long, Transition> transitionCache = new HashMap<>();
     private static final Transition INVALID = new Transition(-1L, -1L, 0.0, Double.MAX_VALUE);
 
     public AcoBlockRouteEvaluator(GreedyRepairOperator enrutador,
@@ -43,11 +46,16 @@ public class AcoBlockRouteEvaluator implements AcoRouteEvaluator {
 
     @Override
     public Transition evaluate(Edge edge, long currentArrivalMin, int legIndex) {
-        MoveKey key = new MoveKey(edge.idx, System.identityHashCode(edge), currentArrivalMin, legIndex);
+        long key = encodeKey(edge.idx, currentArrivalMin, legIndex);
         Transition cached = transitionCache.get(key);
         if (cached != null) {
             return cached == INVALID ? null : cached;
         }
+
+        // Pre-filter por capacidad física: si el vuelo NUNCA puede llevar la
+        // cantidad pedida por este batch, descartar antes de calcular tiempos.
+        // Más barato que pasar por capacidadRestante() (lookup en ConcurrentHashMap).
+        if (edge.capacity > 0 && edge.capacity < batch.getQuantity()) return cacheInvalid(key);
 
         long earliest = legIndex == 0 ? currentArrivalMin : currentArrivalMin + CONNECTION_MIN;
         long departure = enrutador.calcularProximaSalida(edge.depMinuteOfDay, earliest);
@@ -123,7 +131,7 @@ public class AcoBlockRouteEvaluator implements AcoRouteEvaluator {
         return 1.0;
     }
 
-    private Transition cacheInvalid(MoveKey key) {
+    private Transition cacheInvalid(long key) {
         transitionCache.put(key, INVALID);
         return null;
     }
@@ -133,36 +141,11 @@ public class AcoBlockRouteEvaluator implements AcoRouteEvaluator {
         return SLA_LATE_FIXED_COST + latenessMinutes * CostFunction.W_SLA_VIOLATION;
     }
 
-    private static final class MoveKey {
-        private final int edgeIdx;
-        private final int edgeIdentity;
-        private final long currentArrivalMin;
-        private final int legIndex;
-
-        private MoveKey(int edgeIdx, int edgeIdentity, long currentArrivalMin, int legIndex) {
-            this.edgeIdx = edgeIdx;
-            this.edgeIdentity = edgeIdentity;
-            this.currentArrivalMin = currentArrivalMin;
-            this.legIndex = legIndex;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof MoveKey moveKey)) return false;
-            return edgeIdx == moveKey.edgeIdx
-                    && edgeIdentity == moveKey.edgeIdentity
-                    && currentArrivalMin == moveKey.currentArrivalMin
-                    && legIndex == moveKey.legIndex;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = Integer.hashCode(edgeIdx);
-            result = 31 * result + Integer.hashCode(edgeIdentity);
-            result = 31 * result + Long.hashCode(currentArrivalMin);
-            result = 31 * result + Integer.hashCode(legIndex);
-            return result;
-        }
+    // 24 bits edge.idx | 36 bits currentArrivalMin (suficiente para ~130 años en min) | 4 bits legIndex
+    private static long encodeKey(int edgeIdx, long currentArrivalMin, int legIndex) {
+        long e = ((long) edgeIdx) & 0xFFFFFFL;
+        long t = (currentArrivalMin & 0xFFFFFFFFFL) << 24;
+        long l = ((long) (legIndex & 0xF)) << 60;
+        return e | t | l;
     }
 }

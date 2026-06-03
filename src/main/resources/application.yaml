@@ -17,7 +17,7 @@ data:
 planificador:
   scenario:
     sa-minutos: 5                       # Salto del algoritmo (Sa, en min)
-    ta-segundos: 30                     # Tiempo de algoritmo (Ta) FIJO por bloque. Debe ser < Sa·60.
+    ta-segundos: 10                     # Tiempo de algoritmo (Ta) FIJO por bloque. Debe ser < Sa·60.
                                         # Cada bloque corre Ta segundos y duerme (Sa·60 - Ta) → wall-clock = Sa.
 
     # Acota la simulación a un número máximo de ventanas de Sa minutos.
@@ -60,11 +60,31 @@ planificador:
     peso-uso-almacen: 50.0
     peso-uso-vuelo: 20.0
 
+  # Fase L/O/P/Q — enrutado storage-aware (libera almacén-día de hub para los SLA cortos).
+  # Perillas tuneables sin recompilar; la dirección está probada (cada subida de reserva /
+  # bajada de umbral / curva más agresiva ha movido el primer fallo). Reversión si aparecen
+  # fallos tempranos de 48h (firma J3): bajar reserva / subir umbral / subir exponente.
+  #
+  # Fase R (NEUTRALIZADO) — el modelo de almacén pasó a OCUPACIÓN CONCURRENTE por slot (no
+  # throughput diario). L/O/P/Q repartían un cuello ARTIFICIAL del modelo de cubo-diario; con
+  # el modelo correcto el almacén deja de ser el cuello, así que se neutralizan para medir
+  # limpio: reserva=0 (sin colchón), re-seed=0 (sin inyección hub-avoiding), umbral=0.99 (casi
+  # ningún nodo se marca hub ⇒ L1/L2 inertes). Reactivables si el almacén volviera a apretar.
+  storage-aware:
+    reserva-almacen-base: 0.0       # R5: sin colchón (L2 inerte)
+    umbral-hub-pico: 0.99           # R5: casi nadie es hub (L1/L2/O inertes)
+    precio-hub-exponente: 1.7       # (sin efecto si no hay hubs)
+    re-seed-slice: 0                # R5: re-seed hub-avoiding desactivado (Q inerte)
+
   backlog:
     max-size: 10000
     purgar-vencidas: true
     umbral-replanificacion-slack: 0.10
     max-replanificaciones-por-bloque: 20
+    # Fase M (anti-thrash): tope de envíos del backlog reprocesados por bloque (los más
+    # urgentes por deadline; el resto se difiere sin perderse). 0 = sin tope. Acota que el
+    # backlog le robe Ta a la demanda nueva y dispare violaciones de Ta. Tunear con la medición.
+    max-reproceso-por-bloque: 3000
 
   benchmark:
     # Configuramos el grid para que no sea infinito
