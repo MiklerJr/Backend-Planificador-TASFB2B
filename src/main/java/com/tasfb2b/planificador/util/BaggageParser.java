@@ -4,6 +4,7 @@ import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Cliente;
 import com.tasfb2b.planificador.model.Maleta;
 import com.tasfb2b.planificador.model.TipoEnvio;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Component
 public class BaggageParser {
 
@@ -23,6 +25,7 @@ public class BaggageParser {
                               Map<String, Aeropuerto> aeropuertoMap) throws IOException {
         List<String> lineas = FileUtils.leerLineasSeguro(file);
         List<Maleta> result = new ArrayList<>();
+        int descartadosMismoAeropuerto = 0; // RF02: envíos con origen == destino
 
         for (String line : lineas) {
             line = line.trim();
@@ -41,6 +44,12 @@ public class BaggageParser {
 
             Aeropuerto destino = aeropuertoMap.get(destCode);
             if (destino == null) continue;
+
+            // RF02: el origen y el destino de un envío no pueden ser el mismo aeropuerto.
+            if (EnvioValidator.esMismoAeropuerto(origen.getCodigo(), destino.getCodigo())) {
+                descartadosMismoAeropuerto++;
+                continue;
+            }
 
             LocalDateTime fechaHoraRegistro = LocalDateTime.of(
                     LocalDate.parse(dateStr, DateTimeFormatter.BASIC_ISO_DATE), // aaaammdd
@@ -64,6 +73,10 @@ public class BaggageParser {
             maleta.setTipoEnvio(tipoEnvio);
 
             result.add(maleta);
+        }
+        if (descartadosMismoAeropuerto > 0) {
+            log.warn("RF02 [{}]: {} envíos descartados por tener origen == destino.",
+                    file.getFileName(), descartadosMismoAeropuerto);
         }
         return result;
     }
