@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.TipoEnvio;
 import com.tasfb2b.planificador.model.Vuelo;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -116,13 +117,15 @@ public class DataLoader {
             
             m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
-            
+
             // Extraemos como Int en lugar de Long
-            m.setCantidad(rs.getInt("cantidad_maletas")); 
-            m.setPlazo(48);
+            m.setCantidad(rs.getInt("cantidad_maletas"));
+            // El plazo (SLA en horas) deriva del tipo de envío: 24h intracontinental, 48h intercontinental.
+            m.setTipoEnvio(TipoEnvio.derivar(m.getAeropuertoOrigen(), m.getAeropuertoDestino()));
+            m.setPlazo(m.getTipoEnvio() == TipoEnvio.INTRACONTINENTAL ? 24 : 48);
 
             m.setFechaHoraRegistro(rs.getTimestamp("fecha_hora_registro").toLocalDateTime());
-            
+
             return m;
         }, Timestamp.valueOf(desde), Timestamp.valueOf(hasta));
     }
@@ -144,11 +147,13 @@ public class DataLoader {
             
             m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
-            
+
             // Mismo cambio aquí
             m.setCantidad(rs.getInt("cantidad_maletas"));
-            m.setPlazo(48);
-            
+            // El plazo (SLA en horas) deriva del tipo de envío: 24h intracontinental, 48h intercontinental.
+            m.setTipoEnvio(TipoEnvio.derivar(m.getAeropuertoOrigen(), m.getAeropuertoDestino()));
+            m.setPlazo(m.getTipoEnvio() == TipoEnvio.INTRACONTINENTAL ? 24 : 48);
+
             m.setFechaHoraRegistro(rs.getTimestamp("fecha_hora_registro").toLocalDateTime());
             return m;
         }, limite);

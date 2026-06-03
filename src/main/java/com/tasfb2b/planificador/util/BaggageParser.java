@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.util;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Cliente;
 import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.TipoEnvio;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -46,7 +47,8 @@ public class BaggageParser {
                     LocalTime.of(hour, minute)
             );
 
-            int plazo = origen.getContinente().equals(destino.getContinente()) ? 24 : 48;
+            TipoEnvio tipoEnvio = TipoEnvio.derivar(origen, destino);
+            int plazo = tipoEnvio == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
 
             Cliente clienteRelacion = new Cliente();
             clienteRelacion.setId(Integer.parseInt(idCliente));
@@ -59,6 +61,7 @@ public class BaggageParser {
             maleta.setCliente(clienteRelacion);
             maleta.setFechaHoraRegistro(fechaHoraRegistro);
             maleta.setPlazo(plazo);
+            maleta.setTipoEnvio(tipoEnvio);
 
             result.add(maleta);
         }
