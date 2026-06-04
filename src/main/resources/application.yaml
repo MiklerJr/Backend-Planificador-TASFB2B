@@ -35,8 +35,8 @@ planificador:
     k-default-3: 75
     umbral-colapso: 0.01
     umbral-colapso-backlog: 1000
-    simular-tiempo-real-2: false          # El perfil smoke pondrá esto en false
-    simular-tiempo-real-3: false
+    simular-tiempo-real-2: true           # El perfil smoke pondrá esto en false
+    simular-tiempo-real-3: true
     # Fase T (N3): pre-calienta la caché de esqueletos con la demanda de la ventana antes del bucle
     # de bloques (Dijkstra fuera de Ta). Sube throughput en arranque limpio. false = off (revertir).
     prewarm-skeletons: true
