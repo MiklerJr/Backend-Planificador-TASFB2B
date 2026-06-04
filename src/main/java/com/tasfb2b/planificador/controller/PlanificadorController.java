@@ -301,7 +301,11 @@ public class PlanificadorController {
         params.setSaMin(sa);
         params.setTaSegundos(ta);
         params.setDias(dias);
-        params.setProcesamientoPrevio(procesamientoPrevio);   // por defecto false → sin warm-up
+        // Warm-up (procesamiento previo) DESACTIVADO: se ignora el flag entrante y se fuerza a
+        // false para que el período previo a fechaInicio nunca se simule. El @RequestParam se
+        // mantiene por compatibilidad con el front, pero no tiene efecto. Revertir: volver a
+        // setProcesamientoPrevio(procesamientoPrevio).
+        params.setProcesamientoPrevio(false);
 
         JobState job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
@@ -314,11 +318,11 @@ public class PlanificadorController {
         if (sa != null)   body.put("sa", sa);
         if (ta != null)   body.put("ta", ta);
         if (dias != null) body.put("dias", dias);
-        body.put("procesamientoPrevio", procesamientoPrevio);
+        body.put("procesamientoPrevio", false);   // forzado OFF: el warm-up está desactivado
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }
-
+    
     @PostMapping("/escenario3/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc3(
             @RequestParam(defaultValue = "75")    int    k,
