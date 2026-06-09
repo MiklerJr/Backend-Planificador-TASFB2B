@@ -4,15 +4,11 @@ import com.tasfb2b.planificador.model.Aeropuerto;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 @Component
 public class AeropuertoParser {

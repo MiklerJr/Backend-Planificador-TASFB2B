@@ -40,11 +40,6 @@ public class Node {
         this.storageUsed = Math.max(0, this.storageUsed - cantidad);
     }
 
-    public double getOcupacionAlmacen() {
-        if (storageCapacity == 0) return 0.0;
-        return (double) storageUsed / storageCapacity;
-    }
-
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
