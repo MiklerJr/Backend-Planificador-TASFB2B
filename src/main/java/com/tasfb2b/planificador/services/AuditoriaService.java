@@ -6,8 +6,10 @@ import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,11 +17,16 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Construye registros de auditoría {@link AuditoriaEnvio} a partir de los
@@ -43,6 +50,13 @@ public class AuditoriaService {
                     + "tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,"
                     + "cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad,"
                     + "fechaHoraInicio,fechaHoraFin\n";
+
+    /** Máximo de filas de datos por CSV dentro del ZIP de auditoría. */
+    public static final int FILAS_POR_ARCHIVO = 50_000;
+
+    /** Formato seguro para nombres de archivo (sin ':' ni separadores inválidos). */
+    private static final DateTimeFormatter FMT_NOMBRE =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmm");
 
     /**
      * Construye el registro de auditoría a partir de un batch ya procesado.
@@ -111,7 +125,7 @@ public class AuditoriaService {
 
         // Fin del envío: instante en que la maleta queda disponible en el
         // almacén destino (aterrizaje del último vuelo + DEST_STORAGE_MIN).
-        // Coherente con el cómputo de SLA en AcoBlockRouteEvaluator.
+        // Coherente con el cómputo de SLA de la vía de producción (GreedyRepairOperator).
         audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + DEST_STORAGE_MIN));
 
         int slack = slaMin - llegadaDesdeReady;
@@ -181,6 +195,88 @@ public class AuditoriaService {
         List<AuditoriaEnvio> out = new ArrayList<>(batches.size());
         for (LuggageBatch b : batches) out.add(construir(b));
         return out;
+    }
+
+    /**
+     * Escribe la auditoría como un ZIP de varios CSV, cada uno con a lo sumo
+     * {@code maxFilas} filas de datos (un único CSV de 9.5M envíos no es práctico).
+     *
+     * <p>Los batches se ordenan por {@code fechaHoraInicio} (su {@code readyTime})
+     * y se parten en bloques. Cada archivo interno se llama
+     * {@code <jobId>-<inicio>-<fin>.csv}, donde {@code inicio}/{@code fin} son el
+     * primer y último registro del bloque (formato {@code yyyyMMddHHmm}). Si dos
+     * bloques colisionan en nombre se desambigua con un sufijo numérico.
+     *
+     * @param batches   envíos a auditar (cada uno será una fila)
+     * @param zipPath   ruta destino del ZIP
+     * @param maxFilas  filas de datos máximas por CSV ({@code <=0} usa {@link #FILAS_POR_ARCHIVO})
+     * @param jobId     prefijo del nombre de cada CSV interno
+     * @return total de filas de datos escritas (sin contar cabeceras)
+     */
+    public int escribirZip(Collection<LuggageBatch> batches, Path zipPath,
+                           int maxFilas, String jobId) throws IOException {
+        int limite = maxFilas > 0 ? maxFilas : FILAS_POR_ARCHIVO;
+
+        List<LuggageBatch> ordenados = new ArrayList<>(batches == null ? 0 : batches.size());
+        if (batches != null) {
+            for (LuggageBatch b : batches) {
+                if (b != null) ordenados.add(b);
+            }
+        }
+        ordenados.sort(Comparator.comparing(LuggageBatch::getReadyTime));
+
+        int totalFilas = 0;
+        Set<String> nombresUsados = new LinkedHashSet<>();
+        try (ZipOutputStream zos = new ZipOutputStream(
+                new BufferedOutputStream(Files.newOutputStream(zipPath)), StandardCharsets.UTF_8)) {
+
+            if (ordenados.isEmpty()) {
+                // ZIP con un CSV vacío (solo cabecera) para no devolver un archivo corrupto.
+                zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, null, null, nombresUsados)));
+                Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                w.write(CSV_HEADER);
+                w.flush();
+                zos.closeEntry();
+                return 0;
+            }
+
+            int n = ordenados.size();
+            for (int desde = 0; desde < n; desde += limite) {
+                int hasta = Math.min(desde + limite, n);
+                LocalDateTime inicio = ordenados.get(desde).getReadyTime();
+                LocalDateTime fin    = ordenados.get(hasta - 1).getReadyTime();
+
+                zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, inicio, fin, nombresUsados)));
+                Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                w.write(CSV_HEADER);
+                for (int i = desde; i < hasta; i++) {
+                    w.write(lineaCsv(construir(ordenados.get(i))));
+                    totalFilas++;
+                }
+                // flush (no close) para no cerrar el ZipOutputStream subyacente.
+                w.flush();
+                zos.closeEntry();
+            }
+        }
+        return totalFilas;
+    }
+
+    /**
+     * Construye el nombre del CSV interno y garantiza unicidad dentro del ZIP
+     * (si el rango se repite, añade un sufijo {@code -N}).
+     */
+    private static String nombreArchivo(String jobId, LocalDateTime inicio,
+                                        LocalDateTime fin, Set<String> usados) {
+        String pref = (jobId == null || jobId.isBlank()) ? "job" : jobId;
+        String base = (inicio == null || fin == null)
+                ? pref + "-vacio"
+                : pref + "-" + FMT_NOMBRE.format(inicio) + "-" + FMT_NOMBRE.format(fin);
+        String nombre = base + ".csv";
+        int sufijo = 1;
+        while (!usados.add(nombre)) {
+            nombre = base + "-" + (++sufijo) + ".csv";
+        }
+        return nombre;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

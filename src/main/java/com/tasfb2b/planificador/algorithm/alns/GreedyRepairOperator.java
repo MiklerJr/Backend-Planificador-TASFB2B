@@ -18,7 +18,7 @@ public class GreedyRepairOperator implements RepairOperator {
     // throughput diario. Se discretiza el tiempo en slots de STORAGE_SLOT_MIN: una maleta ocupa
     // los slots de su estadía [llegada, salida) — destino final ≈ DEST_STORAGE_MIN (se retira),
     // escala = hasta la salida de su siguiente vuelo. Menor slot = más exacto, más claves.
-    private static final long STORAGE_SLOT_MIN = 60L;
+    public static final long STORAGE_SLOT_MIN = 60L;
     private static final long MAX_HORIZON_MIN  = 3 * 24 * 60L;
     private static final long DAY_MIN          = FlightKeyEncoder.DAY_MIN;
     private static final int  DAY_BITS         = FlightKeyEncoder.DAY_BITS;
@@ -56,6 +56,20 @@ public class GreedyRepairOperator implements RepairOperator {
 
     // Vuelos cancelados: flightKeys con capacidad efectiva = 0.
     private Set<Long> cancelledFlightDays = Collections.emptySet();
+
+    // Fase Origen-B — ocupación del almacén de ORIGEN por los envíos en backlog (sinRuta) que
+    // esperan ser enrutados. Mapa por SLOT (igual que airportOccupancy), en UTC. Se reconstruye al
+    // final de cada bloque desde el backlog vigente y se suma en TODOS los chequeos de capacidad,
+    // de modo que los envíos en espera congestionan el origen en tiempo real. Separado de
+    // airportOccupancy (que solo lleva tramos de envíos CON ruta, Fase A) para no doble-contar:
+    // un envío está en backlogOrigenOcc (sin ruta) o en airportOccupancy (con ruta), nunca en ambos.
+    private final ConcurrentHashMap<Long, Integer> backlogOrigenOcc = new ConcurrentHashMap<>();
+    // Reloj de simulación en UTC = mayor readyTime visto. Cota superior de la espera en origen.
+    private long relojUtcMin = Long.MIN_VALUE;
+    // Tope duro de origen: ids de envíos efectivamente ADMITIDOS en backlogOrigenOcc (caben en su
+    // almacén de origen). El primer envío que NO cabe es el COLAPSO logístico de origen (detiene la
+    // simulación). Permite que removerEsperaOrigenBacklog reste solo a los admitidos (sin negativos).
+    private final Set<String> origenAdmitidos = new HashSet<>();
 
     // H3: cache de esqueletos de ruta (secuencias de edge-idx) reutilizable ENTRE
     // bloques de una misma simulación. La malla de vuelos se repite a diario, así que
@@ -167,6 +181,52 @@ public class GreedyRepairOperator implements RepairOperator {
         }
         this.hubByIdx = flags;
     }
+
+    /**
+     * Señales crudas de COLAPSO INMINENTE (pre-colapso) para el bloque actual. El servicio aplica
+     * los umbrales y arma el mensaje. Cubre los dos criterios de colapso reales:
+     * <ul>
+     *   <li><b>Almacén</b>: utilización pico {@code (airportOccupancy+backlogOrigenOcc)/capacidad}
+     *       sobre los slots tocados este bloque ({@code blockAirport.keySet()} ⇒ costo acotado).</li>
+     *   <li><b>Backlog</b>: holgura SLA mínima {@code ((readyTime+SLA) − ahora)/SLA} entre los
+     *       pendientes (ahora = {@link #relojUtcMin}). {@code 1.0} si no hay backlog/relojo.</li>
+     * </ul>
+     */
+    public PreColapso evaluarPreColapso(Map<Long, Integer> blockAirport,
+                                        Collection<LuggageBatch> pendientes) {
+        double utilMax = 0.0;
+        String almacenCritico = null;
+        if (blockAirport != null) {
+            for (Long key : blockAirport.keySet()) {
+                int nodeIdx = (int) (key >> DAY_BITS);
+                if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
+                String code = nodeByIdx[nodeIdx];
+                Node nodo = code != null ? graph.nodes.get(code) : null;
+                if (nodo == null || nodo.capacity <= 0) continue;
+                int ocupado = airportOccupancy.getOrDefault(key, 0)
+                        + backlogOrigenOcc.getOrDefault(key, 0);
+                double util = ocupado / (double) nodo.capacity;
+                if (util > utilMax) { utilMax = util; almacenCritico = code; }
+            }
+        }
+
+        double holguraMin = 1.0;
+        String envioUrgente = null;
+        if (pendientes != null && relojUtcMin != Long.MIN_VALUE) {
+            for (LuggageBatch b : pendientes) {
+                if (b == null || b.getReadyTime() == null || b.getSlaLimitHours() <= 0) continue;
+                long slaMin = (long) b.getSlaLimitHours() * 60L;
+                long restante = (toEpochMin(b.getReadyTime()) + slaMin) - relojUtcMin;
+                double ratio = restante / (double) slaMin;       // <0 = ya vencido
+                if (ratio < holguraMin) { holguraMin = ratio; envioUrgente = b.getId(); }
+            }
+        }
+        return new PreColapso(utilMax, almacenCritico, holguraMin, envioUrgente);
+    }
+
+    /** Señales crudas de pre-colapso de un bloque (utilización de almacén y holgura SLA del backlog). */
+    public record PreColapso(double utilAlmacenMax, String almacenCritico,
+                             double holguraSlaMin, String envioUrgente) {}
 
     /**
      * Fase Q1 — esqueleto (secuencia de edge-idx) que ALCANZA el destino on-time EVITANDO el
@@ -299,11 +359,121 @@ public class GreedyRepairOperator implements RepairOperator {
                         -batch.getQuantity());
             }
         }
+        // Fase Origen — libera la ocupación de origen (espejo de applyToBlock).
+        cargarOrigen(blockAirport, batch, route, deps, -1);
     }
 
     /** Registra qué vuelo-días están cancelados (capacidad efectiva = 0). */
     public void setCancelledFlights(Set<Long> cancelled) {
         this.cancelledFlightDays = cancelled == null ? Collections.emptySet() : cancelled;
+    }
+
+    /**
+     * Fase Origen-A — carga/libera ({@code signo}=+1/−1) la ocupación del almacén de ORIGEN durante
+     * la espera del envío CON ruta antes de su primer vuelo: {@code [readyTime, primerVuelo)}.
+     */
+    private void cargarOrigen(Map<Long, Integer> mapa, LuggageBatch batch,
+                             List<Edge> edges, List<Long> deps, int signo) {
+        if (edges == null || edges.isEmpty() || deps == null || deps.isEmpty()) return;
+        Node origen = edges.get(0).from;
+        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return;
+        long desde = toEpochMin(batch.getReadyTime());
+        long firstDep = deps.get(0);
+        if (firstDep <= desde) return;
+        cargarAlmacenPierna(mapa, origen.idx, desde, firstDep, signo * batch.getQuantity());
+    }
+
+    /** Fase Origen-A — ¿cabe la espera en origen {@code [readyTime, primerVuelo)}? */
+    private boolean cabeOrigen(LuggageBatch batch, List<Edge> edges, List<Long> deps,
+                               Map<Long, Integer> blockAirport) {
+        if (edges == null || edges.isEmpty() || deps == null || deps.isEmpty()) return true;
+        Node origen = edges.get(0).from;
+        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return true;
+        long desde = toEpochMin(batch.getReadyTime());
+        long firstDep = deps.get(0);
+        if (firstDep <= desde) return true;
+        return cabeAlmacenPierna(origen, desde, firstDep, batch.getQuantity(), blockAirport);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase Origen-B — ocupación de origen por el backlog (envíos sinRuta en espera)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Reconstruye {@link #backlogOrigenOcc} desde cero con los envíos pendientes SIN ruta (esperan
+     * en su almacén de origen). Cada uno ocupa {@code [readyTime, relojUTC)} con {@code relojUTC} =
+     * mayor readyTime visto. Llamar al FINAL de cada bloque (tras reabastecer el backlog).
+     *
+     * <p>Tope duro: el almacén de origen NO excede su capacidad. Se admite en ORDEN DE LLEGADA
+     * (los que llegaron primero ocupan primero); el PRIMER envío que no cabe es la maleta que
+     * "llegó a un origen lleno" ⇒ <b>colapso logístico</b> (lo devuelve este método).
+     *
+     * @param pendientes  backlog vigente (se ignoran los que ya tienen ruta — esos los cobra Fase A)
+     * @param bloqueLote  envíos del bloque actual, para avanzar el reloj UTC
+     * @return el primer envío que no cupo en su almacén de origen (colapso), o {@code null} si todos cupieron
+     */
+    public LuggageBatch reconstruirEsperaOrigenBacklog(Collection<LuggageBatch> pendientes,
+                                                       Collection<LuggageBatch> bloqueLote) {
+        if (bloqueLote != null) {
+            for (LuggageBatch b : bloqueLote) {
+                if (b == null || b.getReadyTime() == null) continue;
+                relojUtcMin = Math.max(relojUtcMin, toEpochMin(b.getReadyTime()));
+            }
+        }
+        backlogOrigenOcc.clear();
+        origenAdmitidos.clear();
+        if (pendientes == null || relojUtcMin == Long.MIN_VALUE) return null;
+
+        List<LuggageBatch> orden = new ArrayList<>();
+        for (LuggageBatch b : pendientes) {
+            if (b == null || b.getReadyTime() == null) continue;
+            if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) continue; // con ruta ⇒ Fase A
+            orden.add(b);
+        }
+        // Orden de llegada: readyTime ascendente (los presentes primero conservan su espacio).
+        orden.sort(Comparator.comparingLong(b -> toEpochMin(b.getReadyTime())));
+        LuggageBatch desbordado = null;
+        for (LuggageBatch b : orden) {
+            if (cabeEsperaOrigen(b)) {
+                acumularEsperaOrigen(b, +1);
+                origenAdmitidos.add(b.getId());
+            } else if (desbordado == null) {
+                desbordado = b;   // primera maleta que no cabe en su origen ⇒ colapso
+            }
+        }
+        return desbordado;
+    }
+
+    /**
+     * Quita del backlog la ocupación de espera en origen de un envío que vuelve a intentarse este
+     * bloque (deja de "esperar pasivamente"; se evaluará para despacho). Evita que su propia espera
+     * bloquee su despacho. Llamar al sacar el envío del backlog, antes de re-rutearlo. Solo resta si
+     * el envío estaba ADMITIDO (tope duro): los que no cupieron (colapso) no contribuían.
+     */
+    public void removerEsperaOrigenBacklog(LuggageBatch batch) {
+        if (batch == null) return;
+        if (batch.getAssignedRoute() != null && !batch.getAssignedRoute().isEmpty()) return;
+        if (origenAdmitidos.remove(batch.getId())) {
+            acumularEsperaOrigen(batch, -1);
+        }
+    }
+
+    /** Tope duro — ¿cabe la espera {@code [readyTime, relojUTC)} de este envío en su almacén de origen? */
+    private boolean cabeEsperaOrigen(LuggageBatch batch) {
+        Node origen = graph.nodes.get(batch.getOriginCode());
+        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return true;
+        long desde = toEpochMin(batch.getReadyTime());
+        if (relojUtcMin <= desde) return true;
+        return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getQuantity(), Map.of());
+    }
+
+    private void acumularEsperaOrigen(LuggageBatch batch, int signo) {
+        if (batch == null || batch.getReadyTime() == null || relojUtcMin == Long.MIN_VALUE) return;
+        Node origen = graph.nodes.get(batch.getOriginCode());
+        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return;
+        long desde = toEpochMin(batch.getReadyTime());
+        if (relojUtcMin <= desde) return;
+        cargarAlmacenPierna(backlogOrigenOcc, origen.idx, desde, relojUtcMin, signo * batch.getQuantity());
     }
 
     /** Confirma los mapas del bloque en la ocupación global al finalizar el bloque. */
@@ -352,6 +522,8 @@ public class GreedyRepairOperator implements RepairOperator {
                         -batch.getQuantity());
             }
         }
+        // Fase Origen — libera la ocupación de origen en la ocupación global (espejo de applyToBlock).
+        cargarOrigen(airportOccupancy, batch, route, deps, -1);
     }
 
     // -----------------------------------------------------------------------
@@ -361,6 +533,35 @@ public class GreedyRepairOperator implements RepairOperator {
     private RouteResult findShortestPath(LuggageBatch batch,
                                           Map<Long, Integer> blockFlight,
                                           Map<Long, Integer> blockAirport) {
+        return findShortestPath(batch, blockFlight, blockAirport, false);
+    }
+
+    /**
+     * Colapso logístico — ¿este envío quedó {@code sinRuta} porque un ALMACÉN estaba lleno
+     * (origen, escala o destino) y no por falta de vuelos/SLA?
+     *
+     * <p>Devuelve {@code true} si NO existe ruta on-time respetando la capacidad de almacén pero
+     * SÍ existe ignorándola (manteniendo capacidad de vuelos, conexión mínima, SLA y horizonte).
+     * Usa mapas de bloque vacíos: lee la ocupación GLOBAL vigente (ya commiteada en este bloque),
+     * por lo que debe llamarse tras {@code commitBlock}. No muta ocupación.
+     */
+    public boolean sinRutaPorAlmacenLleno(LuggageBatch batch) {
+        if (batch == null) return false;
+        RouteResult con = findShortestPath(batch, Map.of(), Map.of(), false);
+        if (con.cumpleSLA && !con.edges.isEmpty()) return false;  // sí había ruta on-time → no fue almacén
+        RouteResult sin = findShortestPath(batch, Map.of(), Map.of(), true);
+        return sin.cumpleSLA && !sin.edges.isEmpty();
+    }
+
+    /**
+     * @param ignorarAlmacen si true, omite los chequeos de capacidad de ALMACÉN (origen, escala y
+     *   destino) manteniendo capacidad de vuelos, conexión mínima, SLA y horizonte. Sirve para
+     *   diagnosticar si un envío quedó sinRuta por almacén lleno (colapso) vs. por vuelos/SLA.
+     */
+    private RouteResult findShortestPath(LuggageBatch batch,
+                                          Map<Long, Integer> blockFlight,
+                                          Map<Long, Integer> blockAirport,
+                                          boolean ignorarAlmacen) {
         Node startNodeObj  = graph.nodes.get(batch.getOriginCode());
         Node targetNodeObj = graph.nodes.get(batch.getDestCode());
         if (startNodeObj == null || targetNodeObj == null) return RouteResult.EMPTY;
@@ -410,6 +611,12 @@ public class GreedyRepairOperator implements RepairOperator {
                 if (dayOffset < 0 || dayOffset >= DAY_SLOTS) continue;
                 if (actualArr - readyMin > MAX_HORIZON_MIN) continue;
 
+                // Fase Origen — el primer vuelo solo es viable si la espera en el almacén de
+                // origen [readyTime, salida) cabe (ocupación concurrente).
+                if (!ignorarAlmacen && current.edge == null
+                        && !cabeAlmacenPierna(startNodeObj, readyMin, actualDep,
+                                batch.getQuantity(), blockAirport)) continue;
+
                 // Capacidad del vuelo (global + bloque)
                 if (remainingFlight(flight, actualDep, blockFlight) < batch.getQuantity()) continue;
 
@@ -418,12 +625,13 @@ public class GreedyRepairOperator implements RepairOperator {
                 // esté en su destino final").
                 int nextIdx = flight.to.idx;
                 if (nextIdx < 0) continue;
-                if (flight.to.capacity > 0) {
+                if (!ignorarAlmacen && flight.to.capacity > 0) {
                     // Fase R — chequeo barato del SLOT de llegada (ocupación concurrente). El
                     // intervalo completo de estadía se valida en la materialización.
                     int qty = batch.getQuantity();
                     long ak = airportKey(nextIdx, actualArr);
-                    if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty
+                    if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0)
+                            + backlogOrigenOcc.getOrDefault(ak, 0) + qty
                             > flight.to.capacity)
                         continue;
                 }
@@ -553,6 +761,10 @@ public class GreedyRepairOperator implements RepairOperator {
                         && (actualArr + DEST_STORAGE_MIN) - readyMin > slaMaxMinutes) {
                     continue;
                 }
+                // Fase Origen — primer vuelo viable solo si la espera en almacén de origen cabe.
+                if (current.edge == null
+                        && !cabeAlmacenPierna(startNodeObj, readyMin, actualDep,
+                                batch.getQuantity(), blockAirport)) continue;
                 if (remainingFlight(flight, actualDep, blockFlight) < batch.getQuantity()) continue;
                 if (!hasAirportCapacity(flight.to, nextIdx == targetIdx, actualArr, batch.getQuantity(), blockAirport)) {
                     continue;
@@ -664,6 +876,8 @@ public class GreedyRepairOperator implements RepairOperator {
                         batch.getQuantity());
             }
         }
+        // Fase Origen — ocupa el almacén de origen mientras el envío espera su primer vuelo.
+        cargarOrigen(blockAirport, batch, result.edges, result.actualDepartures, +1);
     }
 
     private long nextDepartureMin(int depMinuteOfDay, long earliest) {
@@ -708,7 +922,8 @@ public class GreedyRepairOperator implements RepairOperator {
         long key = airportKey(node.idx, arrMin);
         return node.capacity
              - airportOccupancy.getOrDefault(key, 0)
-             - blockAirport.getOrDefault(key, 0);
+             - blockAirport.getOrDefault(key, 0)
+             - backlogOrigenOcc.getOrDefault(key, 0);
     }
 
     /**
@@ -788,7 +1003,11 @@ public class GreedyRepairOperator implements RepairOperator {
             long arrMin = depMin + edge.durationMinutes;
             boolean found = false;
             while (arrMin - readyMin <= MAX_HORIZON_MIN) {
-                if (remainingFlight(edge, depMin, blockFlight) >= batch.getQuantity()
+                boolean origenOk = i != 0
+                        || cabeAlmacenPierna(edge.from, readyMin, depMin,
+                                batch.getQuantity(), blockAirport);
+                if (origenOk
+                        && remainingFlight(edge, depMin, blockFlight) >= batch.getQuantity()
                         && hasAirportCapacity(edge.to, finalLeg, arrMin, batch.getQuantity(), blockAirport)) {
                     found = true;
                     break;
@@ -925,6 +1144,8 @@ public class GreedyRepairOperator implements RepairOperator {
                 }
             }
         }
+        // Fase Origen — la espera en el almacén de origen también debe caber.
+        if (!cabeOrigen(batch, edges, deps, blockAirport)) return false;
         return true;
     }
 
@@ -936,13 +1157,22 @@ public class GreedyRepairOperator implements RepairOperator {
      * asignación recién confirmada toca alguno de estos vuelos/almacenes sin
      * duplicar la regla de capacidad.
      */
-    public Set<Long> clavesOcupadas(RouteCandidate candidate) {
+    public Set<Long> clavesOcupadas(RouteCandidate candidate, LuggageBatch batch) {
         if (candidate == null) return Collections.emptySet();
         List<Edge> edges = candidate.getEdges();
         List<Long> deps = candidate.getActualDepartures();
         if (edges.isEmpty() || deps.size() != edges.size()) return Collections.emptySet();
 
         Set<Long> keys = new HashSet<>(edges.size() * 3);
+        // Fase Origen — incluye los slots de espera en el almacén de origen.
+        if (batch != null) {
+            Node origen = edges.get(0).from;
+            if (origen != null && origen.idx >= 0 && origen.capacity > 0) {
+                long desde = toEpochMin(batch.getReadyTime());
+                long firstDep = deps.get(0);
+                if (firstDep > desde) agregarSlotsEstadia(keys, origen.idx, desde, firstDep);
+            }
+        }
         for (int i = 0; i < edges.size(); i++) {
             Edge e = edges.get(i);
             long depMin = deps.get(i);
@@ -1023,7 +1253,8 @@ public class GreedyRepairOperator implements RepairOperator {
         long s1 = ultimoSlot(llegada, salida);
         for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
             long k = slotKey(node.idx, s);
-            if (airportOccupancy.getOrDefault(k, 0) + blockAirport.getOrDefault(k, 0) + qty > node.capacity) {
+            if (airportOccupancy.getOrDefault(k, 0) + blockAirport.getOrDefault(k, 0)
+                    + backlogOrigenOcc.getOrDefault(k, 0) + qty > node.capacity) {
                 return false;
             }
         }
@@ -1048,7 +1279,8 @@ public class GreedyRepairOperator implements RepairOperator {
                                        Map<Long, Integer> blockAirport) {
         if (node == null || node.idx < 0 || node.capacity <= 0) return true;
         long ak = airportKey(node.idx, arrMin);
-        return airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0) + qty <= node.capacity;
+        return airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0)
+                + backlogOrigenOcc.getOrDefault(ak, 0) + qty <= node.capacity;
     }
 
     private RouteCandidate toRouteCandidate(RouteState state,

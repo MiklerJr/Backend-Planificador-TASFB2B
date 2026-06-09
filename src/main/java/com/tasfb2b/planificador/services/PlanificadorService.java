@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.*;
 import com.tasfb2b.planificador.algorithm.alns.*;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
@@ -73,6 +74,10 @@ public class PlanificadorService {
     private volatile AlnsSolution sc1Dummy = null;
     private volatile List<TemporalContext> sc1Plan = null;
     private volatile int sc1Idx = 0;
+    // E1 incremental: true cuando un colapso de almacén detuvo el escenario 1 (no se procesan más ventanas).
+    private volatile boolean sc1Colapso = false;
+    // E1 incremental: último nivel de alerta logueado (throttle de consola).
+    private volatile String sc1NivelAlertaPrevio = AlertaColapso.VERDE;
     private volatile int sc1Envios = 0;
     private volatile int sc1Enrutadas = 0;
     private volatile int sc1SinRuta = 0;
@@ -734,6 +739,9 @@ public class PlanificadorService {
                     clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
         }
 
+        boolean colapsoAlmacenDetectado = false;   // E2 se detiene ante colapso de almacén.
+        int bloqueColapsoAlmacen = -1;
+        String nivelAlertaPrevio = AlertaColapso.VERDE;
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
@@ -757,7 +765,9 @@ public class PlanificadorService {
                 // Publicación incremental: el front lo consume con
                 // GET /jobs/{jobId}/bloques?desde=N para dibujar en tiempo real.
                 job.publicarBloque(rv.bloque);
+                job.alertaColapso = rv.alerta();
             }
+            nivelAlertaPrevio = avisarColapsoInminente("E2", rv.alerta(), bloqueActual, nivelAlertaPrevio);
 
             // Propagar tasa sinRuta al siguiente bloque para iteraciones dinámicas
             if (bloqueActual < plan.size()) {
@@ -771,7 +781,16 @@ public class PlanificadorService {
             backlog.purgarVencidas(ctx.scEnd);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), false);
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen());
+
+            // Colapso logístico por almacén lleno: DETIENE el escenario 2.
+            if (rv.colapsoAlmacen()) {
+                colapsoAlmacenDetectado = true;
+                bloqueColapsoAlmacen = bloqueActual;
+                log.warn("E2 COLAPSO por almacén lleno en bloque {}/{} — {}",
+                        bloqueActual, totalBloques, rv.detalleColapso());
+                break;
+            }
 
             // Fase O (hubs dinámicos): la reclasificación de hubs por utilización real corre dentro
             // de enrutador.commitBlock() cada N bloques (cubre E1/E2/E3 uniformemente). Sin lista
@@ -818,12 +837,16 @@ public class PlanificadorService {
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(), saMs,
                 backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
+        if (colapsoAlmacenDetectado) {
+            log.warn("E2 detenido por COLAPSO de almacén en bloque {}", bloqueColapsoAlmacen);
+        }
         logDiagnosticos(odStats, graph, enrutador);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
                 dataLoader.getVuelos(), bloques.size(), plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
-                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados, false, -1);
+                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
+                colapsoAlmacenDetectado, bloqueColapsoAlmacen);
         llenarMetricasTa(res.getMetricas(), taStats, saMs);
         llenarMetricasBacklog(res.getMetricas(), backlog);
         res.setK(k);
@@ -866,6 +889,8 @@ public class PlanificadorService {
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         sc1Dummy = new AlnsSolution(Collections.emptyList());
         sc1Idx = 0;
+        sc1Colapso = false;
+        sc1NivelAlertaPrevio = AlertaColapso.VERDE;
         sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
         sc1Maletas = 0L;
         sc1TaStats = new TaStats();
@@ -1121,16 +1146,16 @@ public class PlanificadorService {
     /**
      * <b>VÍA DE PRUEBAS / DIAGNÓSTICO — NO ES PRODUCCIÓN.</b>
      *
-     * <p>Ejecuta una corrida ACO directa ({@code new AlgorithmACO(...)} sin
-     * inyectar {@link AcoRouteEvaluator}). En este modo el algoritmo usa los
-     * contadores globales mutables {@code Edge.usedCapacity} y
-     * {@code Node.storeLoad}, que NO respetan el modelo flight-day/airport-day
-     * que sí aplica la vía de producción ({@link AcoBlockEngine}).
+     * <p>Ejecuta una corrida ACO directa ({@code new AlgorithmACO(...)}, el ACO
+     * clásico de diagnóstico). En este modo el algoritmo usa los contadores
+     * globales mutables {@code Edge.usedCapacity} y {@code Node.storeLoad}, que
+     * NO respetan el modelo flight-day/airport-day que sí aplica la vía de
+     * producción ({@link AcoBlockEngine}).
      *
      * <p>Solo se invoca desde flujos de simulación interna
-     * ({@code procesarBaseConResultados}, {@code ejecutarHastaColapso}) y desde
-     * los tests {@code Diagnostico*}. Sus métricas <b>no son comparables</b> con
-     * las que produce el endpoint principal de planificación.
+     * ({@code procesarBaseConResultados}, {@code ejecutarHastaColapso}) y tests.
+     * Sus métricas <b>no son comparables</b> con las que produce el endpoint
+     * principal de planificación.
      *
      * <p>El front <b>no llega aquí</b> en el flujo normal de planificación con
      * {@code motor=aco}; ese flujo entra por {@link AcoBlockEngine#procesar}.
@@ -1249,6 +1274,10 @@ public class PlanificadorService {
             log.info("E1 completo: todos los bloques procesados");
             return null;
         }
+        if (sc1Colapso) {
+            log.info("E1 detenido por colapso de almacén — no se procesan más ventanas");
+            return null;
+        }
 
         TemporalContext ctx = sc1Plan.get(sc1Idx);
         sc1Idx++;
@@ -1276,7 +1305,16 @@ public class PlanificadorService {
 
         logBloque(sc1Motor, sc1Idx, sc1Plan.size(),
                 rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs,
-                sc1Backlog != null ? sc1Backlog.size() : 0, false);
+                sc1Backlog != null ? sc1Backlog.size() : 0, rv.colapsoAlmacen());
+
+        // Colapso logístico por almacén lleno: DETIENE el escenario 1 (las próximas llamadas a
+        // procesarSiguienteVentana devolverán null). Este bloque (ya procesado) se devuelve igual.
+        if (rv.colapsoAlmacen()) {
+            sc1Colapso = true;
+            log.warn("E1 COLAPSO por almacén lleno en bloque {}/{} — {}",
+                    sc1Idx, sc1Plan.size(), rv.detalleColapso());
+        }
+        sc1NivelAlertaPrevio = avisarColapsoInminente("E1", rv.alerta(), sc1Idx, sc1NivelAlertaPrevio);
 
         // Al terminar todos los bloques, emitir diagnóstico
         if (sc1Idx == sc1Plan.size()) {
@@ -1374,6 +1412,9 @@ public class PlanificadorService {
         BacklogManager backlog = crearBacklogConPurga();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         int intervaloReporte = Math.max(1, totalBloques / 10);
+        boolean colapsoAlmacenDetectado = false;   // E1 se detiene ante colapso de almacén.
+        int bloqueColapsoAlmacen = -1;
+        String nivelAlertaPrevio = AlertaColapso.VERDE;
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
@@ -1398,11 +1439,13 @@ public class PlanificadorService {
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
                 job.publicarBloque(rv.bloque);
+                job.alertaColapso = rv.alerta();
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
                     log.info("E1 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
                     break;
                 }
             }
+            nivelAlertaPrevio = avisarColapsoInminente("E1", rv.alerta(), bloqueActual, nivelAlertaPrevio);
 
             if (bloqueActual < plan.size()) {
                 double tasa = rv.envios > 0 ? (double) rv.sinRuta / rv.envios : 0.0;
@@ -1415,7 +1458,16 @@ public class PlanificadorService {
             backlog.purgarVencidas(ctx.scEnd);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), false);
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen());
+
+            // Colapso logístico por almacén lleno: DETIENE el escenario 1.
+            if (rv.colapsoAlmacen()) {
+                colapsoAlmacenDetectado = true;
+                bloqueColapsoAlmacen = bloqueActual;
+                log.warn("E1 COLAPSO por almacén lleno en bloque {}/{} — {}",
+                        bloqueActual, totalBloques, rv.detalleColapso());
+                break;
+            }
 
             if (log.isDebugEnabled() && (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques)) {
                 log.debug("Progreso E1 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
@@ -1449,12 +1501,16 @@ public class PlanificadorService {
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(), saMs,
                 backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
+        if (colapsoAlmacenDetectado) {
+            log.warn("E1 detenido por COLAPSO de almacén en bloque {}", bloqueColapsoAlmacen);
+        }
         logDiagnosticos(odStats, graph, enrutador);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
                 dataLoader.getVuelos(), bloques.size(), plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
-                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados, false, -1);
+                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
+                colapsoAlmacenDetectado, bloqueColapsoAlmacen);
         llenarMetricasTa(res.getMetricas(), taStats, saMs);
         llenarMetricasBacklog(res.getMetricas(), backlog);
         res.setK(k);
@@ -1470,8 +1526,16 @@ public class PlanificadorService {
     // =========================================================
 
     /**
-     * Ejecuta el algoritmo con cancelaciones y se detiene cuando la tasa de
-     * envíos sin ruta en una ventana supera umbralColapso.
+     * Ejecuta el algoritmo con cancelaciones avanzando la simulación. El escenario 3
+     * solo se detiene por una de tres causas:
+     * <ol>
+     *   <li><b>Orden del front</b>: el job fue cancelado vía {@code /cancelar}.</li>
+     *   <li><b>Falta de datos</b>: se agota el plan de bloques del dataset.</li>
+     *   <li><b>Backlog definitivo</b>: un envío que estaba en el backlog vio vencer
+     *       su SLA ({@code readyTime + slaLimitHours < scNow}) sin entrega on-time.</li>
+     * </ol>
+     * El parámetro {@code umbralColapso} se mantiene por compatibilidad de API pero
+     * ya no influye en la parada.
      */
     public SimulacionResponse ejecutarHastaColapso(int k, double cancelProb, double umbralColapso) {
         return ejecutarHastaColapso(k, cancelProb, umbralColapso, null, MOTOR_ALNS, resolverSeed(null));
@@ -1534,6 +1598,10 @@ public class PlanificadorService {
         long totalMaletas = 0L;
         boolean collapsoDetectado = false;
         int bloqueColapso = -1;
+        // Motivo de parada del E3: "backlog_definitivo", "almacen_lleno", "cancelado_front" o
+        // "falta_datos" (por defecto, si el bucle agota el plan).
+        String motivoParada = "falta_datos";
+        String nivelAlertaPrevio = AlertaColapso.VERDE;
         TaStats taStats = new TaStats();
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal3();
         long saMs = saMin * 60_000L;
@@ -1541,7 +1609,6 @@ public class PlanificadorService {
         // E3 con purga activa: los envios cuyo SLA vence (readyTime+SLA) sin entrega
         // on-time pasan a sinRutaDefinitivo y disparan el colapso (Politica 1).
         BacklogManager backlog = crearBacklogConPurga();
-        int umbralBacklog = props.getScenario().getUmbralColapsoBacklog();
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         for (TemporalContext ctx : plan) {
@@ -1569,7 +1636,15 @@ public class PlanificadorService {
                 job.taPromedioMs = taStats.promedio();
                 // Publicación incremental para dibujo en tiempo real desde el front.
                 job.publicarBloque(rv.bloque);
+                job.alertaColapso = rv.alerta();
+                // Parada por orden del front: el usuario llamó a /cancelar.
+                if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
+                    motivoParada = "cancelado_front";
+                    log.info("E3 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
+                    break;
+                }
             }
+            nivelAlertaPrevio = avisarColapsoInminente("E3", rv.alerta(), bloqueActual, nivelAlertaPrevio);
 
             // Propagar tasa sinRuta al siguiente bloque para iteraciones dinámicas
             if (bloqueActual < plan.size()) {
@@ -1577,24 +1652,32 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            // Regla de dominio (colapso logístico, Política 1): el PRIMER envío que
+            // Regla de dominio (backlog definitivo): el PRIMER envío del backlog que
             // VENCE su SLA —readyTime+SLA alcanzado sin entrega on-time— detiene la
-            // simulación, esté esperando en el backlog o (si el motor fuese ALNS)
-            // confirmado con ruta tardía. Un sinRuta de la ventana actual NO es
-            // incumplimiento mientras le quede tiempo: se reintenta vía backlog.
-            //   - vencidos: envíos cuyo deadline ya pasó (purga del backlog).
-            //   - rv.tardadas: respaldo por si se confirmó una ruta tardía (ALNS).
-            //   - backlog descontrolado: red de seguridad opcional.
+            // simulación. Un sinRuta de la ventana actual NO es incumplimiento
+            // mientras le quede tiempo: se reintenta vía backlog. La purga mueve los
+            // vencidos a sinRutaDefinitivo; vencidos>0 es la única condición de parada
+            // por backlog (ni rutas tardías ni tamaño de backlog detienen el E3).
             int vencidos = backlog.purgarVencidas(ctx.scEnd);
-            boolean colapsoBacklog = umbralBacklog > 0 && backlog.size() >= umbralBacklog;
-            boolean colapsoEste = vencidos > 0 || rv.tardadas > 0 || colapsoBacklog;
+            boolean backlogDefinitivo = vencidos > 0;
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), colapsoEste);
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(),
+                    backlogDefinitivo || rv.colapsoAlmacen());
 
-            if (colapsoEste) {
+            // Colapso logístico por almacén lleno (origen/escala/destino) — disparo inmediato.
+            if (rv.colapsoAlmacen()) {
                 collapsoDetectado = true;
                 bloqueColapso = bloqueActual;
+                motivoParada = "almacen_lleno";
+                log.warn("E3 ALMACÉN LLENO en bloque {}/{} — envío {}", bloqueActual, totalBloques, rv.detalleColapso());
+                break;
+            }
+
+            if (backlogDefinitivo) {
+                collapsoDetectado = true;
+                bloqueColapso = bloqueActual;
+                motivoParada = "backlog_definitivo";
                 break;
             }
 
@@ -1619,7 +1702,13 @@ public class PlanificadorService {
         bloquesCacheados = bloques;
         long tiempoMs = System.currentTimeMillis() - inicio;
         log.info("E3 {}: {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms | backlog: pico={} actual={} definitivo={} | {} ms",
-                collapsoDetectado ? "COLAPSÓ en bloque " + bloqueColapso : "sin colapso",
+                "backlog_definitivo".equals(motivoParada)
+                        ? "BACKLOG DEFINITIVO en bloque " + bloqueColapso
+                        : ("almacen_lleno".equals(motivoParada)
+                                ? "ALMACÉN LLENO en bloque " + bloqueColapso
+                                : ("cancelado_front".equals(motivoParada)
+                                        ? "CANCELADO por front en bloque " + bloqueActual
+                                        : "fin por falta de datos")),
                 bloques.size(), totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(),
@@ -1640,34 +1729,30 @@ public class PlanificadorService {
     }
 
     /**
-     * Genera el CSV de auditoría a partir del acumulador de batches y lo
-     * cuelga del {@link JobState} cuando la ejecución es asíncrona.
+     * Genera la auditoría como un ZIP de varios CSV (hasta
+     * {@link AuditoriaService#FILAS_POR_ARCHIVO} filas por archivo) y lo cuelga del
+     * {@link JobState}. Un único CSV para millones de envíos no es práctico, por lo
+     * que cada archivo interno se nombra {@code <jobId>-<inicio>-<fin>.csv}.
+     *
+     * <p>La auditoría solo se publica para ejecuciones asíncronas (con {@code job});
+     * las corridas síncronas (benchmark/comparativa) no la generan.
      */
     private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc) {
         if (auditoria == null || auditAcc == null || auditAcc.isEmpty()) return;
-        log.info("Generando auditoria CSV: {} envios{}",
-                auditAcc.size(), job != null ? " (job " + job.getJobId() + ")" : "");
-        if (job != null) {
-            try {
-                Path path = Files.createTempFile("planificador-auditoria-" + job.getJobId() + "-", ".csv");
-                path.toFile().deleteOnExit();
-                int filas = auditoria.escribirCsv(auditAcc.values(), path);
-                job.auditoriaCsvPath = path;
-                job.auditoriaCsv = null;
-                job.auditoriaFilas = filas;
-                log.info("Auditoria generada: {} filas (job {}) en {}", filas, job.getJobId(), path);
-            } catch (IOException e) {
-                throw new IllegalStateException("No se pudo generar auditoria CSV", e);
-            }
-            return;
-        }
-        List<AuditoriaEnvio> filas = auditoria.construirLote(new ArrayList<>(auditAcc.values()));
-        String csv = auditoria.aCsv(filas);
-        log.info("Auditoría generada: {} filas{}",
-                filas.size(), job != null ? " (job " + job.getJobId() + ")" : "");
-        if (job != null) {
-            job.auditoriaCsv = csv;
-            job.auditoriaFilas = filas.size();
+        if (job == null) return;
+        log.info("Generando auditoria ZIP: {} envios (job {})", auditAcc.size(), job.getJobId());
+        try {
+            Path path = Files.createTempFile("planificador-auditoria-" + job.getJobId() + "-", ".zip");
+            path.toFile().deleteOnExit();
+            int filas = auditoria.escribirZip(auditAcc.values(), path,
+                    AuditoriaService.FILAS_POR_ARCHIVO, job.getJobId());
+            job.auditoriaZipPath = path;
+            job.auditoriaCsvPath = null;
+            job.auditoriaCsv = null;
+            job.auditoriaFilas = filas;
+            log.info("Auditoria ZIP generada: {} filas (job {}) en {}", filas, job.getJobId(), path);
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo generar auditoria ZIP", e);
         }
     }
 
@@ -1795,6 +1880,9 @@ public class PlanificadorService {
 
             // Liberar capacidad global de los replanificables (ya commiteados).
             for (LuggageBatch b : pendientes) {
+                // Fase Origen-B — deja de cobrar su espera en origen (se evaluará para despacho;
+                // evita que su propia espera bloquee su ruta). No-op si ya tiene ruta.
+                enrutador.removerEsperaOrigenBacklog(b);
                 if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) {
                     enrutador.releaseFromGlobal(b);
                     b.clearRoute();
@@ -1919,6 +2007,21 @@ public class PlanificadorService {
             if (a.isEnrutada()) s[1]++;
         }
 
+        // 3b. Colapso logístico por ALMACÉN lleno (origen/escala/destino): un envío sinRuta que SÍ
+        //     tendría ruta on-time si se ignorara la capacidad de almacén. Se evalúa ANTES de
+        //     reconstruir la espera de origen del backlog para que la ocupación no incluya a los
+        //     propios sinRuta de este bloque (evita auto-bloqueo). Early-exit al primer positivo.
+        boolean colapsoAlmacen = false;
+        String detalleColapso = null;
+        for (LuggageBatch b : finalBatches) {
+            if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) continue;
+            if (enrutador.sinRutaPorAlmacenLleno(b)) {
+                colapsoAlmacen = true;
+                detalleColapso = b.getId() + " " + b.getOriginCode() + "->" + b.getDestCode();
+                break;
+            }
+        }
+
         // 4. Reabastecer el backlog con los batches que aún pendientes/críticos.
         if (backlog != null) {
             boolean motorAco = MOTOR_ACO.equalsIgnoreCase(motor);
@@ -1931,6 +2034,17 @@ public class PlanificadorService {
                     // Próximo a tardar — candidato a replanificación preventiva.
                     backlog.addReplanificable(b);
                 }
+            }
+            // Fase Origen-B — recontabiliza la ocupación de origen de los envíos sinRuta que
+            // siguen esperando en el backlog (avanza el reloj UTC y reconstruye desde cero).
+            // Devuelve el primer envío que NO cupo en su origen ⇒ colapso por almacén de origen
+            // (cubre el caso "demasiados en origen", que la detección por rutas no capta).
+            LuggageBatch origenDesbordado = enrutador.reconstruirEsperaOrigenBacklog(
+                    backlog.peekPendientes(), bloqueBatches);
+            if (origenDesbordado != null && !colapsoAlmacen) {
+                colapsoAlmacen = true;
+                detalleColapso = "origen lleno " + origenDesbordado.getId()
+                        + " @" + origenDesbordado.getOriginCode();
             }
         }
 
@@ -1957,7 +2071,72 @@ public class PlanificadorService {
         bloque.setScMinutos(ctx.scMinutos);
         llenarAcumuladosFisicos(bloque, auditAcc, ctx.scEnd);
 
-        return new ResultadoVentana(bloque, finalBatches.size(), enrutadas, sinRuta, cumpleSLA, tardadas, maletas);
+        // Alerta de colapso INMINENTE (pre-colapso): precursores de los 2 criterios reales.
+        var pre = enrutador.evaluarPreColapso(
+                telemetryAirport, backlog != null ? backlog.peekPendientes() : java.util.List.of());
+        com.tasfb2b.planificador.dto.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
+
+        return new ResultadoVentana(bloque, finalBatches.size(), enrutadas, sinRuta, cumpleSLA, tardadas, maletas,
+                colapsoAlmacen, detalleColapso, alerta);
+    }
+
+    /**
+     * Traduce las señales crudas de pre-colapso a una {@link com.tasfb2b.planificador.dto.AlertaColapso}
+     * (nivel = máximo entre la señal de almacén y la de backlog) aplicando los umbrales configurables.
+     */
+    private com.tasfb2b.planificador.dto.AlertaColapso construirAlertaColapso(
+            GreedyRepairOperator.PreColapso pre, int bloque) {
+        var cfg = props.getAlertaColapso();
+        // Nivel por almacén.
+        String nivelAlmacen = com.tasfb2b.planificador.dto.AlertaColapso.VERDE;
+        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.AlertaColapso.ROJO;
+        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.AlertaColapso.AMBAR;
+        // Nivel por backlog (holgura SLA restante baja = urgente).
+        String nivelBacklog = com.tasfb2b.planificador.dto.AlertaColapso.VERDE;
+        if (pre.envioUrgente() != null) {
+            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.AlertaColapso.ROJO;
+            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.AlertaColapso.AMBAR;
+        }
+        String nivel = nivelMax(nivelAlmacen, nivelBacklog);
+
+        StringBuilder msg = new StringBuilder();
+        if (!com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelAlmacen)) {
+            msg.append(String.format("almacén %s al %.0f%% de capacidad",
+                    pre.almacenCritico(), pre.utilAlmacenMax() * 100));
+        }
+        if (!com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelBacklog)) {
+            if (msg.length() > 0) msg.append(" | ");
+            msg.append(String.format("envío %s al %.0f%% de su SLA en backlog",
+                    pre.envioUrgente(), Math.max(0, pre.holguraSlaMin()) * 100));
+        }
+        if (msg.length() == 0) msg.append("Sin riesgo de colapso");
+
+        return new com.tasfb2b.planificador.dto.AlertaColapso(
+                nivel, msg.toString(), bloque,
+                pre.utilAlmacenMax(), pre.almacenCritico(), pre.holguraSlaMin(), pre.envioUrgente());
+    }
+
+    /**
+     * Loguea en consola la alerta de colapso inminente SOLO cuando el nivel cambia a/entre
+     * AMBAR/ROJO (evita spam por bloque). Devuelve el nivel actual para el siguiente bloque.
+     */
+    private String avisarColapsoInminente(String escenario, AlertaColapso alerta, int bloque, String nivelPrevio) {
+        if (alerta == null) return nivelPrevio;
+        String nivel = alerta.getNivel();
+        if (!AlertaColapso.VERDE.equals(nivel) && !nivel.equals(nivelPrevio)) {
+            log.warn("{} ⚠ COLAPSO INMINENTE [{}] bloque {} — {}", escenario, nivel, bloque, alerta.getMensaje());
+        }
+        return nivel;
+    }
+
+    private static String nivelMax(String a, String b) {
+        if (com.tasfb2b.planificador.dto.AlertaColapso.ROJO.equals(a)
+                || com.tasfb2b.planificador.dto.AlertaColapso.ROJO.equals(b))
+            return com.tasfb2b.planificador.dto.AlertaColapso.ROJO;
+        if (com.tasfb2b.planificador.dto.AlertaColapso.AMBAR.equals(a)
+                || com.tasfb2b.planificador.dto.AlertaColapso.AMBAR.equals(b))
+            return com.tasfb2b.planificador.dto.AlertaColapso.AMBAR;
+        return com.tasfb2b.planificador.dto.AlertaColapso.VERDE;
     }
 
     /**
@@ -2325,10 +2504,22 @@ public class PlanificadorService {
         Map<Integer, Node> nodesByIdx = new HashMap<>();
         for (Node node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
 
-        List<SimulacionResponse.OcupacionAlmacen> out = new ArrayList<>();
+        // Las claves de almacén son por SLOT de 60 min (slotKey(nodeIdx, epochMin/60)). Decodificamos
+        // el slot → día y agregamos por (aeropuerto, día) tomando el PICO concurrente de ocupación
+        // (la métrica con sentido frente a la capacidad: cuántas maletas hubo a la vez ese día).
+        Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();   // clave (nodeIdx, epochDay) → pico
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
             int ocupacion = entry.getValue();
             if (ocupacion <= 0) continue;
+            int nodeIdx = resourceIdx(entry.getKey());
+            long slot = entry.getKey() & FlightKeyEncoder.DAY_MASK;   // índice de slot (epochMin/60)
+            long epochDia = (slot * GreedyRepairOperator.STORAGE_SLOT_MIN) / FlightKeyEncoder.DAY_MIN;
+            long claveAeroDia = (((long) nodeIdx) << FlightKeyEncoder.DAY_BITS) | (epochDia & FlightKeyEncoder.DAY_MASK);
+            picoPorAeroDia.merge(claveAeroDia, ocupacion, Integer::max);
+        }
+
+        List<SimulacionResponse.OcupacionAlmacen> out = new ArrayList<>();
+        for (Map.Entry<Long, Integer> entry : picoPorAeroDia.entrySet()) {
             Node node = nodesByIdx.get(resourceIdx(entry.getKey()));
             if (node == null) continue;
 
@@ -2336,7 +2527,7 @@ public class PlanificadorService {
             dto.setAeropuerto(node.code);
             dto.setFecha(LocalDate.ofEpochDay(epochDay(entry.getKey())).toString());
             dto.setCapacidadMaxima(node.capacity);
-            dto.setOcupacionAsignada(ocupacion);
+            dto.setOcupacionAsignada(entry.getValue());   // pico concurrente del día
             completarOcupacionAlmacen(dto);
             out.add(dto);
         }
@@ -2765,7 +2956,9 @@ public class PlanificadorService {
 
     private record ResultadoVentana(
             SimulacionResponse.BloqueSimulacion bloque,
-            int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas) {
+            int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
+            boolean colapsoAlmacen, String detalleColapso,
+            com.tasfb2b.planificador.dto.AlertaColapso alerta) {
     }
 
     private record TotalesUnicos(

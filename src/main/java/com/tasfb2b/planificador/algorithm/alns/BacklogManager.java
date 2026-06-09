@@ -73,9 +73,16 @@ public class BacklogManager {
         return result;
     }
 
-    /** Devuelve {@code replanificables} sin vaciar (útil para evaluar) — uso de lectura. */
-    public List<LuggageBatch> snapshotReplanificables() {
-        return new ArrayList<>(replanificables);
+    /**
+     * Vista de solo lectura de los pendientes actuales (sinRuta + replanificables) SIN vaciarlos.
+     * Útil para contabilizar su ocupación de almacén de origen mientras esperan (Fase Origen-B).
+     */
+    public List<LuggageBatch> peekPendientes() {
+        if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
+        List<LuggageBatch> result = new ArrayList<>(sinRuta.size() + replanificables.size());
+        result.addAll(sinRuta);
+        result.addAll(replanificables);
+        return result;
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
@@ -375,7 +376,21 @@ public class PlanificadorController {
         body.put("inicio",        job.inicio.toString());
         if (job.fin != null) body.put("fin", job.fin.toString());
         if (job.error != null) body.put("error", job.error);
+        // Alerta de colapso INMINENTE (pre-colapso) del último bloque, si existe.
+        if (job.alertaColapso != null) body.put("alertaColapso", job.alertaColapso);
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Alerta de colapso logístico INMINENTE (pre-colapso) vigente del job: nivel VERDE/AMBAR/ROJO,
+     * mensaje, bloque y los factores (utilización de almacén, holgura SLA del backlog). Solo
+     * informa; el colapso real se refleja en el estado/métricas. 404 si el job no existe.
+     */
+    @GetMapping("/jobs/{jobId}/alerta-colapso")
+    public ResponseEntity<AlertaColapso> alertaColapsoJob(@PathVariable String jobId) {
+        JobState job = service.getJob(jobId);
+        if (job == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(job.alertaColapso != null ? job.alertaColapso : AlertaColapso.verde());
     }
 
     @GetMapping("/jobs/{jobId}/dashboard")
@@ -509,32 +524,32 @@ public class PlanificadorController {
     }
 
     /**
-     * Descarga el CSV de auditoría de un job completado. 25 columnas con
-     * validación formal por envío de las restricciones del cliente
-     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100) y
-     * los timestamps ISO de inicio (readyTime) y fin del envío (llegada
-     * + DEST_STORAGE_MIN).
+     * Descarga la auditoría de un job completado como un ZIP de varios CSV
+     * (hasta 50000 filas por archivo; un único CSV para millones de envíos no es
+     * práctico). Cada CSV interno se llama {@code <jobId>-<inicio>-<fin>.csv} con
+     * el rango de fechaHoraInicio (registro) de su contenido, y trae 25 columnas
+     * con la validación formal por envío de las restricciones del cliente
+     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100) y los
+     * timestamps ISO de inicio (readyTime) y fin del envío (llegada + DEST_STORAGE_MIN).
      *
-     * <p>Devuelve 204 si el job aún ejecuta, 404 si no existe.
+     * <p>Devuelve 204 si el job aún ejecuta (ZIP no disponible), 404 si no existe.
      */
-    @GetMapping(value = "/jobs/{jobId}/auditoria.csv", produces = "text/csv")
+    @GetMapping(value = "/jobs/{jobId}/auditoria.zip", produces = "application/zip")
     public ResponseEntity<?> auditoriaJob(@PathVariable String jobId) {
         JobState job = service.getJob(jobId);
-        if (job == null)              return ResponseEntity.notFound().build();
+        if (job == null) return ResponseEntity.notFound().build();
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.parseMediaType("text/csv; charset=UTF-8"));
-        headers.set(HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=\"auditoria_" + jobId + ".csv\"");
-        headers.set("X-Audit-Rows", String.valueOf(job.auditoriaFilas));
-
-        if (job.auditoriaCsvPath != null && Files.exists(job.auditoriaCsvPath)) {
-            Resource body = new FileSystemResource(job.auditoriaCsvPath.toFile());
-            return ResponseEntity.ok().headers(headers).body(body);
+        if (job.auditoriaZipPath == null || !Files.exists(job.auditoriaZipPath)) {
+            return ResponseEntity.noContent().build();
         }
 
-        if (job.auditoriaCsv == null) return ResponseEntity.noContent().build();
-        byte[] body = job.auditoriaCsv.getBytes(StandardCharsets.UTF_8);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("application/zip"));
+        headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename=\"auditoria_" + jobId + ".zip\"");
+        headers.set("X-Audit-Rows", String.valueOf(job.auditoriaFilas));
+
+        Resource body = new FileSystemResource(job.auditoriaZipPath.toFile());
         return ResponseEntity.ok().headers(headers).body(body);
     }
 }

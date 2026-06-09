@@ -22,6 +22,7 @@ public class PlanificadorProperties {
     private Backlog      backlog      = new Backlog();
     private Benchmark    benchmark    = new Benchmark();
     private StorageAware storageAware = new StorageAware();
+    private AlertaColapso alertaColapso = new AlertaColapso();
 
     /** Parámetros de planificación programada fija (Sa, Ta, K, umbrales globales). */
     @Data
@@ -136,6 +137,22 @@ public class PlanificadorProperties {
          * grande le robe Ta a la demanda nueva y dispare violaciones de Ta.
          */
         private int maxReprocesoPorBloque = 0;
+    }
+
+    /**
+     * Umbrales de la alerta de colapso logístico INMINENTE (pre-colapso). Solo informa
+     * (consola + endpoint), no detiene. Override con {@code planificador.alerta-colapso.*}.
+     */
+    @Data
+    public static class AlertaColapso {
+        /** Utilización de almacén (0..1) a partir de la cual la alerta es ÁMBAR. */
+        private double almacenAmbar = 0.85;
+        /** Utilización de almacén (0..1) a partir de la cual la alerta es ROJO. */
+        private double almacenRojo = 0.95;
+        /** Holgura SLA restante (fracción 0..1) por debajo de la cual la alerta es ÁMBAR. */
+        private double slaRestanteAmbar = 0.25;
+        /** Holgura SLA restante (fracción 0..1) por debajo de la cual la alerta es ROJO. */
+        private double slaRestanteRojo = 0.10;
     }
 
     /**
