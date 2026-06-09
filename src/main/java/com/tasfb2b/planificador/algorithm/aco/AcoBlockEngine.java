@@ -449,7 +449,7 @@ public class AcoBlockEngine {
             // Invalidar evaluaciones afectadas: la asignación confirmada es lo
             // único que cambió la capacidad de este recorrido de hormiga.
             evalCache.remove(elegida.batch);
-            Set<Long> tocadas = enrutador.clavesOcupadas(elegida.route);
+            Set<Long> tocadas = enrutador.clavesOcupadas(elegida.route, elegida.batch);
             if (!tocadas.isEmpty() && !evalCache.isEmpty()) {
                 evalCache.values().removeIf(opt -> !Collections.disjoint(opt.occupiedKeys, tocadas));
             }
@@ -500,7 +500,7 @@ public class AcoBlockEngine {
                     * (1.0 + Math.min(2.0, regret));
             String bKey = batchKeys.get(ref.batch);
             double weighted = weightBatch(bKey, heuristic, pheromones, cfg);
-            Set<Long> occupiedKeys = clavesDeRutas(enrutador, rutas);
+            Set<Long> occupiedKeys = clavesDeRutas(enrutador, ref.batch, rutas);
             BatchOption opt = new BatchOption(ref, rutas, alternativasOnTime, regret,
                     heuristic, weighted, bKey, occupiedKeys);
             evalCache.put(ref.batch, opt);
@@ -513,10 +513,10 @@ public class AcoBlockEngine {
     }
 
     /** Unión de las claves vuelo-día/aeropuerto-día de todas las rutas candidatas de un batch. */
-    private Set<Long> clavesDeRutas(GreedyRepairOperator enrutador, List<RouteCandidate> rutas) {
+    private Set<Long> clavesDeRutas(GreedyRepairOperator enrutador, LuggageBatch batch, List<RouteCandidate> rutas) {
         Set<Long> keys = new HashSet<>(rutas.size() * 6);
         for (RouteCandidate ruta : rutas) {
-            keys.addAll(enrutador.clavesOcupadas(ruta));
+            keys.addAll(enrutador.clavesOcupadas(ruta, batch));
         }
         return keys;
     }
@@ -756,15 +756,6 @@ public class AcoBlockEngine {
      */
     private String pheromoneKey(String batchKey, RouteCandidate route) {
         return batchKey + '#' + route.signature();
-    }
-
-    private void removeIdentity(List<LuggageBatch> batches, LuggageBatch target) {
-        for (Iterator<LuggageBatch> it = batches.iterator(); it.hasNext();) {
-            if (it.next() == target) {
-                it.remove();
-                return;
-            }
-        }
     }
 
     private static final class PendingPool {
