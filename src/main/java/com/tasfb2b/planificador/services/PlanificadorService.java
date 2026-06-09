@@ -45,7 +45,6 @@ public class PlanificadorService {
     private final JobsRegistry jobs;
     private final AuditoriaService auditoria;
     private final AcoBlockEngine acoEngine;
-    private final MuestraService muestra;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -101,8 +100,7 @@ public class PlanificadorService {
                                GraphBuilder graphBuilder,
                                EnvioLoader envioLoader,
                                AuditoriaService auditoria,
-                               AcoBlockEngine acoEngine,
-                               MuestraService muestra) {
+                               AcoBlockEngine acoEngine) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -112,7 +110,6 @@ public class PlanificadorService {
         this.envioLoader = envioLoader;
         this.auditoria = auditoria;
         this.acoEngine = acoEngine;
-        this.muestra = muestra;
     }
 
 
@@ -766,6 +763,13 @@ public class PlanificadorService {
                 // GET /jobs/{jobId}/bloques?desde=N para dibujar en tiempo real.
                 job.publicarBloque(rv.bloque);
                 job.alertaColapso = rv.alerta();
+                // Parada por orden del front: el usuario llamó a /cancelar. Igual que E1/E3,
+                // así E2 termina de inmediato (aunque simularTiempoReal2=false) y llega a
+                // publicarAuditoria para preservar el ZIP de lo procesado.
+                if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
+                    log.info("E2 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
+                    break;
+                }
             }
             nivelAlertaPrevio = avisarColapsoInminente("E2", rv.alerta(), bloqueActual, nivelAlertaPrevio);
 
@@ -854,8 +858,6 @@ public class PlanificadorService {
 
         if (job != null) job.resultado = res;
         publicarAuditoria(job, auditAcc);
-        // Muestra: solo escenario 2 con motor ALNS, hasta 25 envíos.
-        publicarMuestra(job, motorRes, "2", auditAcc);
         return res;
     }
 
@@ -1740,6 +1742,12 @@ public class PlanificadorService {
     private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc) {
         if (auditoria == null || auditAcc == null || auditAcc.isEmpty()) return;
         if (job == null) return;
+        // Si el job fue cancelado vía Future.cancel(true), el thread llega aquí con el flag
+        // interrupted activo. La escritura del ZIP usa canales NIO interrumpibles
+        // (Files.newOutputStream) que lanzarían ClosedByInterruptException y perderían la
+        // auditoría. Limpiamos el flag para poder persistir lo simulado hasta la cancelación.
+        // Es seguro: publicarAuditoria es la última operación del job (E1/E2/E3).
+        Thread.interrupted(); // limpia (y descarta) el estado de interrupción del thread actual
         log.info("Generando auditoria ZIP: {} envios (job {})", auditAcc.size(), job.getJobId());
         try {
             Path path = Files.createTempFile("planificador-auditoria-" + job.getJobId() + "-", ".zip");
@@ -1753,30 +1761,6 @@ public class PlanificadorService {
             log.info("Auditoria ZIP generada: {} filas (job {}) en {}", filas, job.getJobId(), path);
         } catch (IOException e) {
             throw new IllegalStateException("No se pudo generar auditoria ZIP", e);
-        }
-    }
-
-    /**
-     * Construye, persiste e imprime una muestra de hasta 25 envíos. Solo aplica
-     * cuando {@code motor="alns"} y {@code escenario="2"} (requisito del cliente).
-     */
-    private void publicarMuestra(JobState job, String motor, String escenario,
-                                  Map<String, LuggageBatch> auditAcc) {
-        if (muestra == null || auditAcc == null || auditAcc.isEmpty()) return;
-        if (!"alns".equalsIgnoreCase(motor)) return;
-        if (!"2".equals(escenario)) return;
-
-        var filas = muestra.construir(auditAcc.values(), MuestraService.LIMITE_DEFAULT);
-        if (filas.isEmpty()) return;
-
-        String contexto = "E2 ALNS"
-                + (job != null ? " job=" + job.getJobId().substring(0, 8) : "")
-                + " seed=" + (job != null ? job.seed : "?");
-        muestra.imprimir(filas, contexto);
-
-        if (job != null) {
-            job.muestraCsv   = muestra.aCsv(filas);
-            job.muestraFilas = filas.size();
         }
     }
 

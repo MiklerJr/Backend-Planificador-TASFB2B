@@ -113,14 +113,6 @@ public class JobState {
     public volatile LocalDateTime fechaInicio;
 
     /**
-     * CSV con muestra de hasta 25 envíos del escenario 2 con motor ALNS.
-     * Solo se llena cuando escenario="2" y algoritmo="alns"; null en otros casos.
-     */
-    public volatile String muestraCsv;
-    /** Número de filas en {@link #muestraCsv} (sin contar la cabecera). */
-    public volatile int muestraFilas;
-
-    /**
      * Bloques publicados conforme van saliendo del motor (modo Sa/Ta).
      *
      * <p>El front consulta {@code GET /jobs/{jobId}/bloques?desde=N} para

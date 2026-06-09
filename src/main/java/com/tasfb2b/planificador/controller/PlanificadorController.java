@@ -502,28 +502,6 @@ public class PlanificadorController {
     }
 
     /**
-     * Descarga el CSV con la muestra de hasta 25 envíos. Solo disponible para
-     * jobs de escenario 2 con motor ALNS (requisito del cliente).
-     *
-     * <p>10 columnas: idMaleta, idCliente, origen, destino, cantidad, ruta,
-     * tiempoTotalMin, slaLimiteMin, cumpleSLA, tardado.
-     */
-    @GetMapping(value = "/jobs/{jobId}/muestra.csv", produces = "text/csv")
-    public ResponseEntity<byte[]> muestraJob(@PathVariable String jobId) {
-        JobState job = service.getJob(jobId);
-        if (job == null)             return ResponseEntity.notFound().build();
-        if (job.muestraCsv == null)  return ResponseEntity.noContent().build();
-
-        byte[] body = job.muestraCsv.getBytes(StandardCharsets.UTF_8);
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.parseMediaType("text/csv; charset=UTF-8"));
-        headers.set(HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=\"muestra_" + jobId + ".csv\"");
-        headers.set("X-Muestra-Rows", String.valueOf(job.muestraFilas));
-        return ResponseEntity.ok().headers(headers).body(body);
-    }
-
-    /**
      * Descarga la auditoría de un job completado como un ZIP de varios CSV
      * (hasta 50000 filas por archivo; un único CSV para millones de envíos no es
      * práctico). Cada CSV interno se llama {@code <jobId>-<inicio>-<fin>.csv} con
