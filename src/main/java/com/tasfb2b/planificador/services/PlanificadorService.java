@@ -5,18 +5,19 @@ import com.tasfb2b.planificador.algorithm.alns.*;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
+import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.PlanificacionResultado;
 import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
+import com.tasfb2b.planificador.dto.VueloCancelado;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
 import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
 import com.tasfb2b.planificador.util.DataLoader;
-import com.tasfb2b.planificador.util.FlightCancellationSimulator;
 import com.tasfb2b.planificador.util.FlightParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -66,6 +67,9 @@ public class PlanificadorService {
             "OAKB", "OOMS", "OYSN", "OPKC", "OJAI", "UBBB"
     };
 
+    // Cache perezosa código ICAO → offset horario (GMT), para reconstruir UTC real en el DTO.
+    private volatile Map<String, Integer> offsetPorCodigo = null;
+
     // ── ESTADO ESCENARIOS ALNS ──────────────────────────────────────────
     private volatile List<SimulacionResponse.BloqueSimulacion> bloquesCacheados = null;
     private volatile Graph sc1Graph = null;
@@ -90,6 +94,10 @@ public class PlanificadorService {
     private volatile String sc1Motor = MOTOR_ALNS;
     private volatile long sc1Seed = 0L;
     private final Map<String, int[]> sc1OdStats = new HashMap<>();
+    // Cancelaciones de vuelo en vivo del modo incremental de E1 (no usa JobState). El endpoint
+    // /escenario1/cancelar-vuelo encola aquí y procesarSiguienteVentana las drena.
+    private final java.util.Queue<CancelacionVueloRequest> sc1CancelacionesVuelo =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
     public PlanificadorService(DataLoader dataLoader,
@@ -116,33 +124,6 @@ public class PlanificadorService {
     // =========================================================
     // Lanzadores async (escenarios 2 y 3)
     // =========================================================
-
-    /**
-     * Lanza el escenario 2 de forma asíncrona. Devuelve inmediatamente con el
-     * jobId; el cliente puede consultar progreso/resultado en endpoints separados.
-     */
-    public JobState iniciarEscenario2Async(int k, double cancelProb) {
-        return iniciarEscenario2Async(k, cancelProb, MOTOR_ALNS, null, null);
-    }
-
-    public JobState iniciarEscenario2Async(int k, double cancelProb, String motor) {
-        return iniciarEscenario2Async(k, cancelProb, motor, null, null);
-    }
-
-    public JobState iniciarEscenario2Async(int k, double cancelProb, String motor, Long seed) {
-        return iniciarEscenario2Async(k, cancelProb, motor, seed, null);
-    }
-
-    public JobState iniciarEscenario2Async(int k, double cancelProb, String motor,
-                                            Long seed, LocalDateTime fechaInicio) {
-        EjecucionParams p = new EjecucionParams();
-        p.setK(k);
-        p.setCancelProb(cancelProb);
-        p.setMotor(motor);
-        p.setSeed(seed);
-        p.setFechaInicio(fechaInicio);
-        return iniciarEscenario2Async(p);
-    }
 
     /**
      * Lanza el escenario 2 con todos los parámetros de {@link EjecucionParams}.
@@ -175,22 +156,14 @@ public class PlanificadorService {
     /**
      * Análogo a {@link #iniciarEscenario2Async} pero para escenario 3.
      */
-    public JobState iniciarEscenario3Async(int k, double cancelProb, double umbralColapso) {
-        return iniciarEscenario3Async(k, cancelProb, umbralColapso, MOTOR_ALNS, null);
-    }
-
-    public JobState iniciarEscenario3Async(int k, double cancelProb, double umbralColapso, String motor) {
-        return iniciarEscenario3Async(k, cancelProb, umbralColapso, motor, null);
-    }
-
-    public JobState iniciarEscenario3Async(int k, double cancelProb, double umbralColapso, String motor, Long seed) {
+    public JobState iniciarEscenario3Async(int k, double umbralColapso, String motor, Long seed) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         JobState job = jobs.crear("3", k);
         job.algoritmo = motorRes;
         job.seed = seedRes;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarHastaColapso(k, cancelProb, umbralColapso, job, motorRes, seedRes);
+            SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes);
             job.resultado = res;
         });
         return job;
@@ -201,11 +174,7 @@ public class PlanificadorService {
      * (día a día) y el bucle duerme {@code Sa - Ta} entre bloques cuando
      * {@code simularTiempoReal1=true}, replicando el ritmo real.
      */
-    public JobState iniciarEscenario1Async(double cancelProb) {
-        return iniciarEscenario1Async(cancelProb, MOTOR_ALNS, null);
-    }
-
-    public JobState iniciarEscenario1Async(double cancelProb, String motor, Long seed) {
+    public JobState iniciarEscenario1Async(String motor, Long seed) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1();
@@ -213,7 +182,7 @@ public class PlanificadorService {
         job.algoritmo = motorRes;
         job.seed = seedRes;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarEscenario1(cancelProb, job, motorRes, seedRes);
+            SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes);
             job.resultado = res;
         });
         return job;
@@ -261,6 +230,133 @@ public class PlanificadorService {
     /** Posición del job en la cola del executor (1-based; 0 si ya corre o no existe). */
     public int posicionEnCola(String jobId) {
         return jobs.posicionEnCola(jobId);
+    }
+
+    // =========================================================
+    // Cancelación de vuelos en vivo (orden del usuario desde el front)
+    // =========================================================
+
+    /**
+     * Solicita cancelar un vuelo EN VIVO para un job async (E1 async / E2 / E3). Encola la orden;
+     * el worker la aplica al inicio del próximo bloque (ver {@link #aplicarCancelacionesVuelo}).
+     *
+     * @return true si se encoló; false si el job no existe o ya terminó.
+     */
+    public boolean solicitarCancelacionVuelo(String jobId, CancelacionVueloRequest orden) {
+        if (orden == null) return false;
+        JobState job = jobs.get(jobId);
+        if (job == null) return false;
+        if (!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) return false;
+        job.encolarCancelacionVuelo(orden);
+        log.info("Cancelación de vuelo encolada (job {}): {}->{} salida {}", jobId,
+                orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
+        return true;
+    }
+
+    /**
+     * Variante para el modo incremental de E1 (paso a paso, sin JobState). La orden se aplica al
+     * comienzo de la próxima {@link #procesarSiguienteVentana()}.
+     *
+     * @return true si se encoló; false si el escenario 1 no está inicializado.
+     */
+    public synchronized boolean solicitarCancelacionVueloEsc1(CancelacionVueloRequest orden) {
+        if (orden == null || sc1Graph == null) return false;
+        sc1CancelacionesVuelo.add(orden);
+        log.info("Cancelación de vuelo encolada (E1 incremental): {}->{} salida {}",
+                orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
+        return true;
+    }
+
+    /**
+     * Drena la cola de órdenes de cancelación y las aplica sobre la corrida en curso: marca cada
+     * vuelo-día como no disponible en el enrutador (capacidad 0) y devuelve al backlog los envíos ya
+     * comprometidos en él, que {@code procesarBloque} liberará y re-enrutará en el bloque actual.
+     *
+     * @return cantidad de vuelo-días efectivamente cancelados en esta llamada (para acumular).
+     */
+    private int aplicarCancelacionesVuelo(java.util.Queue<CancelacionVueloRequest> cola, Graph graph,
+                                          GreedyRepairOperator enrutador, BacklogManager backlog,
+                                          Map<String, LuggageBatch> auditAcc,
+                                          List<VueloCancelado> registro) {
+        if (cola == null || cola.isEmpty() || graph == null || enrutador == null) return 0;
+        int cancelados = 0;
+        CancelacionVueloRequest orden;
+        while ((orden = cola.poll()) != null) {
+            if (orden.getOrigen() == null || orden.getDestino() == null
+                    || orden.getFechaHoraSalida() == null) {
+                log.warn("Orden de cancelación de vuelo inválida (campos nulos), ignorada");
+                continue;
+            }
+            String origen = orden.getOrigen().trim();
+            String destino = orden.getDestino().trim();
+            LocalDateTime dep = orden.getFechaHoraSalida();
+            int depMinDia = dep.getHour() * 60 + dep.getMinute();
+            long epochDay = dep.toLocalDate().toEpochDay();
+            long epochMin = epochDay * FlightKeyEncoder.DAY_MIN;
+
+            // Localizar el/los Edge que casan trayecto (origen→destino) + hora de salida.
+            List<Edge> matches = new ArrayList<>();
+            for (Edge e : graph.edges) {
+                if (e.from != null && e.to != null
+                        && origen.equalsIgnoreCase(e.from.code)
+                        && destino.equalsIgnoreCase(e.to.code)
+                        && e.depMinuteOfDay == depMinDia) {
+                    matches.add(e);
+                }
+            }
+            if (matches.isEmpty()) {
+                log.warn("Cancelación: no se encontró vuelo {}->{} con salida {} (min-del-día {})",
+                        origen, destino, dep, depMinDia);
+                continue;
+            }
+
+            for (Edge e : matches) {
+                if (enrutador.addCancelledFlight(FlightKeyEncoder.flightKey(e.idx, epochMin))) {
+                    cancelados++;
+                }
+            }
+            int afectados = reencolarAfectadosPorCancelacion(matches, epochDay, backlog, auditAcc);
+            if (registro != null) {
+                registro.add(new VueloCancelado(origen, destino, dep, afectados));
+            }
+            log.info("Vuelo cancelado {}->{} salida {} ({} edge-día) — {} envíos devueltos al backlog",
+                    origen, destino, dep, matches.size(), afectados);
+        }
+        return cancelados;
+    }
+
+    /**
+     * Devuelve al backlog (como replanificables) los envíos ya comprometidos cuya ruta usa alguno de
+     * los {@code edgesCancelados} en el día {@code epochDay}. No libera capacidad aquí:
+     * {@code procesarBloque} llama {@code releaseFromGlobal} + {@code clearRoute} al sacarlos del
+     * backlog, reutilizando el mecanismo de re-enrutamiento existente.
+     */
+    private int reencolarAfectadosPorCancelacion(List<Edge> edgesCancelados, long epochDay,
+                                                 BacklogManager backlog,
+                                                 Map<String, LuggageBatch> auditAcc) {
+        if (backlog == null || auditAcc == null) return 0;
+        java.util.Set<Integer> idxCancelados = new java.util.HashSet<>();
+        for (Edge e : edgesCancelados) idxCancelados.add(e.idx);
+
+        int afectados = 0;
+        for (LuggageBatch b : auditAcc.values()) {
+            List<Edge> ruta = b.getAssignedRoute();
+            List<Long> deps = b.getAssignedDepartures();
+            if (ruta == null || ruta.isEmpty() || deps == null || deps.size() != ruta.size()) continue;
+            boolean usa = false;
+            for (int i = 0; i < ruta.size(); i++) {
+                if (idxCancelados.contains(ruta.get(i).idx)
+                        && (deps.get(i) / FlightKeyEncoder.DAY_MIN) == epochDay) {
+                    usa = true;
+                    break;
+                }
+            }
+            if (usa) {
+                backlog.addReplanificable(b);
+                afectados++;
+            }
+        }
+        return afectados;
     }
 
     /**
@@ -565,27 +661,26 @@ public class PlanificadorService {
     // =========================================================
     // Escenario 2: Simulación de período (batch completo)
     // =========================================================
-    public SimulacionResponse ejecutarALNS(int k, double cancelProb) {
-        return ejecutarALNS(k, cancelProb, null, MOTOR_ALNS, resolverSeed(null), null);
+    public SimulacionResponse ejecutarALNS(int k) {
+        return ejecutarALNS(k, null, MOTOR_ALNS, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job) {
-        return ejecutarALNS(k, cancelProb, job, MOTOR_ALNS, resolverSeed(null), null);
+    public SimulacionResponse ejecutarALNS(int k, JobState job) {
+        return ejecutarALNS(k, job, MOTOR_ALNS, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor) {
-        return ejecutarALNS(k, cancelProb, job, motor, resolverSeed(null), null);
+    public SimulacionResponse ejecutarALNS(int k, JobState job, String motor) {
+        return ejecutarALNS(k, job, motor, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor, long seed) {
-        return ejecutarALNS(k, cancelProb, job, motor, seed, null);
+    public SimulacionResponse ejecutarALNS(int k, JobState job, String motor, long seed) {
+        return ejecutarALNS(k, job, motor, seed, null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, double cancelProb, JobState job, String motor,
+    public SimulacionResponse ejecutarALNS(int k, JobState job, String motor,
                                             long seed, LocalDateTime fechaInicio) {
         EjecucionParams p = new EjecucionParams();
         p.setK(k);
-        p.setCancelProb(cancelProb);
         p.setMotor(motor);
         p.setSeed(seed);
         p.setFechaInicio(fechaInicio);
@@ -603,7 +698,6 @@ public class PlanificadorService {
     public SimulacionResponse ejecutarALNS(EjecucionParams params, JobState job) {
         if (params == null) params = new EjecucionParams();
         int k = params.getK() != null ? params.getK() : props.getScenario().getKDefault2();
-        double cancelProb = params.getCancelProb() != null ? params.getCancelProb() : 0.0;
         String motor = params.getMotor();
         long seed = resolverSeed(params.getSeed());
         LocalDateTime fechaInicio = params.getFechaInicio();
@@ -620,9 +714,8 @@ public class PlanificadorService {
                 ? taOverride * 1000L
                 : props.getScenario().getTaSegundos() * 1000L;
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 2 — motor={} seed={} fechaInicio={} K={} Sa={}min Ta={}s dias={} Sc={}min cancelProb={}% async={}",
-                motorRes, seed, fechaInicio, k, saMin, taFijoMs / 1000, diasOverride, scMin,
-                String.format("%.1f", cancelProb * 100), job != null);
+        log.info("Escenario 2 — motor={} seed={} fechaInicio={} K={} Sa={}min Ta={}s dias={} Sc={}min async={}",
+                motorRes, seed, fechaInicio, k, saMin, taFijoMs / 1000, diasOverride, scMin, job != null);
         long inicio = System.currentTimeMillis();
 
         List<TemporalContext> plan = construirPlanBloques(k, fechaInicio, saOverride, diasOverride);
@@ -653,24 +746,10 @@ public class PlanificadorService {
         int totalBloques = plan.size();
         int intervaloReporte = Math.max(1, totalBloques / 10);
 
+        // Cancelaciones de vuelo: ya no se sortean al azar. Se aplican en vivo cuando el usuario
+        // las ordena desde el front (ver aplicarCancelacionesVuelo). Acumula el total ordenado.
         int totalVuelosCancelados = 0;
-        if (cancelProb > 0.0) {
-            // Si hay warm-up, ampliamos el rango de días para que las
-            // cancelaciones también afecten al período pre-fechaInicio.
-            LocalDateTime startDt = !warmupPlan.isEmpty()
-                    ? warmupPlan.get(0).scStart
-                    : plan.get(0).scStart;
-            long startDay = startDt.toLocalDate().toEpochDay();
-            long endDay = plan.get(plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
-            // Sub-Random independiente para cancelaciones para que su consumo no
-            // desfase el rng del motor (mantiene reproducibilidad por componente).
-            Random rngCancel = new Random(seed ^ 0x9E3779B97F4A7C15L);
-            Set<Long> cancelados = FlightCancellationSimulator.generate(
-                    graph.edges, startDay, endDay, cancelProb, rngCancel);
-            enrutador.setCancelledFlights(cancelados);
-            totalVuelosCancelados = cancelados.size();
-            log.info("Cancelaciones: {} vuelo-días (seed cancel)", totalVuelosCancelados);
-        }
+        List<VueloCancelado> vuelosCancelados = new ArrayList<>();
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
         Map<String, int[]> odStats = new HashMap<>();
@@ -741,6 +820,10 @@ public class PlanificadorService {
         String nivelAlertaPrevio = AlertaColapso.VERDE;
         for (TemporalContext ctx : plan) {
             bloqueActual++;
+            // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
+            totalVuelosCancelados += aplicarCancelacionesVuelo(
+                    job != null ? job.getCancelacionesVueloPendientes() : null,
+                    graph, enrutador, backlog, auditAcc, vuelosCancelados);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
@@ -857,7 +940,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc);
+        publicarAuditoria(job, auditAcc, vuelosCancelados);
         return res;
     }
 
@@ -873,17 +956,16 @@ public class PlanificadorService {
     /**
      * Inicializa el estado del escenario 1. Debe llamarse antes de procesarSiguienteVentana().
      */
-    public synchronized Map<String, Object> inicializarEscenario1(double cancelProb) {
-        return inicializarEscenario1(cancelProb, MOTOR_ALNS, null);
+    public synchronized Map<String, Object> inicializarEscenario1() {
+        return inicializarEscenario1(MOTOR_ALNS, null);
     }
 
-    public synchronized Map<String, Object> inicializarEscenario1(double cancelProb, String motor, Long seed) {
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
+    public synchronized Map<String, Object> inicializarEscenario1(String motor, Long seed) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1(); // K=1 día a día
-        log.info("Escenario 1 — inicializando motor={} seed={} (K={}, cancelProb={}%) ...",
-                motorRes, seedRes, k, String.format("%.1f", cancelProb * 100));
+        log.info("Escenario 1 — inicializando motor={} seed={} (K={}) ...",
+                motorRes, seedRes, k);
 
         sc1Graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
         sc1Enrutador = new GreedyRepairOperator(sc1Graph);
@@ -904,18 +986,7 @@ public class PlanificadorService {
         sc1OdStats.clear();
 
         sc1Plan = construirPlanBloques(k);
-
-        if (cancelProb > 0.0 && !sc1Plan.isEmpty()) {
-            long startDay = sc1Plan.get(0).scStart.toLocalDate().toEpochDay();
-            long endDay = sc1Plan.get(sc1Plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
-            Random rngCancel = new Random(seedRes ^ 0x9E3779B97F4A7C15L);
-            Set<Long> cancelados = FlightCancellationSimulator.generate(
-                    sc1Graph.edges, startDay, endDay, cancelProb, rngCancel);
-            sc1Enrutador.setCancelledFlights(cancelados);
-            log.info("E1 listo: {} bloques, {} cancelaciones (seed cancel)", sc1Plan.size(), cancelados.size());
-        } else {
-            log.info("E1 listo: {} bloques, sin cancelaciones", sc1Plan.size());
-        }
+        log.info("E1 listo: {} bloques", sc1Plan.size());
 
         return Map.of(
                 "estado", "inicializado",
@@ -1284,6 +1355,10 @@ public class PlanificadorService {
         TemporalContext ctx = sc1Plan.get(sc1Idx);
         sc1Idx++;
 
+        // Cancelaciones de vuelo ordenadas por el usuario en vivo (E1 incremental). El modo
+        // incremental no genera ZIP de auditoría, por eso no se registra la lista (null).
+        aplicarCancelacionesVuelo(sc1CancelacionesVuelo, sc1Graph, sc1Enrutador, sc1Backlog, sc1AuditAcc, null);
+
         Random rngBloque = rngParaBloque(sc1Seed, sc1Motor, ctx.bloqueIdx);
         ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog, sc1AuditAcc, sc1Motor, rngBloque);
         sc1Bloques.add(rv.bloque);
@@ -1362,16 +1437,14 @@ public class PlanificadorService {
      * Publica bloques incrementalmente vía {@code JobState.publicarBloque} y
      * arma un {@link SimulacionResponse} agregado al final.
      */
-    public SimulacionResponse ejecutarEscenario1(double cancelProb, JobState job, String motor, long seed) {
+    public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed) {
         String motorRes = resolverMotor(motor);
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
         int k = props.getScenario().getKDefault1();
         int saMin = props.getScenario().getSaMinutos();
         long taFijoMs = props.getScenario().getTaSegundos() * 1000L;
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, cancelProb={}%, async={}) ...",
-                motorRes, seed, k, saMin, scMin,
-                String.format("%.1f", cancelProb * 100), job != null);
+        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, async={}) ...",
+                motorRes, seed, k, saMin, scMin, job != null);
         long inicio = System.currentTimeMillis();
 
         List<TemporalContext> plan = construirPlanBloques(k);
@@ -1389,17 +1462,9 @@ public class PlanificadorService {
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
+        // Cancelaciones de vuelo: solo por orden del usuario en vivo (ver aplicarCancelacionesVuelo).
         int totalVuelosCancelados = 0;
-        if (cancelProb > 0.0) {
-            long startDay = plan.get(0).scStart.toLocalDate().toEpochDay();
-            long endDay = plan.get(plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
-            Random rngCancel = new Random(seed ^ 0x9E3779B97F4A7C15L);
-            Set<Long> cancelados = FlightCancellationSimulator.generate(
-                    graph.edges, startDay, endDay, cancelProb, rngCancel);
-            enrutador.setCancelledFlights(cancelados);
-            totalVuelosCancelados = cancelados.size();
-            log.info("E1 cancelaciones: {} vuelo-días (seed cancel)", totalVuelosCancelados);
-        }
+        List<VueloCancelado> vuelosCancelados = new ArrayList<>();
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(plan.size());
         Map<String, int[]> odStats = new HashMap<>();
@@ -1420,6 +1485,10 @@ public class PlanificadorService {
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
+            // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
+            totalVuelosCancelados += aplicarCancelacionesVuelo(
+                    job != null ? job.getCancelacionesVueloPendientes() : null,
+                    graph, enrutador, backlog, auditAcc, vuelosCancelados);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
 
@@ -1519,7 +1588,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc);
+        publicarAuditoria(job, auditAcc, vuelosCancelados);
         return res;
     }
 
@@ -1539,31 +1608,27 @@ public class PlanificadorService {
      * El parámetro {@code umbralColapso} se mantiene por compatibilidad de API pero
      * ya no influye en la parada.
      */
-    public SimulacionResponse ejecutarHastaColapso(int k, double cancelProb, double umbralColapso) {
-        return ejecutarHastaColapso(k, cancelProb, umbralColapso, null, MOTOR_ALNS, resolverSeed(null));
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso) {
+        return ejecutarHastaColapso(k, umbralColapso, null, MOTOR_ALNS, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double cancelProb,
-                                                   double umbralColapso, JobState job) {
-        return ejecutarHastaColapso(k, cancelProb, umbralColapso, job, MOTOR_ALNS, resolverSeed(null));
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, JobState job) {
+        return ejecutarHastaColapso(k, umbralColapso, job, MOTOR_ALNS, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double cancelProb,
-                                                   double umbralColapso, JobState job, String motor) {
-        return ejecutarHastaColapso(k, cancelProb, umbralColapso, job, motor, resolverSeed(null));
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, JobState job, String motor) {
+        return ejecutarHastaColapso(k, umbralColapso, job, motor, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double cancelProb,
-                                                   double umbralColapso, JobState job, String motor, long seed) {
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
+                                                   JobState job, String motor, long seed) {
         String motorRes = resolverMotor(motor);
         Random rngSim = new Random(seed);
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
         int saMin = props.getScenario().getSaMinutos();
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 3 — colapso motor={} seed={} (K={}, Sa={}min, Sc={}min, cancelProb={}%, umbral={}%, async={}) ...",
+        log.info("Escenario 3 — colapso motor={} seed={} (K={}, Sa={}min, Sc={}min, umbral={}%, async={}) ...",
                 motorRes, seed, k, saMin, scMin,
-                String.format("%.1f", cancelProb * 100),
                 String.format("%.1f", umbralColapso * 100),
                 job != null);
         long inicio = System.currentTimeMillis();
@@ -1583,15 +1648,8 @@ public class PlanificadorService {
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
-        if (cancelProb > 0.0) {
-            long startDay = plan.get(0).scStart.toLocalDate().toEpochDay();
-            long endDay = plan.get(plan.size() - 1).scEnd.toLocalDate().toEpochDay() + 3;
-            Random rngCancel = new Random(seed ^ 0x9E3779B97F4A7C15L);
-            Set<Long> cancelados = FlightCancellationSimulator.generate(
-                    graph.edges, startDay, endDay, cancelProb, rngCancel);
-            enrutador.setCancelledFlights(cancelados);
-            log.info("E3 cancelaciones: {} vuelo-días (seed cancel)", cancelados.size());
-        }
+        // Cancelaciones de vuelo: solo por orden del usuario en vivo (ver aplicarCancelacionesVuelo).
+        List<VueloCancelado> vuelosCancelados = new ArrayList<>();
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>();
         Map<String, int[]> odStats = new HashMap<>();
@@ -1615,6 +1673,10 @@ public class PlanificadorService {
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
+            // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
+            aplicarCancelacionesVuelo(
+                    job != null ? job.getCancelacionesVueloPendientes() : null,
+                    graph, enrutador, backlog, auditAcc, vuelosCancelados);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque);
 
@@ -1726,7 +1788,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc);
+        publicarAuditoria(job, auditAcc, vuelosCancelados);
         return res;
     }
 
@@ -1739,21 +1801,28 @@ public class PlanificadorService {
      * <p>La auditoría solo se publica para ejecuciones asíncronas (con {@code job});
      * las corridas síncronas (benchmark/comparativa) no la generan.
      */
-    private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc) {
-        if (auditoria == null || auditAcc == null || auditAcc.isEmpty()) return;
-        if (job == null) return;
+    private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc,
+                                   List<VueloCancelado> vuelosCancelados) {
+        if (auditoria == null || job == null) return;
+        boolean hayEnvios = auditAcc != null && !auditAcc.isEmpty();
+        boolean hayCancelados = vuelosCancelados != null && !vuelosCancelados.isEmpty();
+        // Generar el ZIP si hay envíos auditables o, al menos, vuelos cancelados que registrar.
+        if (!hayEnvios && !hayCancelados) return;
         // Si el job fue cancelado vía Future.cancel(true), el thread llega aquí con el flag
         // interrupted activo. La escritura del ZIP usa canales NIO interrumpibles
         // (Files.newOutputStream) que lanzarían ClosedByInterruptException y perderían la
         // auditoría. Limpiamos el flag para poder persistir lo simulado hasta la cancelación.
         // Es seguro: publicarAuditoria es la última operación del job (E1/E2/E3).
         Thread.interrupted(); // limpia (y descarta) el estado de interrupción del thread actual
-        log.info("Generando auditoria ZIP: {} envios (job {})", auditAcc.size(), job.getJobId());
+        int envios = hayEnvios ? auditAcc.size() : 0;
+        log.info("Generando auditoria ZIP: {} envios, {} vuelos cancelados (job {})",
+                envios, hayCancelados ? vuelosCancelados.size() : 0, job.getJobId());
         try {
             Path path = Files.createTempFile("planificador-auditoria-" + job.getJobId() + "-", ".zip");
             path.toFile().deleteOnExit();
-            int filas = auditoria.escribirZip(auditAcc.values(), path,
-                    AuditoriaService.FILAS_POR_ARCHIVO, job.getJobId());
+            int filas = auditoria.escribirZip(
+                    hayEnvios ? auditAcc.values() : java.util.List.of(), path,
+                    AuditoriaService.FILAS_POR_ARCHIVO, job.getJobId(), vuelosCancelados);
             job.auditoriaZipPath = path;
             job.auditoriaCsvPath = null;
             job.auditoriaCsv = null;
@@ -2045,6 +2114,11 @@ public class PlanificadorService {
         SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
         bloque.setHoraInicio(ctx.scStart.toString());
         bloque.setHoraFin(ctx.scEnd.toString());
+        // Rango UTC real del bloque = min/max de los registroUtc de sus asignaciones. No se deriva
+        // de scStart/scEnd porque esos están en el eje de registro local (mezcla husos).
+        String[] rangoUtc = rangoUtcRegistros(asignaciones);
+        bloque.setHoraInicioUtc(rangoUtc[0]);
+        bloque.setHoraFinUtc(rangoUtc[1]);
         bloque.setMaletasProcesadas(finalBatches.size());
         bloque.setMaletasEnrutadas(enrutadas);
         bloque.setAsignaciones(asignaciones);
@@ -2281,8 +2355,9 @@ public class PlanificadorService {
 
     /**
      * Construye los DTOs de asignación para una lista de batches ya ruteados.
+     * Visible a nivel de paquete para pruebas de la conversión a UTC (husos).
      */
-    private List<SimulacionResponse.AsignacionMaleta> buildAsignaciones(List<LuggageBatch> batches) {
+    List<SimulacionResponse.AsignacionMaleta> buildAsignaciones(List<LuggageBatch> batches) {
         return batches.stream().map(b -> {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
             SimulacionResponse.AsignacionMaleta asig = new SimulacionResponse.AsignacionMaleta();
@@ -2296,6 +2371,16 @@ public class PlanificadorService {
                     ? b.getAssignedRoute().stream().map(e -> e.id).collect(Collectors.toList())
                     : Collections.emptyList());
 
+            // El motor ya opera en UTC (AlgorithmMapper normaliza vuelos y readyTime con el
+            // offset de cada aeropuerto). Por eso readyTime/departures YA son UTC; la hora de
+            // pared local se reconstruye sumando el offset (local = utc + offset).
+            LocalDateTime ready = b.getReadyTime();
+            if (ready != null) {
+                long readyUtcMin = toEpochMin(ready);
+                asig.setRegistroUtc(epochMinToIso(readyUtcMin));
+                asig.setRegistroLocal(epochMinToIso(readyUtcMin + offsetHoras(b.getOriginCode()) * 60L));
+            }
+
             List<SimulacionResponse.TramoRuta> tramos = Collections.emptyList();
             if (enrutada && b.getAssignedDepartures() != null && !b.getAssignedDepartures().isEmpty()) {
                 var route = b.getAssignedRoute();
@@ -2303,21 +2388,22 @@ public class PlanificadorService {
                 tramos = new ArrayList<>();
                 for (int ti = 0; ti < route.size(); ti++) {
                     var edge = route.get(ti);
-                    long depMin = deps.get(ti);
-                    long arrMin = depMin + edge.durationMinutes;
+                    long depMin = deps.get(ti);          // UTC (epoch-min)
+                    long arrMin = depMin + edge.durationMinutes; // UTC; duración real de vuelo
+                    String origen  = edge.from != null ? edge.from.code : "";
+                    String destino = edge.to != null ? edge.to.code : "";
                     SimulacionResponse.TramoRuta tr = new SimulacionResponse.TramoRuta();
                     tr.setVueloId(edge.id);
-                    tr.setOrigen(edge.from != null ? edge.from.code : "");
-                    tr.setDestino(edge.to != null ? edge.to.code : "");
-                    String salida  = epochMinToUtc(depMin);
-                    String llegada = epochMinToUtc(arrMin);
-                    // salidaUtc/llegadaUtc se mantienen por compat (deprecated).
-                    // salidaLocal/llegadaLocal son los nombres correctos —
-                    // mismos valores: LocalDateTime sin offset, TZ del dataset.
-                    tr.setSalidaUtc(salida);
-                    tr.setLlegadaUtc(llegada);
-                    tr.setSalidaLocal(salida);
-                    tr.setLlegadaLocal(llegada);
+                    tr.setOrigen(origen);
+                    tr.setDestino(destino);
+                    // UTC = directo (el motor ya lo entrega normalizado).
+                    tr.setSalidaUtc(epochMinToIso(depMin));
+                    tr.setLlegadaUtc(epochMinToIso(arrMin));
+                    // Local = hora de pared de cada extremo (origen para salida, destino para llegada).
+                    tr.setSalidaLocal(epochMinToIso(depMin + offsetHoras(origen) * 60L));
+                    tr.setLlegadaLocal(epochMinToIso(arrMin + offsetHoras(destino) * 60L));
+                    // Duración real del vuelo (UTC). El front debe usar esto, NO restar los *Local.
+                    tr.setDuracionMin(edge.durationMinutes);
                     tramos.add(tr);
                 }
             }
@@ -2901,13 +2987,50 @@ public class PlanificadorService {
         m.setSinRutaDefinitivo(backlog.sinRutaDefinitivo());
     }
 
-    private static String epochMinToUtc(long epochMin) {
-        long epochDay = epochMin / 1440L;
-        int minuteOfDay = (int) (epochMin % 1440L);
+    /**
+     * Rango UTC real de un bloque = [min, max] de los {@code registroUtc} de sus asignaciones.
+     * Devuelve {@code String[2]} (ambos null si ninguna asignación tiene registro). Los registroUtc
+     * son ISO sin offset y mismo formato ({@code yyyy-MM-ddTHH:mm}), así que el orden lexicográfico
+     * coincide con el cronológico. Visible a nivel de paquete para pruebas.
+     */
+    static String[] rangoUtcRegistros(List<SimulacionResponse.AsignacionMaleta> asignaciones) {
+        String min = null, max = null;
+        for (SimulacionResponse.AsignacionMaleta a : asignaciones) {
+            String r = a.getRegistroUtc();
+            if (r == null) continue;
+            if (min == null || r.compareTo(min) < 0) min = r;
+            if (max == null || r.compareTo(max) > 0) max = r;
+        }
+        return new String[]{min, max};
+    }
+
+    /** Convierte un epoch-min (minutos desde epoch) a un ISO datetime sin offset. */
+    private static String epochMinToIso(long epochMin) {
+        long epochDay = Math.floorDiv(epochMin, 1440L);
+        int minuteOfDay = (int) Math.floorMod(epochMin, 1440L);
         return LocalDateTime.of(
                 LocalDate.ofEpochDay(epochDay),
                 LocalTime.of(minuteOfDay / 60, minuteOfDay % 60)
         ).toString();
+    }
+
+    /**
+     * Offset horario (GMT, en horas) del aeropuerto. El motor opera en hora local
+     * "pelada"; esta tabla permite reconstruir el instante UTC real en la capa de
+     * presentación. Se cachea perezosamente desde {@code dataLoader.getAeropuertos()}.
+     */
+    private int offsetHoras(String codigo) {
+        Map<String, Integer> mapa = offsetPorCodigo;
+        if (mapa == null) {
+            mapa = new HashMap<>();
+            for (Aeropuerto a : dataLoader.getAeropuertos()) {
+                if (a.getCodigo() != null && a.getOffsetHorario() != null) {
+                    mapa.put(a.getCodigo(), a.getOffsetHorario());
+                }
+            }
+            offsetPorCodigo = mapa;
+        }
+        return mapa.getOrDefault(codigo, 0);
     }
 
     private void agregarInfoAeropuerto(Map<String, SimulacionResponse.AeropuertoDTO> map,

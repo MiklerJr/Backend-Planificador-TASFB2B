@@ -1,12 +1,15 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.dto.AlertaColapso;
+import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import lombok.Data;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -102,7 +105,7 @@ public class JobState {
     /**
      * Seed efectivo de la corrida. Si el cliente no pasa uno, se genera uno aleatorio
      * y se reporta aquí — cualquier valor reportado garantiza reproducibilidad si se
-     * vuelve a invocar con el mismo seed, motor, k y cancelProb.
+     * vuelve a invocar con el mismo seed, motor y k.
      */
     public volatile long seed = 0L;
 
@@ -136,6 +139,25 @@ public class JobState {
     /** Progreso del warm-up [0..1]. 0 si no hay warm-up para este job. */
     public double getProgresoWarmup() {
         return totalBloquesWarmup == 0 ? 0.0 : (double) bloqueWarmup / totalBloquesWarmup;
+    }
+
+    /**
+     * Órdenes de cancelación de vuelo pendientes de aplicar, enviadas por el usuario EN VIVO. El
+     * worker del job las drena al inicio de cada bloque (ver
+     * {@code PlanificadorService.aplicarCancelacionesVuelo}). {@link ConcurrentLinkedQueue} permite
+     * que el endpoint REST encole desde otro hilo sin bloquear al worker.
+     */
+    private final Queue<CancelacionVueloRequest> cancelacionesVueloPendientes =
+            new ConcurrentLinkedQueue<>();
+
+    /** Encola una orden de cancelación de vuelo para que el worker la aplique en el próximo bloque. */
+    public void encolarCancelacionVuelo(CancelacionVueloRequest orden) {
+        if (orden != null) cancelacionesVueloPendientes.add(orden);
+    }
+
+    /** Cola de cancelaciones de vuelo pendientes (la drena el worker del job). */
+    public Queue<CancelacionVueloRequest> getCancelacionesVueloPendientes() {
+        return cancelacionesVueloPendientes;
     }
 
     /** Publica un bloque procesado para que el front lo consuma incrementalmente. */

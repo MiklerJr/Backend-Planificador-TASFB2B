@@ -20,8 +20,6 @@ import java.time.LocalDateTime;
 public class ComparativaRequest {
     /** Factor K de aceleración. Default 14 (escenario 2). */
     private Integer k = 14;
-    /** Probabilidad de cancelación por vuelo-día [0.0–1.0]. */
-    private Double cancelProb = 0.0;
     /** Número de pares (ALNS, ACO) a ejecutar. Recomendado n ≥ 30 para Wilcoxon. */
     private Integer repeticiones = 30;
     /** Seed del primer par; las repeticiones siguientes usan seedBase+1, +2, ... */

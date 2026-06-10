@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.dto;
 import lombok.Data;
 
 /**
- * Una fila del resultado de benchmark: combinación (escenario, K, cancelProb, repetición)
+ * Una fila del resultado de benchmark: combinación (escenario, K, repetición)
  * y todas las métricas observadas tras ejecutar la simulación.
  */
 @Data
@@ -12,7 +12,6 @@ public class BenchmarkRow {
     private int    k;
     private int    saMinutos;
     private int    scMinutos;          // K * Sa
-    private double cancelProb;
     private int    repeticion;
 
     private int    totalBloques;

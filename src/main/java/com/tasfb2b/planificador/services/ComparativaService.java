@@ -52,7 +52,6 @@ public class ComparativaService {
         if (req == null) req = new ComparativaRequest();
         int reps = (req.getRepeticiones() != null && req.getRepeticiones() > 0) ? req.getRepeticiones() : 30;
         int k    = (req.getK() != null && req.getK() > 0) ? req.getK() : 14;
-        double cp = req.getCancelProb() != null ? Math.max(0.0, Math.min(1.0, req.getCancelProb())) : 0.0;
         long seedBase = req.getSeedBase() != null ? req.getSeedBase() : 42L;
         boolean e3 = req.isEjecutarColapso();
         double umbral = req.getUmbralColapso() != null ? req.getUmbralColapso() : 0.20;
@@ -73,12 +72,11 @@ public class ComparativaService {
         res.setFilasCompletadas(0);
         results.put(res.getJobId(), res);
 
-        log.info("Comparativa {} iniciada: {} reps × {} escenarios, K={}, cancelProb={}, seedBase={}, fechaInicio={}, sa={}, ta={}, dias={}",
-                res.getJobId(), reps, e3 ? 2 : 1, k, cp, seedBase, fechaInicio, sa, ta, dias);
+        log.info("Comparativa {} iniciada: {} reps × {} escenarios, K={}, seedBase={}, fechaInicio={}, sa={}, ta={}, dias={}",
+                res.getJobId(), reps, e3 ? 2 : 1, k, seedBase, fechaInicio, sa, ta, dias);
 
         final int repsF = reps;
         final int kF = k;
-        final double cpF = cp;
         final long seedBaseF = seedBase;
         final boolean e3F = e3;
         final double umbralF = umbral;
@@ -87,7 +85,7 @@ public class ComparativaService {
         final Integer taF = ta;
         final Integer diasF = dias;
         final String motorF = motor;
-        executor.submit(() -> ejecutar(res, repsF, kF, cpF, seedBaseF, e3F, umbralF, fechaInicioF, saF, taF, diasF, motorF));
+        executor.submit(() -> ejecutar(res, repsF, kF, seedBaseF, e3F, umbralF, fechaInicioF, saF, taF, diasF, motorF));
         return res;
     }
 
@@ -97,7 +95,7 @@ public class ComparativaService {
 
     // ── Núcleo ─────────────────────────────────────────────────────────────
 
-    private void ejecutar(ComparativaResultado res, int reps, int k, double cancelProb,
+    private void ejecutar(ComparativaResultado res, int reps, int k,
                            long seedBase, boolean ejecutarColapso, double umbralColapso,
                            LocalDateTime fechaInicio, Integer sa, Integer ta, Integer dias,
                            String motorSeleccionado) {
@@ -118,24 +116,23 @@ public class ComparativaService {
                 row2.setRep(r);
                 row2.setSeed(seed);
                 row2.setK(k);
-                row2.setCancelProb(cancelProb);
 
                 if (ejecutarAlns) {
-                res.setConfigActual(String.format("rep %d/%d — E2 ALNS K=%d cp=%.2f seed=%d%s", r + 1, reps, k, cancelProb, seed, suf));
+                res.setConfigActual(String.format("rep %d/%d — E2 ALNS K=%d seed=%d%s", r + 1, reps, k, seed, suf));
                 log.info("Comparativa {} → {}", res.getJobId(), res.getConfigActual());
                 long t0 = System.currentTimeMillis();
                 SimulacionResponse alns = planificador.ejecutarALNS(
-                        construirParams(k, cancelProb, "alns", seed, fechaInicio, sa, ta, dias), null);
+                        construirParams(k, "alns", seed, fechaInicio, sa, ta, dias), null);
                 long alnsMs = System.currentTimeMillis() - t0;
                 rellenarAlns(row2, alns, alnsMs);
                 }
 
                 if (ejecutarAco) {
-                res.setConfigActual(String.format("rep %d/%d — E2 ACO K=%d cp=%.2f seed=%d%s", r + 1, reps, k, cancelProb, seed, suf));
+                res.setConfigActual(String.format("rep %d/%d — E2 ACO K=%d seed=%d%s", r + 1, reps, k, seed, suf));
                 log.info("Comparativa {} → {}", res.getJobId(), res.getConfigActual());
                 long t0 = System.currentTimeMillis();
                 SimulacionResponse aco = planificador.ejecutarALNS(
-                        construirParams(k, cancelProb, "aco", seed, fechaInicio, sa, ta, dias), null);
+                        construirParams(k, "aco", seed, fechaInicio, sa, ta, dias), null);
                 long acoMs = System.currentTimeMillis() - t0;
                 rellenarAco(row2, aco, acoMs);
                 }
@@ -150,22 +147,21 @@ public class ComparativaService {
                     row3.setRep(r);
                     row3.setSeed(seed);
                     row3.setK(k);
-                    row3.setCancelProb(cancelProb);
 
                     if (ejecutarAlns) {
-                    res.setConfigActual(String.format("rep %d/%d — E3 ALNS K=%d cp=%.2f seed=%d", r + 1, reps, k, cancelProb, seed));
+                    res.setConfigActual(String.format("rep %d/%d — E3 ALNS K=%d seed=%d", r + 1, reps, k, seed));
                     log.info("Comparativa {} → {}", res.getJobId(), res.getConfigActual());
                     long t0 = System.currentTimeMillis();
-                    SimulacionResponse alns3 = planificador.ejecutarHastaColapso(k, cancelProb, umbralColapso, null, "alns", seed);
+                    SimulacionResponse alns3 = planificador.ejecutarHastaColapso(k, umbralColapso, null, "alns", seed);
                     long alns3Ms = System.currentTimeMillis() - t0;
                     rellenarAlns(row3, alns3, alns3Ms);
                     }
 
                     if (ejecutarAco) {
-                    res.setConfigActual(String.format("rep %d/%d — E3 ACO K=%d cp=%.2f seed=%d", r + 1, reps, k, cancelProb, seed));
+                    res.setConfigActual(String.format("rep %d/%d — E3 ACO K=%d seed=%d", r + 1, reps, k, seed));
                     log.info("Comparativa {} → {}", res.getJobId(), res.getConfigActual());
                     long t0 = System.currentTimeMillis();
-                    SimulacionResponse aco3 = planificador.ejecutarHastaColapso(k, cancelProb, umbralColapso, null, "aco", seed);
+                    SimulacionResponse aco3 = planificador.ejecutarHastaColapso(k, umbralColapso, null, "aco", seed);
                     long aco3Ms = System.currentTimeMillis() - t0;
                     rellenarAco(row3, aco3, aco3Ms);
                     }
@@ -197,12 +193,11 @@ public class ComparativaService {
     }
 
     /** Construye un EjecucionParams para una corrida puntual de la comparativa. */
-    private static EjecucionParams construirParams(int k, double cancelProb, String motor,
+    private static EjecucionParams construirParams(int k, String motor,
                                                     long seed, LocalDateTime fechaInicio,
                                                     Integer sa, Integer ta, Integer dias) {
         EjecucionParams p = new EjecucionParams();
         p.setK(k);
-        p.setCancelProb(cancelProb);
         p.setMotor(motor);
         p.setSeed(seed);
         p.setFechaInicio(fechaInicio);
@@ -269,7 +264,7 @@ public class ComparativaService {
     // ── Serialización a CSV ────────────────────────────────────────────────
 
     private static final String CSV_HEADER =
-            "escenario,rep,seed,k,cancelProb," +
+            "escenario,rep,seed,k," +
                     "alns_envios,alns_enrutadas,alns_sinRuta,alns_cumpleSLA,alns_tardadas,alns_pctSLA,alns_pctSinRuta," +
                     "alns_taPromedioMs,alns_taMaxMs,alns_tiempoRealMs,alns_msPorPaquete,alns_backlogPico,alns_sinRutaDefinitivo," + // <-- Se agregó alns_msPorPaquete
                     "alns_collapsoDetectado,alns_bloqueColapso," +
@@ -286,7 +281,6 @@ public class ComparativaService {
               .append(r.getRep()).append(',')
               .append(r.getSeed()).append(',')
               .append(r.getK()).append(',')
-              .append(r.getCancelProb()).append(',')
               .append(r.getAlnsEnvios()).append(',')
               .append(r.getAlnsEnrutadas()).append(',')
               .append(r.getAlnsSinRuta()).append(',')

@@ -24,7 +24,7 @@ public class BenchmarkResult {
 
     private int  filasTotales;
     private int  filasCompletadas;
-    /** Combinación en curso (ej: "K=14, cancelProb=0.05, rep=2/3"). */
+    /** Combinación en curso (ej: "K=14, rep=2/3"). */
     private String configActual;
 
     private List<BenchmarkRow> filas = new ArrayList<>();

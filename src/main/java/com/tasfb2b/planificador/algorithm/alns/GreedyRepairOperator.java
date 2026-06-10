@@ -54,8 +54,11 @@ public class GreedyRepairOperator implements RepairOperator {
     private final ConcurrentHashMap<Long, Integer> flightOccupancy  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> airportOccupancy = new ConcurrentHashMap<>();
 
-    // Vuelos cancelados: flightKeys con capacidad efectiva = 0.
-    private Set<Long> cancelledFlightDays = Collections.emptySet();
+    // Vuelos cancelados: flightKeys con capacidad efectiva = 0. Mutable y concurrente porque las
+    // cancelaciones las ordena el usuario EN VIVO durante la simulación (ver
+    // PlanificadorService.aplicarCancelacionesVuelo): el worker del job añade entre bloques y el
+    // Dijkstra solo lee.
+    private final Set<Long> cancelledFlightDays = ConcurrentHashMap.newKeySet();
 
     // Fase Origen-B — ocupación del almacén de ORIGEN por los envíos en backlog (sinRuta) que
     // esperan ser enrutados. Mapa por SLOT (igual que airportOccupancy), en UTC. Se reconstruye al
@@ -363,9 +366,21 @@ public class GreedyRepairOperator implements RepairOperator {
         cargarOrigen(blockAirport, batch, route, deps, -1);
     }
 
-    /** Registra qué vuelo-días están cancelados (capacidad efectiva = 0). */
-    public void setCancelledFlights(Set<Long> cancelled) {
-        this.cancelledFlightDays = cancelled == null ? Collections.emptySet() : cancelled;
+    /**
+     * Marca un vuelo-día como cancelado (capacidad efectiva = 0). Pensado para órdenes EN VIVO del
+     * usuario: a partir de la llamada, el Dijkstra deja de usar ese vuelo ese día y los envíos ya
+     * comprometidos se re-enrutan vía backlog. {@code flightKey} se construye con
+     * {@link FlightKeyEncoder#flightKey(int, long)}.
+     *
+     * @return true si el vuelo-día no estaba ya cancelado.
+     */
+    public boolean addCancelledFlight(long flightKey) {
+        return cancelledFlightDays.add(flightKey);
+    }
+
+    /** ¿Está cancelado este vuelo-día? */
+    public boolean isCancelledFlight(long flightKey) {
+        return cancelledFlightDays.contains(flightKey);
     }
 
     /**

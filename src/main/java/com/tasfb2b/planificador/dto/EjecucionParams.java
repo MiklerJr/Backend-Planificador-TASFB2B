@@ -22,8 +22,6 @@ import java.time.LocalDateTime;
 public class EjecucionParams {
     /** Factor de aceleración K. Default 14 si null. */
     private Integer k;
-    /** Probabilidad de cancelación por vuelo-día [0.0, 1.0]. Default 0.0 si null. */
-    private Double cancelProb;
     /** "alns" | "aco". Default "alns" si null. */
     private String motor;
     /** Seed reproducible. Default = aleatorio si null. */

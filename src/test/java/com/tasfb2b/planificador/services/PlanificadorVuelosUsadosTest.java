@@ -77,7 +77,7 @@ class PlanificadorVuelosUsadosTest {
 
     private static PlanificadorService serviceConJobs(JobsRegistry jobs) {
         return new PlanificadorService(null, null, null, jobs,
-                null, null, null, null, null, null);
+                null, null, null, null, null);
     }
 
     private static SimulacionResponse.BloqueSimulacion bloque(

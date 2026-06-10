@@ -192,8 +192,6 @@ public class PlanificadorProperties {
     public static class Benchmark {
         /** Valores de K a probar en el grid. */
         private List<Integer> kGrid = List.of(1, 7, 14, 28, 50, 75, 100);
-        /** Probabilidades de cancelación a probar en el grid. */
-        private List<Double> cancelProbGrid = List.of(0.0, 0.05, 0.10);
         /** Repeticiones por combinación (para promediar Ta). */
         private int repeticiones = 3;
         /** Timeout máximo del benchmark completo en minutos. */

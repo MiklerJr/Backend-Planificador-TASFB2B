@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.AlertaColapso;
+import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
@@ -175,17 +176,14 @@ public class PlanificadorController {
      *
      * @param algoritmo   "alns" (default) o "aco"
      * @param k           Factor de aceleración: K=1 día a día, K=14 sim-3días (default), K=75 colapso
-     * @param cancelProb  Probabilidad de cancelación de vuelo-día [0.0–1.0], default 0
      */
     @GetMapping("/ejecutar")
     public ResponseEntity<SimulacionResponse> ejecutar(
             @RequestParam(defaultValue = "alns") String algoritmo,
-            @RequestParam(defaultValue = "14")   int    k,
-            @RequestParam(defaultValue = "0.0")  double cancelProb) {
+            @RequestParam(defaultValue = "14")   int    k) {
 
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb)); // clamp al rango válido
         return switch (algoritmo.toLowerCase()) {
-            case "alns" -> ResponseEntity.ok(service.ejecutarALNS(k, cancelProb));
+            case "alns" -> ResponseEntity.ok(service.ejecutarALNS(k));
             default     -> ResponseEntity.badRequest().build();
         };
     }
@@ -202,12 +200,10 @@ public class PlanificadorController {
     @GetMapping("/ejecutar-colapso")
     public ResponseEntity<SimulacionResponse> ejecutarColapso(
             @RequestParam(defaultValue = "75")   int    k,
-            @RequestParam(defaultValue = "0.1")  double cancelProb,
             @RequestParam(defaultValue = "0.20") double umbralColapso) {
 
-        cancelProb    = Math.max(0.0, Math.min(1.0, cancelProb));
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        return ResponseEntity.ok(service.ejecutarHastaColapso(k, cancelProb, umbralColapso));
+        return ResponseEntity.ok(service.ejecutarHastaColapso(k, umbralColapso));
     }
 
     // ── Escenario 1: día a día ────────────────────────────────────────────────
@@ -219,11 +215,9 @@ public class PlanificadorController {
      */
     @PostMapping("/escenario1/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc1Async(
-            @RequestParam(defaultValue = "0.0")  double cancelProb,
             @RequestParam(defaultValue = "alns") String algoritmo,
             @RequestParam(required = false)      Long   seed) {
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
-        JobState job = service.iniciarEscenario1Async(cancelProb, algoritmo, seed);
+        JobState job = service.iniciarEscenario1Async(algoritmo, seed);
         return ResponseEntity.accepted().body(Map.of(
                 "jobId",     job.getJobId(),
                 "escenario", "1",
@@ -236,12 +230,10 @@ public class PlanificadorController {
 
     @PostMapping("/escenario1/inicializar")
     public ResponseEntity<Map<String, Object>> inicializarEsc1(
-            @RequestParam(defaultValue = "0.0")  double cancelProb,
             @RequestParam(defaultValue = "alns") String algoritmo,
             @RequestParam(required = false)      Long   seed) {
 
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
-        return ResponseEntity.ok(service.inicializarEscenario1(cancelProb, algoritmo, seed));
+        return ResponseEntity.ok(service.inicializarEscenario1(algoritmo, seed));
     }
 
     @GetMapping("/escenario1/ventana")
@@ -282,7 +274,6 @@ public class PlanificadorController {
     @PostMapping("/escenario2/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc2(
             @RequestParam(defaultValue = "14")    int    k,
-            @RequestParam(defaultValue = "0.0")   double cancelProb,
             @RequestParam(defaultValue = "alns")  String algoritmo,
             @RequestParam(required = false)        Long  seed,
             @RequestParam(required = false)
@@ -291,11 +282,9 @@ public class PlanificadorController {
             @RequestParam(required = false)        Integer ta,
             @RequestParam(required = false)        Integer dias,
             @RequestParam(defaultValue = "false")  boolean procesamientoPrevio) {
-        cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
 
         EjecucionParams params = new EjecucionParams();
         params.setK(k);
-        params.setCancelProb(cancelProb);
         params.setMotor(algoritmo);
         params.setSeed(seed);
         params.setFechaInicio(fechaInicio);
@@ -327,13 +316,11 @@ public class PlanificadorController {
     @PostMapping("/escenario3/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc3(
             @RequestParam(defaultValue = "75")    int    k,
-            @RequestParam(defaultValue = "0.1")   double cancelProb,
             @RequestParam(defaultValue = "0.20")  double umbralColapso,
             @RequestParam(defaultValue = "alns")  String algoritmo,
             @RequestParam(required = false)        Long  seed) {
-        cancelProb    = Math.max(0.0, Math.min(1.0, cancelProb));
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        JobState job = service.iniciarEscenario3Async(k, cancelProb, umbralColapso, algoritmo, seed);
+        JobState job = service.iniciarEscenario3Async(k, umbralColapso, algoritmo, seed);
         return ResponseEntity.accepted().body(Map.of(
                 "jobId",         job.getJobId(),
                 "escenario",     "3",
@@ -499,6 +486,56 @@ public class PlanificadorController {
     public ResponseEntity<Map<String, Object>> cancelarJob(@PathVariable String jobId) {
         boolean ok = service.cancelarJob(jobId);
         return ResponseEntity.ok(Map.of("jobId", jobId, "cancelado", ok));
+    }
+
+    /**
+     * Cancela un vuelo concreto EN VIVO durante un job async (E1 async / E2 / E3). El vuelo queda no
+     * disponible solo el día de {@code fechaHoraSalida}; los envíos ya programados en él se devuelven
+     * al backlog y se re-enrutan en los bloques siguientes. El vuelo se identifica por
+     * {@code origen} + {@code destino} + {@code fechaHoraSalida} (los mismos datos de
+     * {@code /jobs/{jobId}/vuelos/usados}).
+     *
+     * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó.
+     */
+    @PostMapping("/jobs/{jobId}/cancelar-vuelo")
+    public ResponseEntity<Map<String, Object>> cancelarVueloJob(
+            @PathVariable String jobId,
+            @RequestBody CancelacionVueloRequest orden) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        boolean ok = service.solicitarCancelacionVuelo(jobId, orden);
+        if (!ok) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "jobId", jobId, "encolado", false,
+                    "motivo", "el job no está activo (ya terminó o fue cancelado)"));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId",    jobId,
+                "encolado", true,
+                "origen",   orden.getOrigen(),
+                "destino",  orden.getDestino(),
+                "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
+    }
+
+    /**
+     * Cancela un vuelo concreto EN VIVO para el modo incremental de escenario 1 (paso a paso). La
+     * orden se aplica en la próxima llamada a {@code /escenario1/ventana}.
+     *
+     * @return 202 si se encoló, 409 si el escenario 1 no está inicializado.
+     */
+    @PostMapping("/escenario1/cancelar-vuelo")
+    public ResponseEntity<Map<String, Object>> cancelarVueloEsc1(
+            @RequestBody CancelacionVueloRequest orden) {
+        boolean ok = service.solicitarCancelacionVueloEsc1(orden);
+        if (!ok) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "encolado", false,
+                    "motivo", "escenario 1 no inicializado (llame a /escenario1/inicializar primero)"));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "encolado", true,
+                "origen",   orden.getOrigen(),
+                "destino",  orden.getDestino(),
+                "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
     }
 
     /**

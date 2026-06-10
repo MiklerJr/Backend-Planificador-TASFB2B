@@ -19,7 +19,6 @@ public class ComparativaRow {
     private int    rep;
     private long   seed;
     private int    k;
-    private double cancelProb;
 
     // ── Métricas ALNS ─────────────────────────────────────────────────
     private int    alnsEnvios;

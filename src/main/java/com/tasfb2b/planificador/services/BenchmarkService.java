@@ -18,8 +18,8 @@ import java.util.concurrent.Executors;
 
 /**
  * Orquesta benchmarks de calibración: ejecuta el planificador con múltiples
- * combinaciones de K × cancelProb × repeticiones y recolecta métricas para
- * recomendar valores óptimos de K para escenarios 2 y 3.
+ * combinaciones de K × repeticiones y recolecta métricas para recomendar valores
+ * óptimos de K para escenarios 2 y 3.
  *
  * <p>Single-thread executor — las corridas son secuenciales para que las
  * mediciones de Ta sean comparables (sin contención de CPU entre simulaciones).
@@ -53,9 +53,6 @@ public class BenchmarkService {
         List<Integer> kGrid = (req.getKGrid() != null && !req.getKGrid().isEmpty())
                 ? req.getKGrid()
                 : props.getBenchmark().getKGrid();
-        List<Double> cancelProbGrid = (req.getCancelProbGrid() != null && !req.getCancelProbGrid().isEmpty())
-                ? req.getCancelProbGrid()
-                : props.getBenchmark().getCancelProbGrid();
         int reps = (req.getRepeticiones() != null && req.getRepeticiones() > 0)
                 ? req.getRepeticiones()
                 : props.getBenchmark().getRepeticiones();
@@ -63,8 +60,7 @@ public class BenchmarkService {
                 ? req.getUmbralColapso()
                 : props.getScenario().getUmbralColapso();
 
-        int filasTotales = kGrid.size() * cancelProbGrid.size() * reps
-                * (req.isEjecutarColapso() ? 2 : 1);
+        int filasTotales = kGrid.size() * reps * (req.isEjecutarColapso() ? 2 : 1);
 
         BenchmarkResult result = new BenchmarkResult();
         result.setJobId(UUID.randomUUID().toString());
@@ -74,10 +70,10 @@ public class BenchmarkService {
         result.setFilasCompletadas(0);
 
         results.put(result.getJobId(), result);
-        log.info("Benchmark {} iniciado: {} corridas (K={}, cancelProb={}, reps={}, e3={})",
-                result.getJobId(), filasTotales, kGrid, cancelProbGrid, reps, req.isEjecutarColapso());
+        log.info("Benchmark {} iniciado: {} corridas (K={}, reps={}, e3={})",
+                result.getJobId(), filasTotales, kGrid, reps, req.isEjecutarColapso());
 
-        executor.submit(() -> ejecutar(result, kGrid, cancelProbGrid, reps, umbralColapso, req.isEjecutarColapso()));
+        executor.submit(() -> ejecutar(result, kGrid, reps, umbralColapso, req.isEjecutarColapso()));
         return result;
     }
 
@@ -87,43 +83,39 @@ public class BenchmarkService {
 
     // ── Núcleo del benchmark ─────────────────────────────────────────────────
 
-    private void ejecutar(BenchmarkResult result, List<Integer> kGrid, List<Double> cancelProbGrid,
+    private void ejecutar(BenchmarkResult result, List<Integer> kGrid,
                           int reps, double umbralColapso, boolean ejecutarColapso) {
         try {
             int saMin = props.getScenario().getSaMinutos();
 
             // Escenario 2: período completo (sin colapso forzado)
             for (int k : kGrid) {
-                for (double cp : cancelProbGrid) {
-                    for (int r = 1; r <= reps; r++) {
-                        result.setConfigActual(String.format("E2: K=%d, cancelProb=%.2f, rep=%d/%d", k, cp, r, reps));
-                        log.info("Benchmark {} → {}", result.getJobId(), result.getConfigActual());
-                        long t0 = System.currentTimeMillis();
-                        SimulacionResponse res = planificador.ejecutarALNS(k, cp, null);
-                        long tiempoRealMs = System.currentTimeMillis() - t0;
+                for (int r = 1; r <= reps; r++) {
+                    result.setConfigActual(String.format("E2: K=%d, rep=%d/%d", k, r, reps));
+                    log.info("Benchmark {} → {}", result.getJobId(), result.getConfigActual());
+                    long t0 = System.currentTimeMillis();
+                    SimulacionResponse res = planificador.ejecutarALNS(k, (JobState) null);
+                    long tiempoRealMs = System.currentTimeMillis() - t0;
 
-                        BenchmarkRow row = construirFila("2", k, saMin, cp, r, res, tiempoRealMs);
-                        result.getFilas().add(row);
-                        result.setFilasCompletadas(result.getFilasCompletadas() + 1);
-                    }
+                    BenchmarkRow row = construirFila("2", k, saMin, r, res, tiempoRealMs);
+                    result.getFilas().add(row);
+                    result.setFilasCompletadas(result.getFilasCompletadas() + 1);
                 }
             }
 
             // Escenario 3: hasta colapso (opcional)
             if (ejecutarColapso) {
                 for (int k : kGrid) {
-                    for (double cp : cancelProbGrid) {
-                        for (int r = 1; r <= reps; r++) {
-                            result.setConfigActual(String.format("E3: K=%d, cancelProb=%.2f, rep=%d/%d", k, cp, r, reps));
-                            log.info("Benchmark {} → {}", result.getJobId(), result.getConfigActual());
-                            long t0 = System.currentTimeMillis();
-                            SimulacionResponse res = planificador.ejecutarHastaColapso(k, cp, umbralColapso, null);
-                            long tiempoRealMs = System.currentTimeMillis() - t0;
+                    for (int r = 1; r <= reps; r++) {
+                        result.setConfigActual(String.format("E3: K=%d, rep=%d/%d", k, r, reps));
+                        log.info("Benchmark {} → {}", result.getJobId(), result.getConfigActual());
+                        long t0 = System.currentTimeMillis();
+                        SimulacionResponse res = planificador.ejecutarHastaColapso(k, umbralColapso, null);
+                        long tiempoRealMs = System.currentTimeMillis() - t0;
 
-                            BenchmarkRow row = construirFila("3", k, saMin, cp, r, res, tiempoRealMs);
-                            result.getFilas().add(row);
-                            result.setFilasCompletadas(result.getFilasCompletadas() + 1);
-                        }
+                        BenchmarkRow row = construirFila("3", k, saMin, r, res, tiempoRealMs);
+                        result.getFilas().add(row);
+                        result.setFilasCompletadas(result.getFilasCompletadas() + 1);
                     }
                 }
             }
@@ -142,7 +134,7 @@ public class BenchmarkService {
         }
     }
 
-    private BenchmarkRow construirFila(String escenario, int k, int saMin, double cp, int rep,
+    private BenchmarkRow construirFila(String escenario, int k, int saMin, int rep,
                                         SimulacionResponse res, long tiempoRealMs) {
         SimulacionResponse.Metricas m = res.getMetricas();
         BenchmarkRow row = new BenchmarkRow();
@@ -150,7 +142,6 @@ public class BenchmarkService {
         row.setK(k);
         row.setSaMinutos(saMin);
         row.setScMinutos(k * saMin);
-        row.setCancelProb(cp);
         row.setRepeticion(rep);
 
         row.setTotalBloques(res.getTotalBloques());
@@ -194,8 +185,6 @@ public class BenchmarkService {
         BenchmarkResult.Recomendacion rec = new BenchmarkResult.Recomendacion();
         long saMs = saMin * 60_000L;
 
-        // Promediar repeticiones por (escenario, K, cancelProb).
-        // Tomamos cancelProb=0.0 si está disponible (caso "limpio") para escenario 2.
         var filasE2 = result.getFilas().stream()
                 .filter(f -> "2".equals(f.getEscenario()))
                 .toList();
@@ -205,9 +194,7 @@ public class BenchmarkService {
 
         // Escenario 2
         if (!filasE2.isEmpty()) {
-            double cpPreferida = filasE2.stream().mapToDouble(BenchmarkRow::getCancelProb).min().orElse(0.0);
             BenchmarkRow optimo = filasE2.stream()
-                    .filter(f -> f.getCancelProb() == cpPreferida)
                     .filter(f -> f.getTiempoRealMin() >= 30 && f.getTiempoRealMin() <= 90)
                     .filter(f -> f.getPorcentajeCumpleSla() >= 0.95)
                     .filter(f -> f.getTaMaxMs() <= saMs * 0.8)
@@ -223,7 +210,6 @@ public class BenchmarkService {
             } else {
                 // Relajar: el más cercano a 60 min con %SLA ≥ 0.85
                 BenchmarkRow fallback = filasE2.stream()
-                        .filter(f -> f.getCancelProb() == cpPreferida)
                         .filter(f -> f.getPorcentajeCumpleSla() >= 0.85)
                         .min(Comparator.comparingDouble(f -> Math.abs(f.getTiempoRealMin() - 60.0)))
                         .orElse(null);
@@ -254,9 +240,8 @@ public class BenchmarkService {
                 double pos = (double) optimo.getBloqueColapso() / optimo.getTotalBloques();
                 rec.setEscenario3K(optimo.getK());
                 rec.setRazon3(String.format(
-                        "K=%d colapsa en bloque %d/%d (%.0f%% del horizonte) con cancelProb=%.2f",
-                        optimo.getK(), optimo.getBloqueColapso(), optimo.getTotalBloques(),
-                        pos * 100, optimo.getCancelProb()));
+                        "K=%d colapsa en bloque %d/%d (%.0f%% del horizonte)",
+                        optimo.getK(), optimo.getBloqueColapso(), optimo.getTotalBloques(), pos * 100));
             } else {
                 BenchmarkRow fallback = filasE3.stream()
                         .filter(BenchmarkRow::isColapsoDetectado)
@@ -268,7 +253,7 @@ public class BenchmarkService {
                             "Relajado: K=%d colapsa pero fuera del rango óptimo (bloque %d/%d)",
                             fallback.getK(), fallback.getBloqueColapso(), fallback.getTotalBloques()));
                 } else {
-                    rec.setRazon3("Ningún K probado provocó colapso — subir cancelProb o agregar K mayores al grid");
+                    rec.setRazon3("Ningún K probado provocó colapso — agregar K mayores al grid");
                 }
             }
         }
