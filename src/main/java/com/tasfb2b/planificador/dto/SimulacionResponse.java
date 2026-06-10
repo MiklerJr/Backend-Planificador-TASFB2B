@@ -73,10 +73,19 @@ public class SimulacionResponse {
 
     @Data
     public static class BloqueSimulacion {
-        /** Inicio del rango de datos consumidos (eje de datos = scStart). */
+        /** Inicio del rango de datos consumidos, en hora LOCAL del eje de registro (= scStart).
+         *  Ojo: mezcla husos (cada envío se registra en la hora local de su origen); no usar
+         *  como reloj global. Para el eje UTC usar {@link #horaInicioUtc}. */
         private String horaInicio;
-        /** Fin del rango de datos consumidos (eje de datos = scEnd). */
+        /** Fin del rango de datos consumidos, en hora LOCAL del eje de registro (= scEnd). */
         private String horaFin;
+        /** Rango UTC real de los registros contenidos en el bloque: el {@code registroUtc} más
+         *  temprano entre sus asignaciones. Bien definido (a diferencia de convertir scStart, que
+         *  mezcla husos). Útil para ubicar el bloque en el eje de tiempo global. Null si el bloque
+         *  no tiene asignaciones con registro. */
+        private String horaInicioUtc;
+        /** Rango UTC real de los registros del bloque: el {@code registroUtc} más tardío. */
+        private String horaFinUtc;
         /** Legacy: cantidad de envios/lotes procesados en este bloque (delta). */
         private int maletasProcesadas;
         /** Legacy: cantidad de envios/lotes enrutados en este bloque (delta). */
@@ -114,6 +123,18 @@ public class SimulacionResponse {
         private List<String> rutaVuelos;
         /** Tramos con tiempos reales UTC; permite al frontend rastrear dónde está la maleta. */
         private List<TramoRuta> tramos;
+        /**
+         * Nacimiento/registro del envío en hora local del aeropuerto de origen
+         * (wall-clock, ISO sin offset). Es el instante desde el que las maletas
+         * existen esperando en origen, antes de su primer vuelo.
+         */
+        private String registroLocal;
+        /**
+         * Mismo nacimiento expresado en UTC real (offset del origen aplicado).
+         * Permite al front ubicar el envío en el eje de tiempo global desde que
+         * nace, aunque su origen esté en otro huso.
+         */
+        private String registroUtc;
     }
 
     @Data
@@ -121,20 +142,23 @@ public class SimulacionResponse {
         private String vueloId;
         private String origen;
         private String destino;
-        /**
-         * @deprecated El nombre miente — son {@code LocalDateTime} sin offset,
-         * misma TZ del dataset (no UTC). Usar {@link #salidaLocal} en código
-         * nuevo. Se mantiene en el JSON durante una versión por compatibilidad.
-         */
-        @Deprecated
+        /** UTC real (offset del aeropuerto de origen aplicado). Despegue del tramo
+         *  en el eje de tiempo global; usarlo para animar la posición del avión. */
         private String salidaUtc;
-        /** @deprecated Idem {@link #salidaUtc}. Usar {@link #llegadaLocal}. */
-        @Deprecated
+        /** UTC real (offset del aeropuerto de destino aplicado). Aterrizaje del tramo
+         *  en el eje de tiempo global. */
         private String llegadaUtc;
-        /** ISO datetime sin offset (hora local del dataset). Despegue del tramo. */
+        /** ISO datetime sin offset (hora de pared local del origen). Despegue del tramo. */
         private String salidaLocal;
-        /** ISO datetime sin offset (hora local del dataset). Aterrizaje del tramo. */
+        /** ISO datetime sin offset (hora de pared local del destino). Aterrizaje del tramo. */
         private String llegadaLocal;
+        /**
+         * Duración real del vuelo en minutos (UTC), ya con los husos aplicados.
+         * Es {@code llegadaUtc − salidaUtc}. USAR ESTE valor para velocidad/animación;
+         * NO restar los campos {@code *Local}, que están en husos distintos y dan
+         * duraciones falsas (negativas o infladas).
+         */
+        private int duracionMin;
     }
 
     @Data

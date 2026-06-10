@@ -4,6 +4,7 @@ import com.tasfb2b.planificador.algorithm.aco.CostFunction;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
+import com.tasfb2b.planificador.dto.VueloCancelado;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedOutputStream;
@@ -207,14 +208,19 @@ public class AuditoriaService {
      * primer y último registro del bloque (formato {@code yyyyMMddHHmm}). Si dos
      * bloques colisionan en nombre se desambigua con un sufijo numérico.
      *
-     * @param batches   envíos a auditar (cada uno será una fila)
-     * @param zipPath   ruta destino del ZIP
-     * @param maxFilas  filas de datos máximas por CSV ({@code <=0} usa {@link #FILAS_POR_ARCHIVO})
-     * @param jobId     prefijo del nombre de cada CSV interno
-     * @return total de filas de datos escritas (sin contar cabeceras)
+     * <p>Además, siempre añade un CSV {@code <jobId>-vuelos-cancelados.csv} con los vuelos que el
+     * usuario canceló en vivo durante la corrida (puede quedar solo con la cabecera si no hubo).
+     *
+     * @param batches           envíos a auditar (cada uno será una fila)
+     * @param zipPath           ruta destino del ZIP
+     * @param maxFilas          filas de datos máximas por CSV ({@code <=0} usa {@link #FILAS_POR_ARCHIVO})
+     * @param jobId             prefijo del nombre de cada CSV interno
+     * @param vuelosCancelados  vuelos cancelados a volcar en su propio CSV (puede ser null/vacío)
+     * @return total de filas de datos (de envíos) escritas (sin contar cabeceras)
      */
     public int escribirZip(Collection<LuggageBatch> batches, Path zipPath,
-                           int maxFilas, String jobId) throws IOException {
+                           int maxFilas, String jobId,
+                           Collection<VueloCancelado> vuelosCancelados) throws IOException {
         int limite = maxFilas > 0 ? maxFilas : FILAS_POR_ARCHIVO;
 
         List<LuggageBatch> ordenados = new ArrayList<>(batches == null ? 0 : batches.size());
@@ -231,34 +237,59 @@ public class AuditoriaService {
                 new BufferedOutputStream(Files.newOutputStream(zipPath)), StandardCharsets.UTF_8)) {
 
             if (ordenados.isEmpty()) {
-                // ZIP con un CSV vacío (solo cabecera) para no devolver un archivo corrupto.
+                // CSV de envíos vacío (solo cabecera) para no devolver un archivo corrupto.
                 zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, null, null, nombresUsados)));
                 Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
                 w.write(CSV_HEADER);
                 w.flush();
                 zos.closeEntry();
-                return 0;
-            }
+            } else {
+                int n = ordenados.size();
+                for (int desde = 0; desde < n; desde += limite) {
+                    int hasta = Math.min(desde + limite, n);
+                    LocalDateTime inicio = ordenados.get(desde).getReadyTime();
+                    LocalDateTime fin    = ordenados.get(hasta - 1).getReadyTime();
 
-            int n = ordenados.size();
-            for (int desde = 0; desde < n; desde += limite) {
-                int hasta = Math.min(desde + limite, n);
-                LocalDateTime inicio = ordenados.get(desde).getReadyTime();
-                LocalDateTime fin    = ordenados.get(hasta - 1).getReadyTime();
-
-                zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, inicio, fin, nombresUsados)));
-                Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
-                w.write(CSV_HEADER);
-                for (int i = desde; i < hasta; i++) {
-                    w.write(lineaCsv(construir(ordenados.get(i))));
-                    totalFilas++;
+                    zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, inicio, fin, nombresUsados)));
+                    Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                    w.write(CSV_HEADER);
+                    for (int i = desde; i < hasta; i++) {
+                        w.write(lineaCsv(construir(ordenados.get(i))));
+                        totalFilas++;
+                    }
+                    // flush (no close) para no cerrar el ZipOutputStream subyacente.
+                    w.flush();
+                    zos.closeEntry();
                 }
-                // flush (no close) para no cerrar el ZipOutputStream subyacente.
-                w.flush();
-                zos.closeEntry();
             }
+
+            // CSV de vuelos cancelados (siempre presente, aunque solo lleve la cabecera).
+            escribirCsvVuelosCancelados(zos, jobId, vuelosCancelados);
         }
         return totalFilas;
+    }
+
+    private static final String CSV_HEADER_CANCELADOS =
+            "origen,destino,fechaHoraSalida,enviosAfectados\n";
+
+    /** Añade al ZIP el CSV {@code <jobId>-vuelos-cancelados.csv} con los vuelos cancelados en vivo. */
+    private void escribirCsvVuelosCancelados(ZipOutputStream zos, String jobId,
+                                             Collection<VueloCancelado> vuelosCancelados) throws IOException {
+        String pref = (jobId == null || jobId.isBlank()) ? "job" : jobId;
+        zos.putNextEntry(new ZipEntry(pref + "-vuelos-cancelados.csv"));
+        Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+        w.write(CSV_HEADER_CANCELADOS);
+        if (vuelosCancelados != null) {
+            for (VueloCancelado v : vuelosCancelados) {
+                if (v == null) continue;
+                w.write(csv(v.getOrigen()) + ','
+                        + csv(v.getDestino()) + ','
+                        + (v.getFechaHoraSalida() == null ? "" : v.getFechaHoraSalida().toString()) + ','
+                        + v.getEnviosAfectados() + '\n');
+            }
+        }
+        w.flush();
+        zos.closeEntry();
     }
 
     /**
