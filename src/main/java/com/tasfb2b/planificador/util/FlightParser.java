@@ -59,12 +59,20 @@ public class FlightParser {
                 int llegadaMinuto = Integer.parseInt(horaLlegadaStr[1]);
                 int capacidad     = Integer.parseInt(parts[4].trim());
 
-                LocalDateTime fechaSalida  = LocalDateTime.of(BASE, LocalTime.of(salidaHora, salidaMinuto));
-                LocalDateTime fechaLlegada = LocalDateTime.of(BASE, LocalTime.of(llegadaHora % 24, llegadaMinuto));
+                LocalDateTime fechaSalida = LocalDateTime.of(BASE, LocalTime.of(salidaHora, salidaMinuto));
 
-                if (fechaLlegada.isBefore(fechaSalida)) {
-                    fechaLlegada = fechaLlegada.plusDays(1); // vuelo que cruza medianoche
-                }
+                // El cruce de medianoche NO se puede decidir comparando horas de pared locales de
+                // aeropuertos en husos distintos (un vuelo hacia el oeste más corto que su diferencia
+                // de huso aterriza a una hora de pared menor sin cruzar medianoche). La duración real
+                // se calcula con los husos y un único módulo 24h; la fecha de llegada sube de día solo
+                // cuando el vuelo cruza medianoche de verdad.
+                int origenOffset = origen.getOffsetHorario();
+                int destOffset   = destino.getOffsetHorario();
+                int depWall = salidaHora * 60 + salidaMinuto;
+                int arrWall = (llegadaHora % 24) * 60 + llegadaMinuto;
+                int durReal = Math.floorMod((arrWall - destOffset * 60) - (depWall - origenOffset * 60), 1440);
+
+                LocalDateTime fechaLlegada = fechaSalida.plusMinutes(durReal + (long) (destOffset - origenOffset) * 60);
 
                 Vuelo vuelo = new Vuelo();
                 vuelo.setCapacidad(capacidad);

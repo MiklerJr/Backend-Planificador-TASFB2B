@@ -9,7 +9,9 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class GraphBuilder {
@@ -22,7 +24,16 @@ public class GraphBuilder {
 
         Graph graph = new Graph();
 
-        // 1. CREAR NODOS - aeropuertos 
+        // Mapa código ICAO → offset horario (GMT), para normalizar los vuelos a UTC igual que
+        // AlgorithmMapper (el cruce de medianoche debe decidirse con husos, no en hora local).
+        Map<String, Integer> offsetPorCodigo = new HashMap<>();
+        for (Aeropuerto a : aeropuertos) {
+            if (a.getCodigo() != null && a.getOffsetHorario() != null) {
+                offsetPorCodigo.put(a.getCodigo(), a.getOffsetHorario());
+            }
+        }
+
+        // 1. CREAR NODOS - aeropuertos
         for (Aeropuerto a : aeropuertos) {
             Node node = new Node(a.getCodigo());
             node.lat = a.getLatitud() != null ? a.getLatitud() : 0.0;
@@ -58,14 +69,24 @@ public class GraphBuilder {
             edge.from = from;
             edge.to = to;
 
-            // Los archivos de vuelos traen solo HH:MM. Como Edge.departureTime es LocalDateTime
-            // (compatibilidad con AlgorithmMapper del flujo ALNS), combinamos con una fecha base.
-            LocalDate fechaBase = LocalDate.of(2026, 1, 1);
-            edge.departureTime = LocalDateTime.of(fechaBase, LocalTime.parse(departure));
-            edge.arrivalTime = LocalDateTime.of(fechaBase, LocalTime.parse(arrival));
-            edge.capacity = capacity;
+            // Los archivos de vuelos traen solo HH:MM (hora local de cada aeropuerto). Se normaliza
+            // a UTC con los husos y un único módulo 24h, igual que AlgorithmMapper, para no inflar la
+            // duración de vuelos hacia el oeste más cortos que su diferencia de huso.
+            int origenOffset = offsetPorCodigo.getOrDefault(origin, 0);
+            int destOffset   = offsetPorCodigo.getOrDefault(destination, 0);
+            int depWall = toMinutes(departure);
+            int arrWall = toMinutes(arrival);
+            int depUtcMin = Math.floorMod(depWall - origenOffset * 60, 1440);
+            int durMin = Math.floorMod((arrWall - destOffset * 60) - (depWall - origenOffset * 60), 1440);
 
-            edge.cost = calculateCost(departure, arrival);
+            LocalDate fechaBase = LocalDate.of(2026, 1, 1);
+            LocalDateTime depUtc = LocalDateTime.of(fechaBase, LocalTime.MIDNIGHT).plusMinutes(depUtcMin);
+            edge.departureTime = depUtc;
+            edge.arrivalTime = depUtc.plusMinutes(durMin);
+            edge.capacity = capacity;
+            edge.cost = durMin;
+            edge.durationMinutes = durMin;
+            edge.depMinuteOfDay = depUtcMin;
 
             graph.addEdge(edge);
         }
@@ -83,19 +104,6 @@ public class GraphBuilder {
         } catch (Exception e) {
             return 0;
         }
-    }
-
-    // COSTO BASADO EN TIEMPO
-    private double calculateCost(String dep, String arr) {
-        int depMin = toMinutes(dep);
-        int arrMin = toMinutes(arr);
-        int diff = arrMin - depMin;
-
-        // si cruza medianoche
-        if (diff < 0) {
-            diff += 24 * 60;
-        }
-        return diff;
     }
 
     // HH:MM → minutos

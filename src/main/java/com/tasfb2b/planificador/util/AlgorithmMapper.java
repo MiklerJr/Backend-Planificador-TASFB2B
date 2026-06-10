@@ -63,17 +63,25 @@ public class AlgorithmMapper {
             int destOffset   = v.getAeropuertoDestino().getOffsetHorario();
 
             LocalDateTime depUtc = v.getFechaHoraSalida().minusHours(originOffset);
-            LocalDateTime arrUtc = v.getFechaHoraLlegada().minusHours(destOffset);
 
-            Duration utcDur = Duration.between(depUtc, arrUtc);
-            if (utcDur.isNegative() || utcDur.isZero()) utcDur = utcDur.plusDays(1);
+            // La duración se calcula SOLO desde las horas de pared y los husos, con un único
+            // módulo 24h. No se deriva de fechaHoraLlegada porque el cruce de medianoche no se
+            // puede decidir comparando horas de pared de aeropuertos en husos distintos: un vuelo
+            // hacia el oeste más corto que su diferencia de huso aterriza a una hora de pared menor
+            // que la de salida sin cruzar medianoche, lo que inflaba la duración en 24h.
+            int depWall = v.getFechaHoraSalida().getHour() * 60 + v.getFechaHoraSalida().getMinute();
+            int arrWall = v.getFechaHoraLlegada().getHour() * 60 + v.getFechaHoraLlegada().getMinute();
+            int durMin = Math.floorMod((arrWall - destOffset * 60) - (depWall - originOffset * 60), 1440);
+
+            LocalDateTime arrUtc = depUtc.plusMinutes(durMin);
+            Duration utcDur = Duration.ofMinutes(durMin);
 
             edge.departureTime     = depUtc;
             edge.arrivalTime       = arrUtc;
             edge.duration          = utcDur;
-            edge.cost              = utcDur.toMinutes();
+            edge.cost              = durMin;
             edge.departureLocalTime = depUtc.toLocalTime();
-            edge.durationMinutes   = (int) utcDur.toMinutes();
+            edge.durationMinutes   = durMin;
             edge.depMinuteOfDay    = depUtc.getHour() * 60 + depUtc.getMinute();
             edge.idx               = edgeIdx++;
 
