@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.TipoEnvio;
 import com.tasfb2b.planificador.model.Vuelo;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -111,9 +112,11 @@ public class DataLoader {
             return Collections.emptyList();
         }
 
+        // RF02: se excluyen los envíos cuyo aeropuerto de origen y destino son el mismo.
         String sql = "SELECT id_envio, icao_origen, icao_destino, cantidad_maletas, fecha_hora_registro " +
                      "FROM ENVIO " +
                      "WHERE fecha_hora_registro >= ? AND fecha_hora_registro < ? " +
+                     "AND icao_origen <> icao_destino " +
                      "ORDER BY fecha_hora_registro ASC";
 
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
@@ -123,17 +126,25 @@ public class DataLoader {
             m.setId(Integer.parseInt(idOriginal));
             m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
-            m.setCantidad(rs.getInt("cantidad_maletas")); 
-            m.setPlazo(48);
+
+            // Extraemos como Int en lugar de Long
+            m.setCantidad(rs.getInt("cantidad_maletas"));
+            // El plazo (SLA en horas) deriva del tipo de envío: 24h intracontinental, 48h intercontinental.
+            m.setTipoEnvio(TipoEnvio.derivar(m.getAeropuertoOrigen(), m.getAeropuertoDestino()));
+            m.setPlazo(m.getTipoEnvio() == TipoEnvio.INTRACONTINENTAL ? 24 : 48);
+
             m.setFechaHoraRegistro(rs.getTimestamp("fecha_hora_registro").toLocalDateTime());
+
             return m;
         }, Timestamp.valueOf(desde), Timestamp.valueOf(hasta));
     }
 
     public List<Maleta> getMaletasMuestra(int limite) {
         if (limite <= 0) return Collections.emptyList();
+        // RF02: se excluyen los envíos cuyo aeropuerto de origen y destino son el mismo.
         String sql = "SELECT id_envio, icao_origen, icao_destino, cantidad_maletas, fecha_hora_registro " +
-                     "FROM ENVIO ORDER BY fecha_hora_registro ASC LIMIT ?";
+                     "FROM ENVIO WHERE icao_origen <> icao_destino " +
+                     "ORDER BY fecha_hora_registro ASC LIMIT ?";
                      
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
             Maleta m = new Maleta();
@@ -142,8 +153,13 @@ public class DataLoader {
             m.setId(Integer.parseInt(idOriginal));
             m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
+
+            // Mismo cambio aquí
             m.setCantidad(rs.getInt("cantidad_maletas"));
-            m.setPlazo(48);
+            // El plazo (SLA en horas) deriva del tipo de envío: 24h intracontinental, 48h intercontinental.
+            m.setTipoEnvio(TipoEnvio.derivar(m.getAeropuertoOrigen(), m.getAeropuertoDestino()));
+            m.setPlazo(m.getTipoEnvio() == TipoEnvio.INTRACONTINENTAL ? 24 : 48);
+
             m.setFechaHoraRegistro(rs.getTimestamp("fecha_hora_registro").toLocalDateTime());
             return m;
         }, limite);

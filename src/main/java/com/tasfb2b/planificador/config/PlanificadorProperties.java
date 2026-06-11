@@ -16,11 +16,13 @@ import java.util.List;
 @ConfigurationProperties(prefix = "planificador")
 public class PlanificadorProperties {
 
-    private Scenario  scenario  = new Scenario();
-    private Alns      alns      = new Alns();
-    private Objetivo  objetivo  = new Objetivo();
-    private Backlog   backlog   = new Backlog();
-    private Benchmark benchmark = new Benchmark();
+    private Scenario     scenario     = new Scenario();
+    private Alns         alns         = new Alns();
+    private Objetivo     objetivo     = new Objetivo();
+    private Backlog      backlog      = new Backlog();
+    private Benchmark    benchmark    = new Benchmark();
+    private StorageAware storageAware = new StorageAware();
+    private AlertaColapso alertaColapso = new AlertaColapso();
 
     /** Parámetros de planificación programada fija (Sa, Ta, K, umbrales globales). */
     @Data
@@ -55,6 +57,13 @@ public class PlanificadorProperties {
         private boolean simularTiempoReal2 = true;
         /** Si true, escenario 3 también duerme entre bloques (no recomendado). */
         private boolean simularTiempoReal3 = false;
+
+        /**
+         * Fase T (N3) — si true, antes del bucle de bloques de E2 se pre-calienta la caché de
+         * esqueletos con la demanda de la ventana (Dijkstra fuera del presupuesto Ta). Sube el
+         * throughput en arranque limpio (caché fría). Ta-safe; no cambia rutas. {@code false} = off.
+         */
+        private boolean prewarmSkeletons = true;
 
         /**
          * Límite máximo de ventanas a procesar (para acotar archivos enormes).
@@ -121,6 +130,61 @@ public class PlanificadorProperties {
         private double umbralReplanificacionSlack = 0.10;
         /** Máximo de replanificaciones preventivas por bloque (cota de cómputo). */
         private int maxReplanificacionesPorBloque = 20;
+        /**
+         * Fase M (anti-thrash): máximo de envíos del backlog a reprocesar por bloque,
+         * tomando los de deadline más cercano. El resto se difiere al siguiente bloque
+         * (sin perderse). 0 = sin tope (comportamiento original). Acota que un backlog
+         * grande le robe Ta a la demanda nueva y dispare violaciones de Ta.
+         */
+        private int maxReprocesoPorBloque = 0;
+    }
+
+    /**
+     * Umbrales de la alerta de colapso logístico INMINENTE (pre-colapso). Solo informa
+     * (consola + endpoint), no detiene. Override con {@code planificador.alerta-colapso.*}.
+     */
+    @Data
+    public static class AlertaColapso {
+        /** Utilización de almacén (0..1) a partir de la cual la alerta es ÁMBAR. */
+        private double almacenAmbar = 0.85;
+        /** Utilización de almacén (0..1) a partir de la cual la alerta es ROJO. */
+        private double almacenRojo = 0.95;
+        /** Holgura SLA restante (fracción 0..1) por debajo de la cual la alerta es ÁMBAR. */
+        private double slaRestanteAmbar = 0.25;
+        /** Holgura SLA restante (fracción 0..1) por debajo de la cual la alerta es ROJO. */
+        private double slaRestanteRojo = 0.10;
+    }
+
+    /**
+     * Fase L/O/P — perillas del enrutado storage-aware (libera almacén-día de hub para los SLA
+     * cortos). Expuestas para barrer valores SIN recompilar (la dirección está probada: cada
+     * subida de reserva / bajada de umbral / curva más agresiva ha movido el primer fallo).
+     */
+    @Data
+    public static class StorageAware {
+        /**
+         * L2 — colchón de reserva en almacén-día de hub para escalas overnight de envíos flexibles
+         * (escalado por holgura). 0 = sin reserva de almacén. La 2ª pasada con 0 siempre existe en
+         * el motor, así que nunca causa un sinRuta evitable (invariante anti-J3).
+         */
+        private double reservaAlmacenBase = 0.15;
+        /**
+         * O — fracción de capacidad de almacén a partir de la cual un aeropuerto se marca hub
+         * (utilización-pico). Más bajo = protege antes / a más aeropuertos.
+         */
+        private double umbralHubPico = 0.55;
+        /**
+         * L1/P — exponente p de la curva de precio de almacén-hub {@code u^p/(1−u)}. p<2 muerde
+         * antes (p=1.7 ⇒ desde ~0.35; p=2 ⇒ desde ~0.45). Menor p = la selección evita hubs con
+         * más anticipación.
+         */
+        private double precioHubExponente = 1.7;
+        /**
+         * Fase Q — máximo de claves de esqueleto a re-sembrar con rutas hub-avoiding por bloque
+         * (amortizado, usando el tiempo ocioso del bloque acotado por el deadline de Ta). 0 =
+         * desactivar el re-seed. Solo agrega opciones a la caché (nunca quita la ruta rápida).
+         */
+        private int reSeedSlice = 256;
     }
 
     /** Configuración del endpoint de calibración (fase 6). */

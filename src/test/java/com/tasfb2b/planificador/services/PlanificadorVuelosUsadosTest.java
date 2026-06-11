@@ -1,0 +1,122 @@
+package com.tasfb2b.planificador.services;
+
+import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class PlanificadorVuelosUsadosTest {
+
+    @Test
+    void agregaEnviosYMaletasDelMismoVuelo() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorService service = serviceConJobs(jobs);
+        JobState job = jobs.crear("2", 14);
+
+        job.publicarBloque(bloque(0,
+                asignacion("BATCH-001", 40, tramo("LA2450", "SPIM", "SKBO",
+                        "2026-05-19T10:00:00", "2026-05-19T13:00:00")),
+                asignacion("BATCH-002", 105, tramo("LA2450", "SPIM", "SKBO",
+                        "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
+
+        VuelosUsadosResponse response = service.getVuelosUsadosJob(job.getJobId(), 0);
+
+        assertEquals(job.getJobId(), response.getJobId());
+        assertEquals(1, response.getTotal());
+        VuelosUsadosResponse.VueloUsado vuelo = response.getVuelos().get(0);
+        assertEquals("LA2450|2026-05-19T10:00:00", vuelo.getFlightKey());
+        assertEquals(145, vuelo.getCantidadMaletas());
+        assertEquals(2, vuelo.getCantidadEnvios());
+        assertEquals(List.of("BATCH-001", "BATCH-002"), vuelo.getEnvioIds());
+    }
+
+    @Test
+    void distingueMismoVueloEnHorariosDistintos() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorService service = serviceConJobs(jobs);
+        JobState job = jobs.crear("2", 14);
+
+        job.publicarBloque(bloque(0,
+                asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
+                        "2026-05-19T10:00:00", "2026-05-19T13:00:00")),
+                asignacion("BATCH-002", 30, tramo("LA2450", "SPIM", "SKBO",
+                        "2026-05-20T10:00:00", "2026-05-20T13:00:00"))));
+
+        VuelosUsadosResponse response = service.getVuelosUsadosJob(job.getJobId(), 0);
+
+        assertEquals(2, response.getTotal());
+        List<String> flightKeys = response.getVuelos().stream()
+                .map(VuelosUsadosResponse.VueloUsado::getFlightKey)
+                .toList();
+        assertEquals(List.of(
+                "LA2450|2026-05-19T10:00:00",
+                "LA2450|2026-05-20T10:00:00"), flightKeys);
+    }
+
+    @Test
+    void desdeMayorABloquesPublicadosDevuelveListaVacia() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorService service = serviceConJobs(jobs);
+        JobState job = jobs.crear("2", 14);
+
+        job.publicarBloque(bloque(0,
+                asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
+                        "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
+
+        VuelosUsadosResponse response = service.getVuelosUsadosJob(job.getJobId(), 99);
+
+        assertEquals(99, response.getDesde());
+        assertEquals(1, response.getBloquesPublicados());
+        assertEquals(0, response.getTotal());
+        assertTrue(response.getVuelos().isEmpty());
+    }
+
+    private static PlanificadorService serviceConJobs(JobsRegistry jobs) {
+        return new PlanificadorService(null, null, null, jobs,
+                null, null, null, null, null, null);
+    }
+
+    private static SimulacionResponse.BloqueSimulacion bloque(
+            int idx,
+            SimulacionResponse.AsignacionMaleta... asignaciones) {
+        SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
+        bloque.setBloqueIdx(idx);
+        bloque.setHoraInicio("2026-05-19T08:00:00");
+        bloque.setHoraFin("2026-05-19T09:00:00");
+        bloque.setAsignaciones(List.of(asignaciones));
+        return bloque;
+    }
+
+    private static SimulacionResponse.AsignacionMaleta asignacion(
+            String batchId,
+            int cantidad,
+            SimulacionResponse.TramoRuta... tramos) {
+        SimulacionResponse.AsignacionMaleta asignacion = new SimulacionResponse.AsignacionMaleta();
+        asignacion.setBatchId(batchId);
+        asignacion.setOrigen("SPIM");
+        asignacion.setDestino("SKBO");
+        asignacion.setCantidad(cantidad);
+        asignacion.setEnrutada(true);
+        asignacion.setTramos(List.of(tramos));
+        return asignacion;
+    }
+
+    private static SimulacionResponse.TramoRuta tramo(
+            String vueloId,
+            String origen,
+            String destino,
+            String salida,
+            String llegada) {
+        SimulacionResponse.TramoRuta tramo = new SimulacionResponse.TramoRuta();
+        tramo.setVueloId(vueloId);
+        tramo.setOrigen(origen);
+        tramo.setDestino(destino);
+        tramo.setSalidaLocal(salida);
+        tramo.setLlegadaLocal(llegada);
+        return tramo;
+    }
+}

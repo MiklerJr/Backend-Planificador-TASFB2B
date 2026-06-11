@@ -1,9 +1,9 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 public class Ant {
 
@@ -16,25 +16,35 @@ public class Ant {
     //Reloj interno de la hormiga
     public java.time.LocalDateTime horaLlegadaActual = null;
 
-    // Espejo de `path` como Set para que visited() sea O(1). Se mantiene
-    // sincronizado vía addNode/reset; quien lea path crudo no lo nota.
-    private final Set<Node> visitedSet = new HashSet<>();
+    // visited() O(1) por bit indexado en node.idx. Si algún nodo viene sin idx
+    // (idx < 0, escenarios de tests heredados que construyen Graph a mano), se
+    // usa el HashSet como respaldo. En producción el GreedyRepairOperator asigna
+    // idx a todos los nodos y nunca se cae al fallback.
+    private final BitSet visitedIdx = new BitSet();
+    private HashSet<Node> visitedFallback;
 
     public void reset() {
         path.clear();
         edgesPath.clear();
-        visitedSet.clear();
+        visitedIdx.clear();
+        if (visitedFallback != null) visitedFallback.clear();
         totalCost = 0;
-        horaLlegadaActual = null; // Reiniciar reloj
+        horaLlegadaActual = null;
     }
 
     public void addNode(Node n) {
         path.add(n);
-        visitedSet.add(n);
+        if (n.idx >= 0) {
+            visitedIdx.set(n.idx);
+        } else {
+            if (visitedFallback == null) visitedFallback = new HashSet<>();
+            visitedFallback.add(n);
+        }
     }
 
     public boolean visited(Node n) {
-        return visitedSet.contains(n);
+        if (n.idx >= 0) return visitedIdx.get(n.idx);
+        return visitedFallback != null && visitedFallback.contains(n);
     }
 
     public String getRutaStr() {

@@ -6,10 +6,27 @@ import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Construye registros de auditoría {@link AuditoriaEnvio} a partir de los
@@ -26,6 +43,20 @@ import java.util.Set;
 public class AuditoriaService {
 
     private static final int TIEMPO_MIN_ESCALA = CostFunction.TIEMPO_MIN_ESCALA;
+    /** Minutos de procesamiento en el almacén destino antes de quedar disponible. */
+    private static final long DEST_STORAGE_MIN = 10L;
+    private static final String CSV_HEADER =
+            "idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,"
+                    + "tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,"
+                    + "cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad,"
+                    + "fechaHoraInicio,fechaHoraFin\n";
+
+    /** Máximo de filas de datos por CSV dentro del ZIP de auditoría. */
+    public static final int FILAS_POR_ARCHIVO = 50_000;
+
+    /** Formato seguro para nombres de archivo (sin ':' ni separadores inválidos). */
+    private static final DateTimeFormatter FMT_NOMBRE =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmm");
 
     /**
      * Construye el registro de auditoría a partir de un batch ya procesado.
@@ -38,6 +69,9 @@ public class AuditoriaService {
         audit.setDestino(batch.getDestCode());
         audit.setRegistroHHMM(String.format("%02d:%02d",
                 batch.getReadyTime().getHour(), batch.getReadyTime().getMinute()));
+        // Inicio del envío: momento de registro del batch. Disponible siempre,
+        // haya o no ruta asignada.
+        audit.setFechaHoraInicio(batch.getReadyTime());
 
         long readyMin = toEpochMin(batch.getReadyTime());
         int slaMin = batch.getSlaLimitHours() * 60;
@@ -51,6 +85,7 @@ public class AuditoriaService {
             audit.setMotivoFalla("No se encontró ruta válida");
             audit.setRuta("");
             audit.setSlackSlaMin(slaMin);
+            // Sin ruta → no hay fin de envío.
             return audit;
         }
 
@@ -88,6 +123,11 @@ public class AuditoriaService {
         int llegadaDesdeReady = (int) (llegadaEpoch - readyMin);
         audit.setLlegadaMin(llegadaDesdeReady);
 
+        // Fin del envío: instante en que la maleta queda disponible en el
+        // almacén destino (aterrizaje del último vuelo + DEST_STORAGE_MIN).
+        // Coherente con el cómputo de SLA de la vía de producción (GreedyRepairOperator).
+        audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + DEST_STORAGE_MIN));
+
         int slack = slaMin - llegadaDesdeReady;
         audit.setSlackSlaMin(slack);
 
@@ -119,46 +159,124 @@ public class AuditoriaService {
     }
 
     /**
-     * Convierte una lista de auditorías a CSV con la cabecera estándar (23 columnas).
+     * Convierte una lista de auditorías a CSV con la cabecera estándar (25 columnas).
+     * Las últimas dos columnas son {@code fechaHoraInicio} y {@code fechaHoraFin}
+     * (ISO LocalDateTime). {@code fechaHoraFin} queda vacía cuando el envío no
+     * encontró ruta.
      */
     public String aCsv(List<AuditoriaEnvio> filas) {
         StringBuilder sb = new StringBuilder();
-        sb.append("idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,")
-                .append("tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,")
-                .append("cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad\n");
+        sb.append(CSV_HEADER);
         for (AuditoriaEnvio r : filas) {
-            sb.append(csv(r.getIdEnvio())).append(',')
-                    .append(csv(r.getOrigen())).append(',')
-                    .append(csv(r.getDestino())).append(',')
-                    .append(csv(r.getRegistroHHMM())).append(',')
-                    .append(r.getDeadlineMin()).append(',')
-                    .append(r.isExitoso()).append(',')
-                    .append(csv(r.getMotivoFalla())).append(',')
-                    .append(csv(r.getRuta())).append(',')
-                    .append(r.getNumTramos()).append(',')
-                    .append(r.getNumEscalas()).append(',')
-                    .append(r.getTiempoVueloMin()).append(',')
-                    .append(r.getTiempoEsperaMin()).append(',')
-                    .append(r.getTiempoTotalMin()).append(',')
-                    .append(r.getLlegadaMin()).append(',')
-                    .append(r.getSlackSlaMin()).append(',')
-                    .append(r.getCostoTotal()).append(',')
-                    .append(r.isCumpleSLA()).append(',')
-                    .append(r.isSinCiclos()).append(',')
-                    .append(r.isSinDirecto()).append(',')
-                    .append(r.isEscalaMinOK()).append(',')
-                    .append(r.isCapacidadVuelosOK()).append(',')
-                    .append(r.isAlmacenDestinoOK()).append(',')
-                    .append(r.getScoreCalidad())
-                    .append('\n');
+            sb.append(lineaCsv(r));
         }
         return sb.toString();
+    }
+
+    public int escribirCsv(Collection<LuggageBatch> batches, Path path) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            return escribirCsv(batches, writer);
+        }
+    }
+
+    public int escribirCsv(Collection<LuggageBatch> batches, Writer writer) throws IOException {
+        writer.write(CSV_HEADER);
+        int filas = 0;
+        if (batches == null) return filas;
+        for (LuggageBatch b : batches) {
+            if (b == null) continue;
+            writer.write(lineaCsv(construir(b)));
+            filas++;
+        }
+        return filas;
     }
 
     public List<AuditoriaEnvio> construirLote(List<LuggageBatch> batches) {
         List<AuditoriaEnvio> out = new ArrayList<>(batches.size());
         for (LuggageBatch b : batches) out.add(construir(b));
         return out;
+    }
+
+    /**
+     * Escribe la auditoría como un ZIP de varios CSV, cada uno con a lo sumo
+     * {@code maxFilas} filas de datos (un único CSV de 9.5M envíos no es práctico).
+     *
+     * <p>Los batches se ordenan por {@code fechaHoraInicio} (su {@code readyTime})
+     * y se parten en bloques. Cada archivo interno se llama
+     * {@code <jobId>-<inicio>-<fin>.csv}, donde {@code inicio}/{@code fin} son el
+     * primer y último registro del bloque (formato {@code yyyyMMddHHmm}). Si dos
+     * bloques colisionan en nombre se desambigua con un sufijo numérico.
+     *
+     * @param batches   envíos a auditar (cada uno será una fila)
+     * @param zipPath   ruta destino del ZIP
+     * @param maxFilas  filas de datos máximas por CSV ({@code <=0} usa {@link #FILAS_POR_ARCHIVO})
+     * @param jobId     prefijo del nombre de cada CSV interno
+     * @return total de filas de datos escritas (sin contar cabeceras)
+     */
+    public int escribirZip(Collection<LuggageBatch> batches, Path zipPath,
+                           int maxFilas, String jobId) throws IOException {
+        int limite = maxFilas > 0 ? maxFilas : FILAS_POR_ARCHIVO;
+
+        List<LuggageBatch> ordenados = new ArrayList<>(batches == null ? 0 : batches.size());
+        if (batches != null) {
+            for (LuggageBatch b : batches) {
+                if (b != null) ordenados.add(b);
+            }
+        }
+        ordenados.sort(Comparator.comparing(LuggageBatch::getReadyTime));
+
+        int totalFilas = 0;
+        Set<String> nombresUsados = new LinkedHashSet<>();
+        try (ZipOutputStream zos = new ZipOutputStream(
+                new BufferedOutputStream(Files.newOutputStream(zipPath)), StandardCharsets.UTF_8)) {
+
+            if (ordenados.isEmpty()) {
+                // ZIP con un CSV vacío (solo cabecera) para no devolver un archivo corrupto.
+                zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, null, null, nombresUsados)));
+                Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                w.write(CSV_HEADER);
+                w.flush();
+                zos.closeEntry();
+                return 0;
+            }
+
+            int n = ordenados.size();
+            for (int desde = 0; desde < n; desde += limite) {
+                int hasta = Math.min(desde + limite, n);
+                LocalDateTime inicio = ordenados.get(desde).getReadyTime();
+                LocalDateTime fin    = ordenados.get(hasta - 1).getReadyTime();
+
+                zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, inicio, fin, nombresUsados)));
+                Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                w.write(CSV_HEADER);
+                for (int i = desde; i < hasta; i++) {
+                    w.write(lineaCsv(construir(ordenados.get(i))));
+                    totalFilas++;
+                }
+                // flush (no close) para no cerrar el ZipOutputStream subyacente.
+                w.flush();
+                zos.closeEntry();
+            }
+        }
+        return totalFilas;
+    }
+
+    /**
+     * Construye el nombre del CSV interno y garantiza unicidad dentro del ZIP
+     * (si el rango se repite, añade un sufijo {@code -N}).
+     */
+    private static String nombreArchivo(String jobId, LocalDateTime inicio,
+                                        LocalDateTime fin, Set<String> usados) {
+        String pref = (jobId == null || jobId.isBlank()) ? "job" : jobId;
+        String base = (inicio == null || fin == null)
+                ? pref + "-vacio"
+                : pref + "-" + FMT_NOMBRE.format(inicio) + "-" + FMT_NOMBRE.format(fin);
+        String nombre = base + ".csv";
+        int sufijo = 1;
+        while (!usados.add(nombre)) {
+            nombre = base + "-" + (++sufijo) + ".csv";
+        }
+        return nombre;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -216,6 +334,34 @@ public class AuditoriaService {
         return (int) Math.max(0, Math.round(score));
     }
 
+    private static String lineaCsv(AuditoriaEnvio r) {
+        return csv(r.getIdEnvio()) + ','
+                + csv(r.getOrigen()) + ','
+                + csv(r.getDestino()) + ','
+                + csv(r.getRegistroHHMM()) + ','
+                + r.getDeadlineMin() + ','
+                + r.isExitoso() + ','
+                + csv(r.getMotivoFalla()) + ','
+                + csv(r.getRuta()) + ','
+                + r.getNumTramos() + ','
+                + r.getNumEscalas() + ','
+                + r.getTiempoVueloMin() + ','
+                + r.getTiempoEsperaMin() + ','
+                + r.getTiempoTotalMin() + ','
+                + r.getLlegadaMin() + ','
+                + r.getSlackSlaMin() + ','
+                + r.getCostoTotal() + ','
+                + r.isCumpleSLA() + ','
+                + r.isSinCiclos() + ','
+                + r.isSinDirecto() + ','
+                + r.isEscalaMinOK() + ','
+                + r.isCapacidadVuelosOK() + ','
+                + r.isAlmacenDestinoOK() + ','
+                + r.getScoreCalidad() + ','
+                + formatoFecha(r.getFechaHoraInicio()) + ','
+                + formatoFecha(r.getFechaHoraFin()) + '\n';
+    }
+
     private static String csv(String texto) {
         if (texto == null) return "";
         if (texto.contains(",") || texto.contains("\"") || texto.contains("\n")) {
@@ -226,5 +372,19 @@ public class AuditoriaService {
 
     private static long toEpochMin(java.time.LocalDateTime dt) {
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
+    }
+
+    /** Inversa de {@link #toEpochMin}: epoch-min absolutos → {@link LocalDateTime}. */
+    private static LocalDateTime epochMinToLocalDateTime(long epochMin) {
+        long epochDay = Math.floorDiv(epochMin, 1440L);
+        long minuteOfDay = Math.floorMod(epochMin, 1440L);
+        LocalDate date = LocalDate.ofEpochDay(epochDay);
+        LocalTime time = LocalTime.of((int) (minuteOfDay / 60), (int) (minuteOfDay % 60));
+        return LocalDateTime.of(date, time);
+    }
+
+    /** Serialización ISO de un {@link LocalDateTime} para CSV. {@code null} → vacío. */
+    private static String formatoFecha(LocalDateTime dt) {
+        return dt == null ? "" : dt.toString();
     }
 }

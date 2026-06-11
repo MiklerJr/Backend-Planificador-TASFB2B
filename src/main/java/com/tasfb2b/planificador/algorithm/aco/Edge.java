@@ -3,7 +3,6 @@ package com.tasfb2b.planificador.algorithm.aco;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 
 public class Edge {
 
@@ -34,17 +33,5 @@ public class Edge {
 
     public void useCapacity(int demand) {
         this.usedCapacity += demand;
-    }
-
-    public double getDuracionMinutos() {
-        return CostFunction.calcularDuracionMinutos(this.departureTime, this.arrivalTime);
-    }
-    
-    public String getDepartureTimeString() {
-        return departureTime != null ? departureTime.toString() : "";
-    }
-
-    public String getArrivalTimeString() {
-        return arrivalTime != null ? arrivalTime.toString() : "";
     }
 }

@@ -160,11 +160,4 @@ public class AeropuertoLoader {
         }
     }
 
-    public List<String> listarAeropuertosPorCodigo(){
-        List<String> codigos = new ArrayList<>();
-        for (Aeropuerto a : aeropuertos) {
-            codigos.add(a.getCodigo());
-        }
-        return codigos;
-    }
 }

@@ -1,17 +1,22 @@
 package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -284,7 +289,8 @@ public class PlanificadorController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
             @RequestParam(required = false)        Integer sa,
             @RequestParam(required = false)        Integer ta,
-            @RequestParam(required = false)        Integer dias) {
+            @RequestParam(required = false)        Integer dias,
+            @RequestParam(defaultValue = "false")  boolean procesamientoPrevio) {
         cancelProb = Math.max(0.0, Math.min(1.0, cancelProb));
 
         EjecucionParams params = new EjecucionParams();
@@ -296,6 +302,11 @@ public class PlanificadorController {
         params.setSaMin(sa);
         params.setTaSegundos(ta);
         params.setDias(dias);
+        // Warm-up (procesamiento previo) DESACTIVADO: se ignora el flag entrante y se fuerza a
+        // false para que el período previo a fechaInicio nunca se simule. El @RequestParam se
+        // mantiene por compatibilidad con el front, pero no tiene efecto. Revertir: volver a
+        // setProcesamientoPrevio(procesamientoPrevio).
+        params.setProcesamientoPrevio(false);
 
         JobState job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
@@ -308,10 +319,11 @@ public class PlanificadorController {
         if (sa != null)   body.put("sa", sa);
         if (ta != null)   body.put("ta", ta);
         if (dias != null) body.put("dias", dias);
+        body.put("procesamientoPrevio", false);   // forzado OFF: el warm-up está desactivado
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }
-
+    
     @PostMapping("/escenario3/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc3(
             @RequestParam(defaultValue = "75")    int    k,
@@ -364,7 +376,21 @@ public class PlanificadorController {
         body.put("inicio",        job.inicio.toString());
         if (job.fin != null) body.put("fin", job.fin.toString());
         if (job.error != null) body.put("error", job.error);
+        // Alerta de colapso INMINENTE (pre-colapso) del último bloque, si existe.
+        if (job.alertaColapso != null) body.put("alertaColapso", job.alertaColapso);
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Alerta de colapso logístico INMINENTE (pre-colapso) vigente del job: nivel VERDE/AMBAR/ROJO,
+     * mensaje, bloque y los factores (utilización de almacén, holgura SLA del backlog). Solo
+     * informa; el colapso real se refleja en el estado/métricas. 404 si el job no existe.
+     */
+    @GetMapping("/jobs/{jobId}/alerta-colapso")
+    public ResponseEntity<AlertaColapso> alertaColapsoJob(@PathVariable String jobId) {
+        JobState job = service.getJob(jobId);
+        if (job == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(job.alertaColapso != null ? job.alertaColapso : AlertaColapso.verde());
     }
 
     @GetMapping("/jobs/{jobId}/dashboard")
@@ -384,6 +410,15 @@ public class PlanificadorController {
     @GetMapping("/jobs/{jobId}/vuelos/carga")
     public ResponseEntity<Map<String, Object>> cargaVuelosJob(@PathVariable String jobId) {
         Map<String, Object> body = service.getCargaVuelosJob(jobId);
+        if (body == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/jobs/{jobId}/vuelos/usados")
+    public ResponseEntity<VuelosUsadosResponse> vuelosUsadosJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde) {
+        VuelosUsadosResponse body = service.getVuelosUsadosJob(jobId, desde);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
@@ -489,24 +524,32 @@ public class PlanificadorController {
     }
 
     /**
-     * Descarga el CSV de auditoría de un job completado. 23 columnas con
-     * validación formal por envío de las restricciones del cliente
-     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100).
+     * Descarga la auditoría de un job completado como un ZIP de varios CSV
+     * (hasta 50000 filas por archivo; un único CSV para millones de envíos no es
+     * práctico). Cada CSV interno se llama {@code <jobId>-<inicio>-<fin>.csv} con
+     * el rango de fechaHoraInicio (registro) de su contenido, y trae 25 columnas
+     * con la validación formal por envío de las restricciones del cliente
+     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100) y los
+     * timestamps ISO de inicio (readyTime) y fin del envío (llegada + DEST_STORAGE_MIN).
      *
-     * <p>Devuelve 204 si el job aún ejecuta, 404 si no existe.
+     * <p>Devuelve 204 si el job aún ejecuta (ZIP no disponible), 404 si no existe.
      */
-    @GetMapping(value = "/jobs/{jobId}/auditoria.csv", produces = "text/csv")
-    public ResponseEntity<byte[]> auditoriaJob(@PathVariable String jobId) {
+    @GetMapping(value = "/jobs/{jobId}/auditoria.zip", produces = "application/zip")
+    public ResponseEntity<?> auditoriaJob(@PathVariable String jobId) {
         JobState job = service.getJob(jobId);
-        if (job == null)              return ResponseEntity.notFound().build();
-        if (job.auditoriaCsv == null) return ResponseEntity.noContent().build();
+        if (job == null) return ResponseEntity.notFound().build();
 
-        byte[] body = job.auditoriaCsv.getBytes(StandardCharsets.UTF_8);
+        if (job.auditoriaZipPath == null || !Files.exists(job.auditoriaZipPath)) {
+            return ResponseEntity.noContent().build();
+        }
+
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.parseMediaType("text/csv; charset=UTF-8"));
+        headers.setContentType(MediaType.parseMediaType("application/zip"));
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=\"auditoria_" + jobId + ".csv\"");
+                "attachment; filename=\"auditoria_" + jobId + ".zip\"");
         headers.set("X-Audit-Rows", String.valueOf(job.auditoriaFilas));
+
+        Resource body = new FileSystemResource(job.auditoriaZipPath.toFile());
         return ResponseEntity.ok().headers(headers).body(body);
     }
 }

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
@@ -72,9 +73,16 @@ public class BacklogManager {
         return result;
     }
 
-    /** Devuelve {@code replanificables} sin vaciar (útil para evaluar) — uso de lectura. */
-    public List<LuggageBatch> snapshotReplanificables() {
-        return new ArrayList<>(replanificables);
+    /**
+     * Vista de solo lectura de los pendientes actuales (sinRuta + replanificables) SIN vaciarlos.
+     * Útil para contabilizar su ocupación de almacén de origen mientras esperan (Fase Origen-B).
+     */
+    public List<LuggageBatch> peekPendientes() {
+        if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
+        List<LuggageBatch> result = new ArrayList<>(sinRuta.size() + replanificables.size());
+        result.addAll(sinRuta);
+        result.addAll(replanificables);
+        return result;
     }
 
     /**
@@ -102,6 +110,34 @@ public class BacklogManager {
      *
      * @return cantidad purgada en esta llamada
      */
+    /**
+     * Fase M (anti-thrash): devuelve hasta {@code max} pendientes priorizando los de
+     * DEADLINE más cercano ({@code readyTime + SLA}), mezclando sinRuta y replanificables.
+     * Los no devueltos (los MENOS urgentes) permanecen en el backlog para el siguiente
+     * bloque — no se pierde ninguno; {@code purgarVencidas} los purgará si vencen. Acota el
+     * reproceso por bloque para que el backlog no le robe {@code Ta} a la demanda nueva.
+     * {@code max<=0} => devuelve todos (equivale a {@link #pollPendientes()}).
+     */
+    public List<LuggageBatch> pollPendientesUrgentes(int max) {
+        int total = sinRuta.size() + replanificables.size();
+        if (max <= 0 || max >= total) {
+            return pollPendientes();
+        }
+        List<LuggageBatch> todos = new ArrayList<>(total);
+        todos.addAll(sinRuta);
+        todos.addAll(replanificables);
+        sinRuta.clear();
+        replanificables.clear();
+        todos.sort(Comparator.comparing(
+                b -> b.getReadyTime().plusHours(b.getSlaLimitHours())));
+        List<LuggageBatch> out = new ArrayList<>(todos.subList(0, max));
+        // Re-encolar los menos urgentes (ya ordenados por deadline) para el próximo bloque.
+        for (int i = max; i < todos.size(); i++) {
+            sinRuta.addLast(todos.get(i));
+        }
+        return out;
+    }
+
     public int purgarVencidas(LocalDateTime scNow) {
         if (!purgarVencidas || scNow == null) return 0;
         int n = 0;

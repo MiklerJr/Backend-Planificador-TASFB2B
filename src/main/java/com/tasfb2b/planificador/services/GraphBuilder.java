@@ -73,24 +73,6 @@ public class GraphBuilder {
         return graph;
     }
 
-    private double distance(Node n1, Node n2) {
-        double earthRadius = 6371.0; // Radio de la tierra en kilómetros
-
-        double dLat = Math.toRadians(n2.lat - n1.lat);
-        double dLon = Math.toRadians(n2.lon - n1.lon);
-
-        double lat1 = Math.toRadians(n1.lat);
-        double lat2 = Math.toRadians(n2.lat);
-
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(lat1) * Math.cos(lat2) *
-                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return earthRadius * c; // Devuelve la distancia en kilómetros
-    }
-
     // CAPACIDAD (#### o números)
     private int parseCapacity(String value) {
         if (value == null) return 0;

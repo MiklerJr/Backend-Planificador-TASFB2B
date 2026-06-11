@@ -74,10 +74,11 @@ public class JobsRegistry {
                 if ("calentando".equals(job.estado) || "ejecutando".equals(job.estado)) {
                     job.estado = "completado";
                 }
-            } catch (Exception ex) {
+            } catch (Throwable ex) {
                 if (!"cancelado".equals(job.estado)) {
                     job.estado = "error";
-                    job.error  = ex.getMessage();
+                    String message = ex.getMessage();
+                    job.error = ex.getClass().getSimpleName() + (message != null ? ": " + message : "");
                 }
                 log.error("Job {} falló: {}", job.getJobId(), ex.getMessage(), ex);
             } finally {
