@@ -9,8 +9,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,12 +46,14 @@ public class DataLoader {
         aeropuertos = jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
             Aeropuerto a = new Aeropuerto();
             a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
+            String codigo = a.getCodigo();
+            a.setCiudad(rs.getString("ciudad"));
+            a.setOffsetHorario(rs.getInt("huso_horario"));
+            a.setCapacidad(rs.getInt("capacidad_almacen"));
             a.setLatitud(rs.getDouble("latitud"));
             a.setLongitud(rs.getDouble("longitud"));
-            // Si tienes estos atributos en tu clase, descoméntalos:
-            // a.setCiudad(rs.getString("ciudad"));
-            // a.setHusoHorario(rs.getInt("huso_horario"));
-            // a.setCapacidad(rs.getInt("capacidad_almacen"));
+            a.setContinente(continentePorIcao(codigo));
+            a.setActivo(true);
             return a;
         });
 
@@ -59,22 +63,37 @@ public class DataLoader {
 
         // 2. Cargamos Vuelos desde AWS
         String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima FROM VUELO";
-        vuelos = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
+        List<Vuelo> vuelosCargados = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
             Vuelo v = new Vuelo();
-            v.setId(rowNum + 1);
-            // Revisa si tu clase Vuelo guarda un String o el Objeto Aeropuerto entero:
-            // Si guarda Strings:
-            // v.setOrigen(rs.getString("icao_origen"));
-            // v.setDestino(rs.getString("icao_destino"));
-            // Si guarda Objetos:
-            // v.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
-            // v.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
-            
-            // v.setHoraSalida(rs.getString("hora_salida"));
-            // v.setHoraLlegada(rs.getString("hora_llegada"));
-            // v.setCapacidad(rs.getInt("capacidad_maxima"));
+
+            String origenCodigo = rs.getString("icao_origen");
+            String destinoCodigo = rs.getString("icao_destino");
+            Aeropuerto origen = aeropuertoMapCache.get(origenCodigo);
+            Aeropuerto destino = aeropuertoMapCache.get(destinoCodigo);
+
+            if (origen == null || destino == null) {
+                log.warn("Vuelo {} omitido: aeropuerto no encontrado ({} -> {})",
+                        rs.getString("id_vuelo"), origenCodigo, destinoCodigo);
+                return null;
+            }
+
+            LocalTime horaSalida = leerHora(rs.getObject("hora_salida"), "hora_salida");
+            LocalTime horaLlegada = leerHora(rs.getObject("hora_llegada"), "hora_llegada");
+            LocalDateTime fechaSalida = LocalDateTime.of(FlightParser.FLIGHT_BASE_DATE, horaSalida);
+            LocalDateTime fechaLlegada = fechaLlegadaLocal(fechaSalida, horaLlegada, origen, destino);
+
+            v.setCapacidad(rs.getInt("capacidad_maxima"));
+            v.setOrigen(origenCodigo);
+            v.setDestino(destinoCodigo);
+            v.setFechaHoraSalida(fechaSalida);
+            v.setFechaHoraLlegada(fechaLlegada);
+            v.setAeropuertoOrigen(origen);
+            v.setAeropuertoDestino(destino);
             return v;
         });
+        vuelos = vuelosCargados.stream()
+                .filter(v -> v != null)
+                .collect(Collectors.toList());
 
         // 3. Resumen consultado directamente a PostgreSQL
         log.info("Aeropuertos en RAM : {}", aeropuertos.size());
@@ -181,4 +200,52 @@ public class DataLoader {
 
     public List<Aeropuerto> getAeropuertos() { return aeropuertos; }
     public List<Vuelo>      getVuelos()      { return vuelos; }
+
+    private static LocalDateTime fechaLlegadaLocal(LocalDateTime fechaSalida,
+                                                   LocalTime horaLlegada,
+                                                   Aeropuerto origen,
+                                                   Aeropuerto destino) {
+        int origenOffset = origen.getOffsetHorario() != null ? origen.getOffsetHorario() : 0;
+        int destinoOffset = destino.getOffsetHorario() != null ? destino.getOffsetHorario() : 0;
+        int depWall = toMinutes(fechaSalida.toLocalTime());
+        int arrWall = toMinutes(horaLlegada);
+        int durReal = Math.floorMod((arrWall - destinoOffset * 60) - (depWall - origenOffset * 60), 1440);
+        return fechaSalida.plusMinutes(durReal + (long) (destinoOffset - origenOffset) * 60);
+    }
+
+    private static LocalTime leerHora(Object raw, String columna) {
+        if (raw == null) {
+            throw new IllegalStateException("Valor nulo en columna " + columna + " de VUELO");
+        }
+        if (raw instanceof LocalTime localTime) {
+            return localTime;
+        }
+        if (raw instanceof Time time) {
+            return time.toLocalTime();
+        }
+        if (raw instanceof Timestamp timestamp) {
+            return timestamp.toLocalDateTime().toLocalTime();
+        }
+
+        String text = raw.toString().trim();
+        String[] parts = text.split(":");
+        if (parts.length < 2) {
+            throw new IllegalStateException("Hora invalida en columna " + columna + ": " + text);
+        }
+        return LocalTime.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
+    }
+
+    private static int toMinutes(LocalTime time) {
+        return time.getHour() * 60 + time.getMinute();
+    }
+
+    private static String continentePorIcao(String code) {
+        if (code == null || code.isBlank()) return "UNKNOWN";
+        return switch (code.charAt(0)) {
+            case 'S' -> "AM";
+            case 'E', 'L', 'U' -> "EU";
+            case 'O', 'V' -> "AS";
+            default -> "UNKNOWN";
+        };
+    }
 }

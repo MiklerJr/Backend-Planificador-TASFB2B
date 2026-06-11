@@ -28,10 +28,11 @@ public class AlgorithmMapper {
         for (Aeropuerto a : aeropuertos) {
             graph.addNode(a.getCodigo());
             Node nodo = graph.nodes.get(a.getCodigo());
-            nodo.capacity = a.getCapacidad();
+            int capacidadAlmacen = a.getCapacidad() != null ? a.getCapacidad() : 0;
+            nodo.capacity = capacidadAlmacen;
             // El ACO consulta storageCapacity (vs Node.storageUsed) en buildSolution.
             // El ALNS consulta capacity. Mantener ambos sincronizados para que ambos motores funcionen.
-            nodo.storageCapacity = a.getCapacidad() != null ? a.getCapacidad() : 0;
+            nodo.storageCapacity = capacidadAlmacen;
         }
 
         // 2. Mapear Aristas (Vuelos)
@@ -53,7 +54,7 @@ public class AlgorithmMapper {
             edge.from = graph.nodes.get(v.getAeropuertoOrigen().getCodigo());
             edge.to = graph.nodes.get(v.getAeropuertoDestino().getCodigo());
 
-            edge.capacity = v.getCapacidad();
+            edge.capacity = v.getCapacidad() != null ? v.getCapacidad() : 0;
 
             // Normalizar salida y llegada a UTC restando el offset de cada aeropuerto.
             // Los archivos de datos usan hora LOCAL en cada aeropuerto; para que el Dijkstra
