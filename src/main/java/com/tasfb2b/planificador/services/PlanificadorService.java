@@ -2060,17 +2060,22 @@ public class PlanificadorService {
             if (a.isEnrutada()) s[1]++;
         }
 
-        // 3b. Colapso logístico por ALMACÉN lleno (origen/escala/destino): un envío sinRuta que SÍ
-        //     tendría ruta on-time si se ignorara la capacidad de almacén. Se evalúa ANTES de
-        //     reconstruir la espera de origen del backlog para que la ocupación no incluya a los
-        //     propios sinRuta de este bloque (evita auto-bloqueo). Early-exit al primer positivo.
+        // 3b. Colapso logístico por ALMACÉN lleno (origen/escala/destino): un envío que NO logró
+        //     entrega on-time (sinRuta, o enrutado TARDÍO — el ALNS difiere a un día posterior en
+        //     vez de dejar sinRuta) pero que SÍ tendría ruta on-time si se ignorara la capacidad de
+        //     almacén: le llegaron maletas a un almacén que las habría puesto en sobrecapacidad.
+        //     Se evalúa ANTES de reconstruir la espera de origen del backlog para que la ocupación
+        //     no incluya a los propios sinRuta de este bloque (evita auto-bloqueo). Early-exit al
+        //     primer positivo.
         boolean colapsoAlmacen = false;
         String detalleColapso = null;
         for (LuggageBatch b : finalBatches) {
-            if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) continue;
+            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            if (enrutada && b.isCumpleSLA()) continue;   // on-time: ningún almacén lo bloqueó
             if (enrutador.sinRutaPorAlmacenLleno(b)) {
                 colapsoAlmacen = true;
-                detalleColapso = b.getId() + " " + b.getOriginCode() + "->" + b.getDestCode();
+                detalleColapso = b.getId() + " " + b.getOriginCode() + "->" + b.getDestCode()
+                        + (enrutada ? " (desviado tardío por almacén lleno)" : "");
                 break;
             }
         }
@@ -2133,6 +2138,16 @@ public class PlanificadorService {
         var pre = enrutador.evaluarPreColapso(
                 telemetryAirport, backlog != null ? backlog.peekPendientes() : java.util.List.of());
         com.tasfb2b.planificador.dto.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
+
+        // Desborde DURO: ocupación real > 100% en algún slot de almacén tocado este bloque. No
+        // debería ocurrir (toda ruta valida su estadía completa antes de aplicarse al bloque),
+        // pero si ocurre la simulación no puede seguir planificando sobre un almacén físicamente
+        // imposible: se detiene de inmediato como colapso.
+        if (!colapsoAlmacen && pre.utilAlmacenMax() > 1.0) {
+            colapsoAlmacen = true;
+            detalleColapso = "desborde de almacén " + pre.almacenCritico() + " al "
+                    + Math.round(pre.utilAlmacenMax() * 100.0) + "% de capacidad";
+        }
 
         return new ResultadoVentana(bloque, finalBatches.size(), enrutadas, sinRuta, cumpleSLA, tardadas, maletas,
                 colapsoAlmacen, detalleColapso, alerta);

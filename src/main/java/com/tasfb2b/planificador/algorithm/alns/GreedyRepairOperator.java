@@ -611,6 +611,14 @@ public class GreedyRepairOperator implements RepairOperator {
                     edges.add(0, s.edge);
                     deps.add(0, s.depMin);
                 }
+                // Fase R — la expansión solo chequeó el slot de LLEGADA de cada pierna (la
+                // salida siguiente aún no existía). Aquí la ruta está completa: validar la
+                // estadía entera antes de confirmarla; si no cabe, seguir buscando otra
+                // llegada (otro día/celda) en vez de cobrar slots nunca validados.
+                if (!ignorarAlmacen
+                        && !cabeEstadiasRuta(edges, deps, batch.getQuantity(), blockAirport)) {
+                    continue;
+                }
                 long transitMinutes = (current.arrivalMin + DEST_STORAGE_MIN) - readyMin;
                 return new RouteResult(edges, deps, transitMinutes <= slaMaxMinutes);
             }
@@ -1259,6 +1267,24 @@ public class GreedyRepairOperator implements RepairOperator {
     }
 
     /**
+     * Fase R — valida la estadía COMPLETA de cada pierna de una ruta ya resuelta (todas las
+     * salidas conocidas): escala = {@code [llegada, salida del siguiente vuelo)}; destino final =
+     * {@code [llegada, llegada+DEST_STORAGE_MIN)}. Es la contraparte exacta de lo que cobra
+     * {@link #applyToBlock}: sin esta pasada, los chequeos por slot-de-llegada de la expansión y
+     * la materialización dejan sin validar los slots intermedios de la estadía (overflow).
+     */
+    private boolean cabeEstadiasRuta(List<Edge> edges, List<Long> deps, int qty,
+                                     Map<Long, Integer> blockAirport) {
+        for (int i = 0; i < edges.size(); i++) {
+            Edge e = edges.get(i);
+            long llegada = deps.get(i) + e.durationMinutes;
+            long salida = (i < edges.size() - 1) ? deps.get(i + 1) : llegada + DEST_STORAGE_MIN;
+            if (!cabeAlmacenPierna(e.to, llegada, salida, qty, blockAirport)) return false;
+        }
+        return true;
+    }
+
+    /**
      * Fase R — true si caben {@code qty} maletas en TODOS los slots de la estadía
      * {@code [llegada, salida)} de la pierna (ocupación concurrente global + bloque ≤ capacidad).
      */
@@ -1321,6 +1347,13 @@ public class GreedyRepairOperator implements RepairOperator {
                                             Map<Long, Integer> blockFlight,
                                             Map<Long, Integer> blockAirport) {
         if (edges.isEmpty() || deps.size() != edges.size()) return null;
+
+        // Fase R — todo candidato (Dijkstra hijo, cache H3, materialización) pasa por aquí con
+        // las salidas ya resueltas: validar la estadía COMPLETA de cada pierna. Los chequeos
+        // previos solo cubrían el slot de llegada, y las hormigas del ACO aplican el candidato
+        // al bloque sin pasar por rutaSirveParaBatch — sin esto, los slots intermedios de una
+        // escala (p. ej. overnight) se cobraban sin haberse validado.
+        if (!cabeEstadiasRuta(edges, deps, batch.getQuantity(), blockAirport)) return null;
 
         long arrivalMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).durationMinutes;
         long transitMin = (arrivalMin + DEST_STORAGE_MIN) - readyMin;
