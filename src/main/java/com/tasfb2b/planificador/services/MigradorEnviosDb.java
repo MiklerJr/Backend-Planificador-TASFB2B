@@ -108,4 +108,62 @@ public class MigradorEnviosDb {
         }
         System.out.println("¡Migración de 9 millones de registros completada!");
     }
+
+    public void migrarVuelos(String rutaArchivoVuelos) {
+        System.out.println("Iniciando migración masiva de VUELOS...");
+        List<Object[]> lote = new ArrayList<>();
+        
+        try (BufferedReader br = new BufferedReader(new FileReader(rutaArchivoVuelos))) {
+            String linea;
+            while ((linea = br.readLine()) != null) {
+                // Limpiamos la línea
+                linea = linea.trim();
+                if (linea.isEmpty() || linea.contains("ORIG-DEST")) continue; 
+                linea = linea.replace("//", ""); // Por si las moscas
+                
+                // Cortamos por cualquier combinación de guiones o espacios
+                String[] parts = linea.split("[\\s-]+");
+                
+                // Necesitamos al menos Origen, Destino, Salida y Llegada
+                if (parts.length >= 4) {
+                    String origen = parts[0];
+                    String destino = parts[1];
+                    String hSalida = parts[2];
+                    String hLlegada = parts[3];
+                    
+                    // Extraemos la capacidad si existe (y si es un número válido)
+                    int capacidad = 0;
+                    if (parts.length >= 5 && parts[4].matches("\\d+")) {
+                        capacidad = Integer.parseInt(parts[4]);
+                    }
+                    
+                    // Creamos un ID único (Ej: SKBO-SEQM-1900)
+                    String idVuelo = origen + "-" + destino + "-" + hSalida.replace(":", "");
+                    
+                    lote.add(new Object[] { idVuelo, origen, destino, hSalida, hLlegada, capacidad });
+                    
+                    // Disparamos en lotes de 500 para no ahogar la red
+                    if (lote.size() >= 500) {
+                        jdbcTemplate.batchUpdate(
+                            "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", 
+                            lote
+                        );
+                        lote.clear();
+                    }
+                }
+            }
+            
+            // Insertamos los últimos que hayan quedado en la lista
+            if (!lote.isEmpty()) {
+                jdbcTemplate.batchUpdate(
+                    "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", 
+                    lote
+                );
+            }
+            System.out.println("¡Migración de VUELOS completada con éxito!");
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 }

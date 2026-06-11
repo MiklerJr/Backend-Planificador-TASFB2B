@@ -6,12 +6,9 @@ import com.tasfb2b.planificador.model.TipoEnvio;
 import com.tasfb2b.planificador.model.Vuelo;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -24,15 +21,7 @@ import java.util.stream.Collectors;
 @Component
 public class DataLoader {
 
-    @Value("${data.airports.file}")
-    private String airportsFile;
-
-    @Value("${data.flights.file}")
-    private String flightsFile;
-
-    private final AeropuertoParser aeropuertoParser;
-    private final FlightParser vueloParser;
-    private final JdbcTemplate jdbcTemplate; // Agregamos la conexión a PostgreSQL
+    private final JdbcTemplate jdbcTemplate;
 
     private List<Aeropuerto> aeropuertos = new ArrayList<>();
     private List<Vuelo> vuelos = new ArrayList<>();
@@ -40,29 +29,56 @@ public class DataLoader {
     // Caché para mapear rápido los códigos ICAO a objetos Aeropuerto desde la BD
     private Map<String, Aeropuerto> aeropuertoMapCache; 
 
-    // Hemos eliminado el BaggageParser del constructor porque ya no leeremos .txt
-    public DataLoader(AeropuertoParser aeropuertoParser,
-                      FlightParser vueloParser,
-                      JdbcTemplate jdbcTemplate) {
-        this.aeropuertoParser = aeropuertoParser;
-        this.vueloParser = vueloParser;
+    // Limpiamos los Parsers y las variables @Value, solo inyectamos la BD
+    public DataLoader(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
     @PostConstruct
-    public void load() throws IOException {
-        // 1. Cargamos Aeropuertos y Vuelos en RAM (son livianos y necesarios para grafos)
-        aeropuertos = aeropuertoParser.parse(Path.of(airportsFile));
+    public void load() {
+        log.info("=================================================");
+        log.info("INICIANDO DESCARGA DESDE LA NUBE (100% POSTGRESQL)");
+        
+        // 1. Cargamos Aeropuertos desde AWS
+        String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, latitud, longitud FROM AEROPUERTO";
+        aeropuertos = jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
+            Aeropuerto a = new Aeropuerto();
+            a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
+            a.setLatitud(rs.getDouble("latitud"));
+            a.setLongitud(rs.getDouble("longitud"));
+            // Si tienes estos atributos en tu clase, descoméntalos:
+            // a.setCiudad(rs.getString("ciudad"));
+            // a.setHusoHorario(rs.getInt("huso_horario"));
+            // a.setCapacidad(rs.getInt("capacidad_almacen"));
+            return a;
+        });
+
+        // Llenamos la caché
         aeropuertoMapCache = aeropuertos.stream()
                 .collect(Collectors.toMap(Aeropuerto::getCodigo, a -> a));
 
-        vuelos = vueloParser.parse(Path.of(flightsFile), aeropuertoMapCache);
+        // 2. Cargamos Vuelos desde AWS
+        String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima FROM VUELO";
+        vuelos = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
+            Vuelo v = new Vuelo();
+            v.setId(rowNum + 1);
+            // Revisa si tu clase Vuelo guarda un String o el Objeto Aeropuerto entero:
+            // Si guarda Strings:
+            // v.setOrigen(rs.getString("icao_origen"));
+            // v.setDestino(rs.getString("icao_destino"));
+            // Si guarda Objetos:
+            // v.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
+            // v.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
+            
+            // v.setHoraSalida(rs.getString("hora_salida"));
+            // v.setHoraLlegada(rs.getString("hora_llegada"));
+            // v.setCapacidad(rs.getInt("capacidad_maxima"));
+            return v;
+        });
 
-        // 2. Resumen consultado directamente a PostgreSQL
-        log.info("=================================================");
-        log.info("RESUMEN DE DATOS (AEROPUERTOS/VUELOS EN RAM, ENVÍOS EN POSTGRESQL)");
-        log.info("Aeropuertos : {}", aeropuertos.size());
-        log.info("Vuelos      : {}", vuelos.size());
+        // 3. Resumen consultado directamente a PostgreSQL
+        log.info("Aeropuertos en RAM : {}", aeropuertos.size());
+        log.info("Vuelos en RAM      : {}", vuelos.size());
         
         try {
             Long totalEnvios = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM ENVIO", Long.class);
@@ -76,7 +92,7 @@ public class DataLoader {
                 log.info("Rango en BD : {} → {}", primera, ultima);
             }
         } catch (Exception e) {
-            log.warn("No se pudo obtener el resumen de envíos. ¿Está PostgreSQL apagado o la tabla vacía? {}", e.getMessage());
+            log.warn("No se pudo obtener el resumen de envíos. {}", e.getMessage());
         }
         log.info("=================================================");
     }
@@ -91,10 +107,6 @@ public class DataLoader {
         return ts != null ? ts.toLocalDateTime() : null;
     }
 
-    /**
-     * Ahora la base de datos hace el trabajo pesado de buscar por rango de fechas
-     * y ordenar, devolviendo solo el fragmento exacto que el ALNS/ACO necesita.
-     */
     public List<Maleta> getMaletasEnRango(LocalDateTime desde, LocalDateTime hasta) {
         if (desde == null || hasta == null || !desde.isBefore(hasta)) {
             return Collections.emptyList();
@@ -109,14 +121,9 @@ public class DataLoader {
 
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
             Maleta m = new Maleta();
-            
-            // Convertimos el String de PostgreSQL al Integer que pide tu clase
-            // Leemos el ID de la base de datos (ej. "SGAS-000000001")
             String dbId = rs.getString("id_envio");
-            // Le cortamos el prefijo para quedarnos solo con el número original
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
-            
             m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
 
@@ -141,14 +148,9 @@ public class DataLoader {
                      
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
             Maleta m = new Maleta();
-            
-            // Mismo cambio aquí
-            // Leemos el ID de la base de datos (ej. "SGAS-000000001")
             String dbId = rs.getString("id_envio");
-            // Le cortamos el prefijo para quedarnos solo con el número original
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
-            
             m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
 
@@ -169,7 +171,7 @@ public class DataLoader {
     }
 
     public int getTotalEnvios() {
-        return getTotalMaletas(); // Compatibilidad legacy
+        return getTotalMaletas(); 
     }
 
     public long getTotalMaletasIndividuales() {
