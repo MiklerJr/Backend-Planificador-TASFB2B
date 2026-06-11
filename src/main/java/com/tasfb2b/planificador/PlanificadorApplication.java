@@ -39,15 +39,14 @@ public class PlanificadorApplication {
     }
 
 
-    @Bean
+    /* @Bean
     CommandLineRunner initDatabase(MigradorEnviosDb migrador) {
         return args -> {
             // Pon aquí la ruta absoluta de tu computadora
-            String ruta = "E:\\Codes\\GIT\\Backend-Planificador-TASFB2B\\data\\_envios_preliminar_";
-            
+            String ruta = "E:\\Codes\\GIT\\Backend-Planificador-TASFB2B\\data\\planes_vuelo.txt";
             System.out.println("Iniciando migración masiva a PostgreSQL...");
             // Descomenta la línea de abajo SOLO CUANDO QUIERAS LLENAR LA BASE DE DATOS
-            migrador.migrarDirectorioCompleto(ruta);
+            migrador.migrarVuelos(ruta);
         };
-    }
+    } */
 }
