@@ -35,6 +35,7 @@ planificador:
     k-default-3: 75
     umbral-colapso: 0.01
     umbral-colapso-backlog: 1000
+    simular-tiempo-real-1: true            # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
     simular-tiempo-real-2: true           # El perfil smoke pondrá esto en false
     simular-tiempo-real-3: true
     # Fase T (N3): pre-calienta la caché de esqueletos con la demanda de la ventana antes del bucle
@@ -92,6 +93,5 @@ planificador:
   benchmark:
     # Configuramos el grid para que no sea infinito
     k-grid: [7, 14, 28, 40]
-    cancel-prob-grid: [0.0]
     repeticiones: 1
     timeout-minutos: 90
