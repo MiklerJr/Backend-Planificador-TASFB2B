@@ -4,6 +4,7 @@ import com.tasfb2b.planificador.dto.SimulacionResponse;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -75,6 +76,31 @@ class PlanificadorVuelosUsadosTest {
         assertTrue(response.getVuelos().isEmpty());
     }
 
+    /**
+     * Regresión del eje temporal: flightKey, fechaSalida y fechaLlegada deben salir de
+     * salidaUtc/llegadaUtc (eje global del mapa), NO de las horas locales (que mezclan husos:
+     * salida local del origen, llegada local del destino). El helper pone las locales a +5h.
+     */
+    @Test
+    void flightKeyYFechasUsanElEjeUtcNoElLocal() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorService service = serviceConJobs(jobs);
+        JobState job = jobs.crear("2", 14);
+
+        SimulacionResponse.TramoRuta tramo = tramo("LA2450", "SPIM", "SKBO",
+                "2026-05-19T10:00:00", "2026-05-19T13:00:00");
+        job.publicarBloque(bloque(0, asignacion("BATCH-001", 40, tramo)));
+
+        VuelosUsadosResponse.VueloUsado vuelo =
+                service.getVuelosUsadosJob(job.getJobId(), 0).getVuelos().get(0);
+
+        assertEquals("2026-05-19T10:00:00", vuelo.getFechaSalida(), "fechaSalida = salidaUtc");
+        assertEquals("2026-05-19T13:00:00", vuelo.getFechaLlegada(), "fechaLlegada = llegadaUtc");
+        assertEquals("LA2450|2026-05-19T10:00:00", vuelo.getFlightKey(), "flightKey en eje UTC");
+        assertEquals(LocalDateTime.of(2026, 5, 19, 15, 0), LocalDateTime.parse(tramo.getSalidaLocal()),
+                "sanidad: la hora local difiere de la UTC, así que el eje queda fijado");
+    }
+
     private static PlanificadorService serviceConJobs(JobsRegistry jobs) {
         return new PlanificadorService(null, null, null, jobs,
                 null, null, null, null, null);
@@ -105,18 +131,25 @@ class PlanificadorVuelosUsadosTest {
         return asignacion;
     }
 
+    /**
+     * Tramo con salida/llegada en UTC (el eje que usa el endpoint) y horas LOCALES deliberadamente
+     * DISTINTAS (+5h): si vuelos/usados volviera a leer los {@code *Local}, los flightKey y fechas
+     * esperados por estos tests dejarían de coincidir (regresión del eje temporal).
+     */
     private static SimulacionResponse.TramoRuta tramo(
             String vueloId,
             String origen,
             String destino,
-            String salida,
-            String llegada) {
+            String salidaUtc,
+            String llegadaUtc) {
         SimulacionResponse.TramoRuta tramo = new SimulacionResponse.TramoRuta();
         tramo.setVueloId(vueloId);
         tramo.setOrigen(origen);
         tramo.setDestino(destino);
-        tramo.setSalidaLocal(salida);
-        tramo.setLlegadaLocal(llegada);
+        tramo.setSalidaUtc(salidaUtc);
+        tramo.setLlegadaUtc(llegadaUtc);
+        tramo.setSalidaLocal(LocalDateTime.parse(salidaUtc).plusHours(5).toString());
+        tramo.setLlegadaLocal(LocalDateTime.parse(llegadaUtc).plusHours(5).toString());
         return tramo;
     }
 }
