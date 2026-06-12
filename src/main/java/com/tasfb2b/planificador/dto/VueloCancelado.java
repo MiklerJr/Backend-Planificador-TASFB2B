@@ -8,8 +8,10 @@ import java.time.LocalDateTime;
 
 /**
  * Registro de un vuelo cancelado por orden del usuario durante una corrida. Se acumula a lo largo de
- * la simulación y se vuelca como un CSV ({@code <jobId>-vuelos-cancelados.csv}) dentro del ZIP de
- * auditoría para dejar trazabilidad de qué se canceló y cuántos envíos se vieron afectados.
+ * la simulación y se expone EN VIVO al front ({@code vuelosCancelados} de
+ * {@code GET /jobs/{id}/estado} y de {@code GET /escenario1/estado}) para que retire del mapa los
+ * vuelo-días cancelados; al final se vuelca como CSV ({@code <jobId>-vuelos-cancelados.csv}) dentro
+ * del ZIP de auditoría. {@code fechaHoraSalida} está en la hora local del vuelo (eje del request).
  */
 @Data
 @NoArgsConstructor

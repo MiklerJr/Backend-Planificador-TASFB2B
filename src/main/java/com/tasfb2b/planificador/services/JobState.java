@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.VueloCancelado;
 import lombok.Data;
 
 import java.nio.file.Path;
@@ -154,6 +155,15 @@ public class JobState {
     public void encolarCancelacionVuelo(CancelacionVueloRequest orden) {
         if (orden != null) cancelacionesVueloPendientes.add(orden);
     }
+
+    /**
+     * Cancelaciones de vuelo YA APLICADAS por el worker (con sus envíos afectados), en orden de
+     * aplicación. La expone {@code GET /jobs/{id}/estado} para que el front sepa qué vuelo-días
+     * dejaron de existir y deje de animarlos — antes solo eran visibles en el CSV de auditoría
+     * final. {@code fechaHoraSalida} está en la hora local del vuelo (el mismo eje que el request
+     * de cancelación). El worker escribe y el front lee concurrentemente: CopyOnWriteArrayList.
+     */
+    private final List<VueloCancelado> vuelosCancelados = new CopyOnWriteArrayList<>();
 
     /** Cola de cancelaciones de vuelo pendientes (la drena el worker del job). */
     public Queue<CancelacionVueloRequest> getCancelacionesVueloPendientes() {

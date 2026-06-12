@@ -98,6 +98,10 @@ public class PlanificadorService {
     // /escenario1/cancelar-vuelo encola aquí y procesarSiguienteVentana las drena.
     private final java.util.Queue<CancelacionVueloRequest> sc1CancelacionesVuelo =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
+    // Cancelaciones YA aplicadas en E1 incremental (con envíos afectados); las expone
+    // GET /escenario1/estado para que el front retire del mapa los vuelo-días cancelados.
+    private final List<VueloCancelado> sc1VuelosCancelados =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
     public PlanificadorService(DataLoader dataLoader,
@@ -329,7 +333,9 @@ public class PlanificadorService {
      * Devuelve al backlog (como replanificables) los envíos ya comprometidos cuya ruta usa alguno de
      * los {@code edgesCancelados} en el día {@code epochDay}. No libera capacidad aquí:
      * {@code procesarBloque} llama {@code releaseFromGlobal} + {@code clearRoute} al sacarlos del
-     * backlog, reutilizando el mecanismo de re-enrutamiento existente.
+     * backlog, reutilizando el mecanismo de re-enrutamiento existente. Si el envío VENCE antes de
+     * ser reprocesado, la liberación corre por el hook de descarte del backlog (ver
+     * {@code crearBacklogConPurga}) — sin él, la ruta rota quedaría cobrada para siempre.
      */
     private int reencolarAfectadosPorCancelacion(List<Edge> edgesCancelados, long epochDay,
                                                  BacklogManager backlog,
@@ -479,6 +485,12 @@ public class PlanificadorService {
         return body;
     }
 
+    /**
+     * Vuelos efectivamente usados por las asignaciones publicadas desde el bloque {@code desde}.
+     * Eje temporal: {@code flightKey}, {@code fechaSalida} y {@code fechaLlegada} están en UTC
+     * (mismo eje que {@code TramoRuta.salidaUtc} y {@code CargaVuelo.fechaSalida}), de modo que
+     * el front puede animar el vuelo-día sobre un reloj global sin mezclar husos.
+     */
     public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
         JobState job = getJob(jobId);
         if (job == null) return null;
@@ -505,8 +517,11 @@ public class PlanificadorService {
                     if (tramo == null) continue;
 
                     String vueloId = safe(tramo.getVueloId());
-                    String salida = safe(tramo.getSalidaLocal());
-                    String llegada = safe(tramo.getLlegadaLocal());
+                    // Eje UTC: flightKey y fechas del vuelo-día en el MISMO eje que TramoRuta.salidaUtc
+                    // y CargaVuelo.fechaSalida. Las horas locales mezclan husos (salida local del
+                    // origen vs llegada local del destino) y no sirven como eje del mapa.
+                    String salida = safe(tramo.getSalidaUtc());
+                    String llegada = safe(tramo.getLlegadaUtc());
                     String key = bloque.getBloqueIdx() + "|" + vueloId + "|" + salida;
 
                     VueloUsadoAccumulator vuelo = acc.computeIfAbsent(key, k -> {
@@ -748,8 +763,9 @@ public class PlanificadorService {
 
         // Cancelaciones de vuelo: ya no se sortean al azar. Se aplican en vivo cuando el usuario
         // las ordena desde el front (ver aplicarCancelacionesVuelo). Acumula el total ordenado.
+        // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
         int totalVuelosCancelados = 0;
-        List<VueloCancelado> vuelosCancelados = new ArrayList<>();
+        List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
         Map<String, int[]> odStats = new HashMap<>();
@@ -760,7 +776,7 @@ public class PlanificadorService {
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal2();
         long saMs = saMin * 60_000L;
         // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
-        BacklogManager backlog = crearBacklogConPurga();
+        BacklogManager backlog = crearBacklogConPurga(enrutador);
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         // ── Fase warm-up ────────────────────────────────────────────────────
@@ -978,9 +994,10 @@ public class PlanificadorService {
         sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
         sc1Maletas = 0L;
         sc1TaStats = new TaStats();
-        sc1Backlog = crearBacklogConPurga(); // G2: purga activa (acota backlog)
+        sc1Backlog = crearBacklogConPurga(sc1Enrutador); // G2: purga activa (acota backlog)
         sc1Bloques = new ArrayList<>();
         sc1AuditAcc = new LinkedHashMap<>();
+        sc1VuelosCancelados.clear();
         sc1Motor = motorRes;
         sc1Seed = seedRes;
         sc1OdStats.clear();
@@ -1357,7 +1374,8 @@ public class PlanificadorService {
 
         // Cancelaciones de vuelo ordenadas por el usuario en vivo (E1 incremental). El modo
         // incremental no genera ZIP de auditoría, por eso no se registra la lista (null).
-        aplicarCancelacionesVuelo(sc1CancelacionesVuelo, sc1Graph, sc1Enrutador, sc1Backlog, sc1AuditAcc, null);
+        aplicarCancelacionesVuelo(sc1CancelacionesVuelo, sc1Graph, sc1Enrutador, sc1Backlog, sc1AuditAcc,
+                sc1VuelosCancelados);
 
         Random rngBloque = rngParaBloque(sc1Seed, sc1Motor, ctx.bloqueIdx);
         ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog, sc1AuditAcc, sc1Motor, rngBloque);
@@ -1419,7 +1437,8 @@ public class PlanificadorService {
                 "totalSinRuta", sc1SinRuta,
                 "totalCumpleSLA", sc1CumpleSLA,
                 "totalTardadas", sc1Tardadas,
-                "totalMaletas", sc1Maletas
+                "totalMaletas", sc1Maletas,
+                "vuelosCancelados", List.copyOf(sc1VuelosCancelados)
         );
     }
 
@@ -1463,8 +1482,9 @@ public class PlanificadorService {
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
         // Cancelaciones de vuelo: solo por orden del usuario en vivo (ver aplicarCancelacionesVuelo).
+        // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
         int totalVuelosCancelados = 0;
-        List<VueloCancelado> vuelosCancelados = new ArrayList<>();
+        List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(plan.size());
         Map<String, int[]> odStats = new HashMap<>();
@@ -1476,7 +1496,7 @@ public class PlanificadorService {
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
         // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
-        BacklogManager backlog = crearBacklogConPurga();
+        BacklogManager backlog = crearBacklogConPurga(enrutador);
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         int intervaloReporte = Math.max(1, totalBloques / 10);
         boolean colapsoAlmacenDetectado = false;   // E1 se detiene ante colapso de almacén.
@@ -1649,7 +1669,8 @@ public class PlanificadorService {
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
 
         // Cancelaciones de vuelo: solo por orden del usuario en vivo (ver aplicarCancelacionesVuelo).
-        List<VueloCancelado> vuelosCancelados = new ArrayList<>();
+        // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
+        List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
 
         List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>();
         Map<String, int[]> odStats = new HashMap<>();
@@ -1668,7 +1689,7 @@ public class PlanificadorService {
         int totalBloques = plan.size();
         // E3 con purga activa: los envios cuyo SLA vence (readyTime+SLA) sin entrega
         // on-time pasan a sinRutaDefinitivo y disparan el colapso (Politica 1).
-        BacklogManager backlog = crearBacklogConPurga();
+        BacklogManager backlog = crearBacklogConPurga(enrutador);
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
         for (TemporalContext ctx : plan) {
@@ -2127,12 +2148,14 @@ public class PlanificadorService {
         bloque.setMaletasProcesadas(finalBatches.size());
         bloque.setMaletasEnrutadas(enrutadas);
         bloque.setAsignaciones(asignaciones);
-        bloque.setCargasVuelos(buildCargasVuelos(telemetryFlight, graph));
-        bloque.setOcupacionAlmacenes(buildOcupacionAlmacenes(telemetryAirport, graph));
+        // El bloque ya fue commiteado a la ocupación global ⇒ la telemetría reporta el ACUMULADO
+        // (global incluye este bloque) de cada recurso tocado, no el delta del bloque.
+        bloque.setCargasVuelos(buildCargasVuelos(telemetryFlight, graph, enrutador));
+        bloque.setOcupacionAlmacenes(buildOcupacionAlmacenes(telemetryAirport, graph, enrutador));
         bloque.setBloqueIdx(ctx.bloqueIdx);
         bloque.setTaMs(ctx.taMs);
         bloque.setScMinutos(ctx.scMinutos);
-        llenarAcumuladosFisicos(bloque, auditAcc, ctx.scEnd);
+        llenarAcumuladosFisicos(bloque, auditAcc);
 
         // Alerta de colapso INMINENTE (pre-colapso): precursores de los 2 criterios reales.
         var pre = enrutador.evaluarPreColapso(
@@ -2548,7 +2571,12 @@ public class PlanificadorService {
         return derivarOcupacionesDesdeAsignaciones(bloque);
     }
 
-    private List<SimulacionResponse.CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Graph graph) {
+    // Package-private para tests (telemetría por bloque vs ocupación acumulada).
+    // El mapa del bloque selecciona QUÉ vuelos-día reportar (los tocados en este bloque); la carga
+    // reportada es la ACUMULADA global del enrutador, que tras commitBlock ya incluye el bloque.
+    // Sin enrutador (legacy/tests) se reporta el delta del bloque, como antes del fix.
+    List<SimulacionResponse.CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Graph graph,
+                                                          GreedyRepairOperator enrutador) {
         if (blockFlight == null || blockFlight.isEmpty() || graph == null) return List.of();
 
         Map<Integer, Edge> edgesByIdx = new HashMap<>();
@@ -2556,7 +2584,9 @@ public class PlanificadorService {
 
         List<SimulacionResponse.CargaVuelo> out = new ArrayList<>();
         for (Map.Entry<Long, Integer> entry : blockFlight.entrySet()) {
-            int carga = entry.getValue();
+            int carga = enrutador != null
+                    ? enrutador.ocupacionGlobalVuelo(entry.getKey())
+                    : entry.getValue();
             if (carga <= 0) continue;
             Edge edge = edgesByIdx.get(resourceIdx(entry.getKey()));
             if (edge == null) continue;
@@ -2582,8 +2612,13 @@ public class PlanificadorService {
         return out;
     }
 
-    private List<SimulacionResponse.OcupacionAlmacen> buildOcupacionAlmacenes(Map<Long, Integer> blockAirport,
-                                                                               Graph graph) {
+    // Package-private para tests (telemetría por bloque vs ocupación acumulada).
+    // El mapa del bloque selecciona QUÉ slots reportar (los tocados en este bloque); la ocupación
+    // reportada es la ACUMULADA global del enrutador (tras commitBlock incluye el bloque, más la
+    // espera en origen del backlog). Sin enrutador (legacy/tests) se reporta el delta del bloque.
+    List<SimulacionResponse.OcupacionAlmacen> buildOcupacionAlmacenes(Map<Long, Integer> blockAirport,
+                                                                       Graph graph,
+                                                                       GreedyRepairOperator enrutador) {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
 
         Map<Integer, Node> nodesByIdx = new HashMap<>();
@@ -2594,7 +2629,9 @@ public class PlanificadorService {
         // (la métrica con sentido frente a la capacidad: cuántas maletas hubo a la vez ese día).
         Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();   // clave (nodeIdx, epochDay) → pico
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
-            int ocupacion = entry.getValue();
+            int ocupacion = enrutador != null
+                    ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
+                    : entry.getValue();
             if (ocupacion <= 0) continue;
             int nodeIdx = resourceIdx(entry.getKey());
             long slot = entry.getKey() & FlightKeyEncoder.DAY_MASK;   // índice de slot (epochMin/60)
@@ -2631,7 +2668,9 @@ public class PlanificadorService {
             if (!asignacion.isEnrutada() || asignacion.getTramos() == null) continue;
             for (SimulacionResponse.TramoRuta tramo : asignacion.getTramos()) {
                 String vueloId = safe(tramo.getVueloId());
-                String salida = safe(tramo.getSalidaLocal());
+                // Eje UTC, igual que buildCargasVuelos: el mismo campo no puede cambiar de eje
+                // según el camino (principal vs fallback legacy).
+                String salida = safe(tramo.getSalidaUtc());
                 String key = vueloId + "|" + salida;
                 SimulacionResponse.CargaVuelo dto = acc.computeIfAbsent(key, k -> {
                     SimulacionResponse.CargaVuelo nuevo = new SimulacionResponse.CargaVuelo();
@@ -2639,7 +2678,7 @@ public class PlanificadorService {
                     nuevo.setOrigen(safe(tramo.getOrigen()));
                     nuevo.setDestino(safe(tramo.getDestino()));
                     nuevo.setFechaSalida(salida);
-                    nuevo.setFechaLlegada(safe(tramo.getLlegadaLocal()));
+                    nuevo.setFechaLlegada(safe(tramo.getLlegadaUtc()));
                     nuevo.setCapacidadMaxima(capacidades.getOrDefault(vueloId, 0));
                     return nuevo;
                 });
@@ -2665,7 +2704,9 @@ public class PlanificadorService {
             SimulacionResponse.TramoRuta ultimo =
                     asignacion.getTramos().get(asignacion.getTramos().size() - 1);
             String aeropuerto = safe(ultimo.getDestino());
-            String fecha = fechaDe(ultimo.getLlegadaLocal());
+            // Eje UTC: el camino principal (buildOcupacionAlmacenes) deriva la fecha del
+            // almacén-día del slot UTC; el fallback debe usar el mismo eje.
+            String fecha = fechaDe(ultimo.getLlegadaUtc());
             String key = aeropuerto + "|" + fecha;
             SimulacionResponse.OcupacionAlmacen dto = acc.computeIfAbsent(key, k -> {
                 SimulacionResponse.OcupacionAlmacen nuevo = new SimulacionResponse.OcupacionAlmacen();
@@ -2898,9 +2939,22 @@ public class PlanificadorService {
      * envios cuyo {@code readyTime + SLA} ya paso sin entrega on-time pasan a
      * {@code sinRutaDefinitivo} y dejan de reintentarse — esto acota el backlog y
      * libera Ta para los enrutables. En E3 ese vencimiento dispara el colapso.
+     *
+     * <p>El hook de descarte cierra el hueco de la liberación diferida (ver
+     * {@code reencolarAfectadosPorCancelacion}): si un replanificable con ruta rota
+     * por una cancelación vence ANTES de que un bloque lo reprocese, aquí se libera
+     * su ocupación global ({@code releaseFromGlobal} + {@code clearRoute}) para que
+     * la capacidad de los tramos posteriores y la estadía de almacén no queden
+     * cobradas para siempre. Las rutas válidas (replanificables preventivos) no se
+     * tocan: su entrega on-time sigue en pie y siguen contando como enrutadas.
      */
-    private static BacklogManager crearBacklogConPurga() {
-        return new BacklogManager(0, true);
+    private static BacklogManager crearBacklogConPurga(GreedyRepairOperator enrutador) {
+        return new BacklogManager(0, true, b -> {
+            if (enrutador.rutaUsaVueloCancelado(b)) {
+                enrutador.releaseFromGlobal(b);
+                b.clearRoute();
+            }
+        });
     }
 
     private static Random rngParaBloque(long seed, String motor, int bloqueIdx) {
@@ -2931,15 +2985,27 @@ public class PlanificadorService {
         return new TotalesUnicos(envios, enrutadas, sinRuta, cumpleSLA, tardadas, maletas);
     }
 
-    private static void llenarAcumuladosFisicos(SimulacionResponse.BloqueSimulacion bloque,
-                                                Map<String, LuggageBatch> auditAcc,
-                                                LocalDateTime corte) {
+    // Package-private para tests (eje temporal del corte de entregas).
+    // El corte de "entregadas" es el RELOJ UTC de la simulación: el máximo readyTime (UTC,
+    // normalizado por AlgorithmMapper) visto en el acumulador — el mismo concepto de reloj que
+    // usa reconstruirEsperaOrigenBacklog. Antes se usaba ctx.scEnd (eje de registro LOCAL,
+    // mezcla husos) comparado como si fuese UTC, lo que sesgaba la cuenta hasta ± el offset
+    // horario y podía contar entregas aún no ocurridas. Con el reloj UTC la cuenta es física
+    // y monótona; si no entran envíos nuevos el reloj se detiene en el último registro
+    // (subcuenta conservadora, nunca cuenta una entrega futura).
+    static void llenarAcumuladosFisicos(SimulacionResponse.BloqueSimulacion bloque,
+                                        Map<String, LuggageBatch> auditAcc) {
         if (bloque == null || auditAcc == null || auditAcc.isEmpty()) return;
+
+        long corteMin = Long.MIN_VALUE;
+        for (LuggageBatch b : auditAcc.values()) {
+            long readyMin = toEpochMin(b.getReadyTime());
+            if (readyMin > corteMin) corteMin = readyMin;
+        }
 
         long procesadas = 0L;
         long enrutadas = 0L;
         long entregadas = 0L;
-        long corteMin = toEpochMin(corte);
 
         for (LuggageBatch b : auditAcc.values()) {
             long cantidad = b.getQuantity();

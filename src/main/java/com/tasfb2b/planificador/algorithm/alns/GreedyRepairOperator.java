@@ -384,6 +384,26 @@ public class GreedyRepairOperator implements RepairOperator {
     }
 
     /**
+     * ¿La ruta asignada de este batch usa algún vuelo-día cancelado? Identifica rutas
+     * físicamente imposibles tras una cancelación en vivo, cuya ocupación global sigue
+     * commiteada hasta que el llamador la libere con {@link #releaseFromGlobal}.
+     */
+    public boolean rutaUsaVueloCancelado(LuggageBatch batch) {
+        if (batch == null || cancelledFlightDays.isEmpty()) return false;
+        List<Edge> route = batch.getAssignedRoute();
+        List<Long> deps  = batch.getAssignedDepartures();
+        if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
+            return false;
+        }
+        for (int i = 0; i < route.size(); i++) {
+            if (cancelledFlightDays.contains(flightKey(route.get(i).idx, deps.get(i)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Fase Origen-A — carga/libera ({@code signo}=+1/−1) la ocupación del almacén de ORIGEN durante
      * la espera del envío CON ruta antes de su primer vuelo: {@code [readyTime, primerVuelo)}.
      */
@@ -947,6 +967,26 @@ public class GreedyRepairOperator implements RepairOperator {
              - airportOccupancy.getOrDefault(key, 0)
              - blockAirport.getOrDefault(key, 0)
              - backlogOrigenOcc.getOrDefault(key, 0);
+    }
+
+    /**
+     * Ocupación global acumulada de un vuelo-día (clave de {@link FlightKeyEncoder#flightKey}).
+     * Tras {@link #commitBlock} incluye el bloque recién confirmado: es la carga total con la que
+     * la telemetría debe reportar el vuelo-día (no el delta de un bloque).
+     */
+    public int ocupacionGlobalVuelo(long flightKey) {
+        return flightOccupancy.getOrDefault(flightKey, 0);
+    }
+
+    /**
+     * Ocupación global acumulada de un slot de almacén (clave de {@link #claveAlmacenDeSlot}).
+     * Suma las estadías commiteadas y la espera en origen del backlog sin ruta
+     * ({@code backlogOrigenOcc}) — los mismos sumandos que el modelo interno resta en
+     * {@link #capacidadAlmacen} — para que la telemetría vea la presión real del slot.
+     */
+    public int ocupacionGlobalAlmacen(long slotKey) {
+        return airportOccupancy.getOrDefault(slotKey, 0)
+             + backlogOrigenOcc.getOrDefault(slotKey, 0);
     }
 
     /**

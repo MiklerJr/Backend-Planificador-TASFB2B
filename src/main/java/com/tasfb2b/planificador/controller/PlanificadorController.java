@@ -365,6 +365,10 @@ public class PlanificadorController {
         if (job.error != null) body.put("error", job.error);
         // Alerta de colapso INMINENTE (pre-colapso) del último bloque, si existe.
         if (job.alertaColapso != null) body.put("alertaColapso", job.alertaColapso);
+        // Cancelaciones de vuelo YA aplicadas (con envíos afectados), en orden de aplicación.
+        // Permite al front marcar/retirar del mapa los vuelo-días cancelados sin esperar la
+        // auditoría final. fechaHoraSalida está en la hora local del vuelo (eje del request).
+        body.put("vuelosCancelados", job.getVuelosCancelados());
         return ResponseEntity.ok(body);
     }
 
