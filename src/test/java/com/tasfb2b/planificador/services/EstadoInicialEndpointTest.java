@@ -1,0 +1,75 @@
+package com.tasfb2b.planificador.services;
+
+import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.controller.PlanificadorController;
+import com.tasfb2b.planificador.dto.SimulacionResponse;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.ResponseEntity;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+/**
+ * Contrato de {@code GET /jobs/{jobId}/estado-inicial}: 404 si el job no existe; 204 mientras el
+ * snapshot no está calculado (job encolado/calentando); 200 con las asignaciones activas al
+ * llegar a fechaInicio (lista vacía si el job no tuvo warm-up, p. ej. E2 que arranca en frío).
+ */
+class EstadoInicialEndpointTest {
+
+    @Test
+    void jobInexistenteDevuelve404() {
+        PlanificadorController controller = controllerCon(new JobsRegistry());
+        assertEquals(404, controller.estadoInicialJob("no-existe").getStatusCode().value());
+    }
+
+    @Test
+    void mientrasNoHaySnapshotDevuelve204() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorController controller = controllerCon(jobs);
+        JobState job = jobs.crear("1", 1);   // recién creado: estadoInicial aún null
+
+        assertEquals(204, controller.estadoInicialJob(job.getJobId()).getStatusCode().value());
+    }
+
+    @Test
+    void conSnapshotDevuelveLasAsignacionesActivas() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorController controller = controllerCon(jobs);
+        JobState job = jobs.crear("3", 75);
+
+        SimulacionResponse.AsignacionMaleta enElAire = new SimulacionResponse.AsignacionMaleta();
+        enElAire.setBatchId("B1");
+        enElAire.setEnrutada(true);
+        job.estadoInicial = List.of(enElAire);
+
+        ResponseEntity<Map<String, Object>> respuesta = controller.estadoInicialJob(job.getJobId());
+        assertEquals(200, respuesta.getStatusCode().value());
+        assertEquals(1, respuesta.getBody().get("total"));
+        @SuppressWarnings("unchecked")
+        List<SimulacionResponse.AsignacionMaleta> asignaciones =
+                (List<SimulacionResponse.AsignacionMaleta>) respuesta.getBody().get("asignaciones");
+        assertEquals("B1", asignaciones.get(0).getBatchId());
+    }
+
+    @Test
+    void jobSinWarmupDevuelveListaVacia() {
+        JobsRegistry jobs = new JobsRegistry();
+        PlanificadorController controller = controllerCon(jobs);
+        JobState job = jobs.crear("2", 14);
+        job.estadoInicial = List.of();   // E2 (o E1/E3 sin fechaInicio): sin warm-up
+
+        ResponseEntity<Map<String, Object>> respuesta = controller.estadoInicialJob(job.getJobId());
+        assertEquals(200, respuesta.getStatusCode().value());
+        assertEquals(0, respuesta.getBody().get("total"));
+    }
+
+    // ----------------------------------------------------------------------- helpers
+
+    private static PlanificadorController controllerCon(JobsRegistry jobs) {
+        PlanificadorService service = new PlanificadorService(null, null, null, jobs,
+                null, null, null, null, null);
+        return new PlanificadorController(service, new PlanificadorProperties());
+    }
+}
