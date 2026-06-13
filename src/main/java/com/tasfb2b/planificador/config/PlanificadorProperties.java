@@ -46,7 +46,7 @@ public class PlanificadorProperties {
         /** K por defecto para escenario de período (3/5/7 días). */
         private int kDefault2 = 14;
         /** K por defecto para escenario hasta colapso. */
-        private int kDefault3 = 75;
+        private int kDefault3 = 144;
         /** Tasa de sinRuta por bloque que dispara el flag de colapso (escenario 3). */
         private double umbralColapso = 0.20;
         /** Tope absoluto de backlog que también dispara colapso por saturación. */
