@@ -71,37 +71,9 @@ public class PlanificadorService {
     private volatile Map<String, Integer> offsetPorCodigo = null;
 
     // ── ESTADO ESCENARIOS ALNS ──────────────────────────────────────────
+    // (El modo E1 incremental paso a paso y su estado sc1* fueron eliminados: E1 corre
+    //  únicamente como job asíncrono, igual que E2/E3.)
     private volatile List<SimulacionResponse.BloqueSimulacion> bloquesCacheados = null;
-    private volatile Graph sc1Graph = null;
-    private volatile GreedyRepairOperator sc1Enrutador = null;
-    private volatile AlnsSolution sc1Dummy = null;
-    private volatile List<TemporalContext> sc1Plan = null;
-    private volatile int sc1Idx = 0;
-    // E1 incremental: true cuando un colapso de almacén detuvo el escenario 1 (no se procesan más ventanas).
-    private volatile boolean sc1Colapso = false;
-    // E1 incremental: último nivel de alerta logueado (throttle de consola).
-    private volatile String sc1NivelAlertaPrevio = AlertaColapso.VERDE;
-    private volatile int sc1Envios = 0;
-    private volatile int sc1Enrutadas = 0;
-    private volatile int sc1SinRuta = 0;
-    private volatile int sc1CumpleSLA = 0;
-    private volatile int sc1Tardadas = 0;
-    private volatile long sc1Maletas = 0L;
-    private volatile TaStats sc1TaStats = new TaStats();
-    private volatile BacklogManager sc1Backlog = null;
-    private volatile List<SimulacionResponse.BloqueSimulacion> sc1Bloques = new ArrayList<>();
-    private volatile Map<String, LuggageBatch> sc1AuditAcc = new LinkedHashMap<>();
-    private volatile String sc1Motor = MOTOR_ALNS;
-    private volatile long sc1Seed = 0L;
-    private final Map<String, int[]> sc1OdStats = new HashMap<>();
-    // Cancelaciones de vuelo en vivo del modo incremental de E1 (no usa JobState). El endpoint
-    // /escenario1/cancelar-vuelo encola aquí y procesarSiguienteVentana las drena.
-    private final java.util.Queue<CancelacionVueloRequest> sc1CancelacionesVuelo =
-            new java.util.concurrent.ConcurrentLinkedQueue<>();
-    // Cancelaciones YA aplicadas en E1 incremental (con envíos afectados); las expone
-    // GET /escenario1/estado para que el front retire del mapa los vuelo-días cancelados.
-    private final List<VueloCancelado> sc1VuelosCancelados =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
     public PlanificadorService(DataLoader dataLoader,
@@ -132,10 +104,14 @@ public class PlanificadorService {
     /**
      * Lanza el escenario 2 con todos los parámetros de {@link EjecucionParams}.
      * Cualquier campo null se completa con el default del yaml.
+     *
+     * <p><b>K es FIJO en el escenario 2 (regla de negocio: 144)</b>: se ignora cualquier
+     * {@code params.k} entrante y se usa siempre el del yaml. Las herramientas internas
+     * (Benchmark/Comparativa) conservan K libre porque llaman a {@code ejecutarALNS} directo.
      */
     public JobState iniciarEscenario2Async(EjecucionParams params) {
         if (params == null) params = new EjecucionParams();
-        int k = params.getK() != null ? params.getK() : props.getScenario().getKDefault2();
+        int k = props.getScenario().getKDefault2();   // K fijo del escenario, no negociable
         String motorRes = resolverMotor(params.getMotor());
         long seedRes = resolverSeed(params.getSeed());
 
@@ -159,15 +135,24 @@ public class PlanificadorService {
 
     /**
      * Análogo a {@link #iniciarEscenario2Async} pero para escenario 3.
+     * <b>K es FIJO en el escenario 3 (regla de negocio: 144)</b>: se resuelve del yaml.
      */
-    public JobState iniciarEscenario3Async(int k, double umbralColapso, String motor, Long seed) {
+    public JobState iniciarEscenario3Async(double umbralColapso, String motor, Long seed) {
+        return iniciarEscenario3Async(umbralColapso, motor, seed, null);
+    }
+
+    /** Variante con {@code fechaInicio}: warm-up (Ta sin sleep) hasta esa fecha y E3 desde ahí. */
+    public JobState iniciarEscenario3Async(double umbralColapso, String motor, Long seed,
+                                           LocalDateTime fechaInicio) {
+        int k = props.getScenario().getKDefault3();   // K fijo del escenario, no negociable
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         JobState job = jobs.crear("3", k);
         job.algoritmo = motorRes;
         job.seed = seedRes;
+        job.fechaInicio = fechaInicio;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes);
+            SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
             job.resultado = res;
         });
         return job;
@@ -179,17 +164,49 @@ public class PlanificadorService {
      * {@code simularTiempoReal1=true}, replicando el ritmo real.
      */
     public JobState iniciarEscenario1Async(String motor, Long seed) {
+        return iniciarEscenario1Async(motor, seed, null);
+    }
+
+    /** Variante con {@code fechaInicio}: warm-up (Ta sin sleep) hasta esa fecha y E1 desde ahí. */
+    public JobState iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1();
         JobState job = jobs.crear("1", k);
         job.algoritmo = motorRes;
         job.seed = seedRes;
+        job.fechaInicio = fechaInicio;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes);
+            SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaInicio);
             job.resultado = res;
         });
         return job;
+    }
+
+    /**
+     * Valida los parámetros de arranque de un escenario ANTES de encolar el job. Devuelve un
+     * mensaje de error legible (para un 400 del controller) o {@code null} si todo es válido.
+     * Tolerante a dataset no cargado (tests): en ese caso no valida el rango de fechaInicio.
+     */
+    public String validarParametrosEscenario(Integer k, Integer sa, Integer ta, LocalDateTime fechaInicio) {
+        if (k != null && k < 1) {
+            return "k debe ser >= 1 (recibido: " + k + ")";
+        }
+        if (sa != null && sa <= 0) {
+            return "sa (minutos) debe ser > 0 (recibido: " + sa + ")";
+        }
+        if (ta != null && ta <= 0) {
+            return "ta (segundos) debe ser > 0 (recibido: " + ta + ")";
+        }
+        if (fechaInicio != null && dataLoader != null) {
+            LocalDateTime primera = dataLoader.getPrimeraVentana();
+            LocalDateTime ultima = dataLoader.getUltimaVentana();
+            if (primera != null && ultima != null
+                    && (fechaInicio.isBefore(primera) || !fechaInicio.isBefore(ultima))) {
+                return "fechaInicio fuera del rango del dataset [" + primera + ", " + ultima + ")";
+            }
+        }
+        return null;
     }
 
     private static long resolverSeed(Long seed) {
@@ -253,20 +270,6 @@ public class PlanificadorService {
         if (!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) return false;
         job.encolarCancelacionVuelo(orden);
         log.info("Cancelación de vuelo encolada (job {}): {}->{} salida {}", jobId,
-                orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
-        return true;
-    }
-
-    /**
-     * Variante para el modo incremental de E1 (paso a paso, sin JobState). La orden se aplica al
-     * comienzo de la próxima {@link #procesarSiguienteVentana()}.
-     *
-     * @return true si se encoló; false si el escenario 1 no está inicializado.
-     */
-    public synchronized boolean solicitarCancelacionVueloEsc1(CancelacionVueloRequest orden) {
-        if (orden == null || sc1Graph == null) return false;
-        sc1CancelacionesVuelo.add(orden);
-        log.info("Cancelación de vuelo encolada (E1 incremental): {}->{} salida {}",
                 orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
         return true;
     }
@@ -381,6 +384,31 @@ public class PlanificadorService {
             info.put(a.getCodigo(), dto);
         }
         return info;
+    }
+
+    /**
+     * Catálogo estático de vuelos planeados del dataset cargado (la red completa, ~2.866 vuelos).
+     * Espejo de {@link #getAeropuertosInfo()}: pensado para que el front cachee la red al arrancar
+     * la sesión y pre-dibuje TODAS las aristas sin esperar a {@code /resultado} (que solo llega al
+     * final). Devuelve los horarios de plantilla base (sin desplazamiento de fecha); los horarios
+     * reales por día llegan en los tramos UTC de cada bloque. {@code cargaAsignada} siempre 0: la
+     * carga real es por bloque (ver {@code CargaVuelo} / {@code /jobs/{id}/vuelos/usados}).
+     */
+    public List<SimulacionResponse.VueloBackend> getVuelosPlaneados() {
+        List<Vuelo> vuelos = dataLoader.getVuelos();
+        List<SimulacionResponse.VueloBackend> out = new ArrayList<>(vuelos.size());
+        for (Vuelo v : vuelos) {
+            SimulacionResponse.VueloBackend vb = new SimulacionResponse.VueloBackend();
+            vb.setId(vueloFrontId(v));
+            vb.setOrigen(v.getOrigen());
+            vb.setDestino(v.getDestino());
+            vb.setFechaSalida(v.getFechaHoraSalida() != null ? v.getFechaHoraSalida().toString() : null);
+            vb.setFechaLlegada(v.getFechaHoraLlegada() != null ? v.getFechaHoraLlegada().toString() : null);
+            vb.setCapacidadMaxima(v.getCapacidad() != null ? v.getCapacidad() : 0);
+            vb.setCargaAsignada(0);
+            out.add(vb);
+        }
+        return out;
     }
 
     /**
@@ -782,40 +810,11 @@ public class PlanificadorService {
         // ── Fase warm-up ────────────────────────────────────────────────────
         // Se ejecuta el plan [primera-ventana, fechaInicio) compartiendo
         // graph/enrutador/backlog/odStats con la fase visible. Auditoría y
-        // métricas del warm-up van a un acumulador descartable.
-        if (!warmupPlan.isEmpty()) {
-            if (job != null) {
-                job.estado = "calentando";
-                job.totalBloquesWarmup = warmupPlan.size();
-                job.bloqueWarmup = 0;
-            }
-            Map<String, LuggageBatch> auditWarmup = new LinkedHashMap<>();
-            int intervaloWarmup = Math.max(1, warmupPlan.size() / 10);
-            long inicioWarmupMs = System.currentTimeMillis();
-            log.info("Warm-up iniciado: {} bloques hasta fechaInicio={}", warmupPlan.size(), fechaInicio);
-            int wIdx = 0;
-            for (TemporalContext ctx : warmupPlan) {
-                wIdx++;
-                Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
-                procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
-                        auditWarmup, motorRes, rngBloque, taFijoMs, true);
-                if (job != null) {
-                    job.bloqueWarmup = wIdx;
-                    if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
-                }
-                if (wIdx % intervaloWarmup == 0 || wIdx == warmupPlan.size()) {
-                    log.info("Warm-up ({}): {}% — {}/{} | backlog actual={}",
-                            motorRes, (int) Math.round(wIdx * 100.0 / warmupPlan.size()),
-                            wIdx, warmupPlan.size(), backlog.size());
-                }
-            }
-            log.info("Warm-up completado en {} ms (backlog={}, pico={})",
-                    System.currentTimeMillis() - inicioWarmupMs,
-                    backlog.size(), backlog.picoHistorico());
-            if (job != null && !("cancelado".equals(job.estado) || job.canceladoPorUsuario)) {
-                job.estado = "ejecutando";
-            }
-        }
+        // métricas del warm-up van a un acumulador descartable; del acumulador
+        // se deriva el estado inicial para el front (aviones aún en el aire).
+        Map<String, LuggageBatch> auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
+                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
+        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
 
         // Fase T (N3) — pre-calienta la caché de esqueletos con la demanda de toda la ventana antes
         // del bucle de bloques: mueve el costo del Dijkstra FUERA del presupuesto Ta (sube throughput
@@ -861,6 +860,7 @@ public class PlanificadorService {
                 // Publicación incremental: el front lo consume con
                 // GET /jobs/{jobId}/bloques?desde=N para dibujar en tiempo real.
                 job.publicarBloque(rv.bloque);
+                job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.alertaColapso = rv.alerta();
                 // Parada por orden del front: el usuario llamó a /cancelar. Igual que E1/E3,
                 // así E2 termina de inmediato (aunque simularTiempoReal2=false) y llega a
@@ -963,55 +963,6 @@ public class PlanificadorService {
     public SimulacionResponse.BloqueSimulacion getBloque(int index) {
         if (bloquesCacheados == null || index < 0 || index >= bloquesCacheados.size()) return null;
         return bloquesCacheados.get(index);
-    }
-
-    // =========================================================
-    // Escenario 1: Día a día (ventana por ventana, con estado)
-    // =========================================================
-
-    /**
-     * Inicializa el estado del escenario 1. Debe llamarse antes de procesarSiguienteVentana().
-     */
-    public synchronized Map<String, Object> inicializarEscenario1() {
-        return inicializarEscenario1(MOTOR_ALNS, null);
-    }
-
-    public synchronized Map<String, Object> inicializarEscenario1(String motor, Long seed) {
-        String motorRes = resolverMotor(motor);
-        long seedRes = resolverSeed(seed);
-        int k = props.getScenario().getKDefault1(); // K=1 día a día
-        log.info("Escenario 1 — inicializando motor={} seed={} (K={}) ...",
-                motorRes, seedRes, k);
-
-        sc1Graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
-        sc1Enrutador = new GreedyRepairOperator(sc1Graph);
-        sc1Enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
-                props.getStorageAware().getPrecioHubExponente());   // Fase P
-        sc1Dummy = new AlnsSolution(Collections.emptyList());
-        sc1Idx = 0;
-        sc1Colapso = false;
-        sc1NivelAlertaPrevio = AlertaColapso.VERDE;
-        sc1Envios = sc1Enrutadas = sc1SinRuta = sc1CumpleSLA = sc1Tardadas = 0;
-        sc1Maletas = 0L;
-        sc1TaStats = new TaStats();
-        sc1Backlog = crearBacklogConPurga(sc1Enrutador); // G2: purga activa (acota backlog)
-        sc1Bloques = new ArrayList<>();
-        sc1AuditAcc = new LinkedHashMap<>();
-        sc1VuelosCancelados.clear();
-        sc1Motor = motorRes;
-        sc1Seed = seedRes;
-        sc1OdStats.clear();
-
-        sc1Plan = construirPlanBloques(k);
-        log.info("E1 listo: {} bloques", sc1Plan.size());
-
-        return Map.of(
-                "estado", "inicializado",
-                "totalVentanas", sc1Plan.size(),
-                "ventanaActual", 0,
-                "motor", motorRes,
-                "seed", seedRes
-        );
     }
 
     public ResumenPlanificacionGlobal procesarTodosLosOrigenes() {
@@ -1353,120 +1304,36 @@ public class PlanificadorService {
 
 
     /**
-     * Procesa la siguiente ventana del escenario 1 y devuelve su bloque.
-     * Devuelve null cuando todas las ventanas han sido procesadas.
-     * Lanza IllegalStateException si no se ha llamado a inicializarEscenario1() antes.
-     */
-    public synchronized SimulacionResponse.BloqueSimulacion procesarSiguienteVentana() {
-        if (sc1Graph == null)
-            throw new IllegalStateException("Escenario 1 no inicializado — llame a /escenario1/inicializar primero");
-        if (sc1Plan == null || sc1Idx >= sc1Plan.size()) {
-            log.info("E1 completo: todos los bloques procesados");
-            return null;
-        }
-        if (sc1Colapso) {
-            log.info("E1 detenido por colapso de almacén — no se procesan más ventanas");
-            return null;
-        }
-
-        TemporalContext ctx = sc1Plan.get(sc1Idx);
-        sc1Idx++;
-
-        // Cancelaciones de vuelo ordenadas por el usuario en vivo (E1 incremental). El modo
-        // incremental no genera ZIP de auditoría, por eso no se registra la lista (null).
-        aplicarCancelacionesVuelo(sc1CancelacionesVuelo, sc1Graph, sc1Enrutador, sc1Backlog, sc1AuditAcc,
-                sc1VuelosCancelados);
-
-        Random rngBloque = rngParaBloque(sc1Seed, sc1Motor, ctx.bloqueIdx);
-        ResultadoVentana rv = procesarBloque(ctx, sc1Graph, sc1Enrutador, sc1Dummy, sc1OdStats, sc1Backlog, sc1AuditAcc, sc1Motor, rngBloque);
-        sc1Bloques.add(rv.bloque);
-        sc1TaStats.acumular(ctx.taMs);
-
-        sc1Envios += rv.envios;
-        sc1Enrutadas += rv.enrutadas;
-        sc1SinRuta += rv.sinRuta;
-        sc1CumpleSLA += rv.cumpleSLA;
-        sc1Tardadas += rv.tardadas;
-        sc1Maletas += rv.maletas;
-
-        // Propagar tasa sinRuta al siguiente bloque (para iteraciones dinámicas).
-        if (sc1Idx < sc1Plan.size()) {
-            double tasa = rv.envios > 0 ? (double) rv.sinRuta / rv.envios : 0.0;
-            sc1Plan.get(sc1Idx).tasaSinRutaPrevia = tasa;
-        }
-
-        // G2: purga por vencimiento (acota el backlog del escenario 1 por pasos).
-        if (sc1Backlog != null) sc1Backlog.purgarVencidas(ctx.scEnd);
-
-        logBloque(sc1Motor, sc1Idx, sc1Plan.size(),
-                rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs,
-                sc1Backlog != null ? sc1Backlog.size() : 0, rv.colapsoAlmacen());
-
-        // Colapso logístico por almacén lleno: DETIENE el escenario 1 (las próximas llamadas a
-        // procesarSiguienteVentana devolverán null). Este bloque (ya procesado) se devuelve igual.
-        if (rv.colapsoAlmacen()) {
-            sc1Colapso = true;
-            log.warn("E1 COLAPSO por almacén lleno en bloque {}/{} — {}",
-                    sc1Idx, sc1Plan.size(), rv.detalleColapso());
-        }
-        sc1NivelAlertaPrevio = avisarColapsoInminente("E1", rv.alerta(), sc1Idx, sc1NivelAlertaPrevio);
-
-        // Al terminar todos los bloques, emitir diagnóstico
-        if (sc1Idx == sc1Plan.size()) {
-            log.info("E1 finalizado — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms | backlog: pico={} actual={} definitivo={}",
-                    sc1Plan.size(), sc1Envios, sc1Maletas,
-                    sc1CumpleSLA, sc1Tardadas, sc1SinRuta,
-                    sc1TaStats.min(), sc1TaStats.promedio(), sc1TaStats.max(),
-                    sc1Backlog.picoHistorico(), sc1Backlog.size(), sc1Backlog.sinRutaDefinitivo());
-            logDiagnosticos(sc1OdStats, sc1Graph, sc1Enrutador);
-        }
-
-        return rv.bloque;
-    }
-
-    /**
-     * Devuelve el estado actual del escenario 1 sin avanzar la ventana.
-     */
-    public Map<String, Object> getEstadoEscenario1() {
-        return Map.of(
-                "inicializado", sc1Graph != null,
-                "ventanaActual", sc1Idx,
-                "totalVentanas", sc1Plan != null ? sc1Plan.size() : 0,
-                "totalEnvios", sc1Envios,
-                "totalEnrutadas", sc1Enrutadas,
-                "totalSinRuta", sc1SinRuta,
-                "totalCumpleSLA", sc1CumpleSLA,
-                "totalTardadas", sc1Tardadas,
-                "totalMaletas", sc1Maletas,
-                "vuelosCancelados", List.copyOf(sc1VuelosCancelados)
-        );
-    }
-
-    /**
-     * Devuelve un bloque ya procesado por índice (escenario 1).
-     */
-    public SimulacionResponse.BloqueSimulacion getBloqueEsc1(int index) {
-        if (sc1Bloques == null || index < 0 || index >= sc1Bloques.size()) return null;
-        return sc1Bloques.get(index);
-    }
-
-    /**
      * Ejecuta el escenario 1 como un job continuo: K=1 día-a-día, sleep
      * {@code Sa - Ta} entre bloques cuando {@code simularTiempoReal1=true}.
      * Publica bloques incrementalmente vía {@code JobState.publicarBloque} y
      * arma un {@link SimulacionResponse} agregado al final.
      */
     public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed) {
+        return ejecutarEscenario1(job, motor, seed, null);
+    }
+
+    /**
+     * Variante con {@code fechaInicio}: si es posterior a la primera ventana del dataset, se
+     * pre-calcula el período previo como warm-up (Ta como cota dura, SIN el sleep de Sa) y la
+     * fase visible arranca en fechaInicio respetando Sa. El estado inicial (aviones aún en el
+     * aire al llegar a fechaInicio) queda en {@code job.estadoInicial}.
+     */
+    public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed,
+                                                 LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         int k = props.getScenario().getKDefault1();
         int saMin = props.getScenario().getSaMinutos();
         long taFijoMs = props.getScenario().getTaSegundos() * 1000L;
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, async={}) ...",
-                motorRes, seed, k, saMin, scMin, job != null);
+        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, fechaInicio={}, async={}) ...",
+                motorRes, seed, k, saMin, scMin, fechaInicio, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k);
+        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio);
+        List<TemporalContext> warmupPlan = fechaInicio != null
+                ? construirPlanWarmup(k, fechaInicio, null)
+                : Collections.emptyList();
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
             SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
@@ -1503,6 +1370,12 @@ public class PlanificadorService {
         int bloqueColapsoAlmacen = -1;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
 
+        // Warm-up (fechaInicio posterior al inicio de datos): pre-calcula el período previo
+        // respetando Ta pero SIN el sleep de Sa; deja el estado inicial para el front.
+        Map<String, LuggageBatch> auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
+                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
+        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
+
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
@@ -1530,6 +1403,7 @@ public class PlanificadorService {
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
                 job.publicarBloque(rv.bloque);
+                job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.alertaColapso = rv.alerta();
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
                     log.info("E1 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
@@ -1642,18 +1516,32 @@ public class PlanificadorService {
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
                                                    JobState job, String motor, long seed) {
+        return ejecutarHastaColapso(k, umbralColapso, job, motor, seed, null);
+    }
+
+    /**
+     * Variante con {@code fechaInicio}: pre-calcula el período previo como warm-up (Ta como
+     * cota dura, SIN el sleep de Sa) y la fase visible — donde se vigila el colapso — arranca
+     * en fechaInicio respetando Sa. Estado inicial en {@code job.estadoInicial}.
+     */
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
+                                                   JobState job, String motor, long seed,
+                                                   LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         Random rngSim = new Random(seed);
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
         int saMin = props.getScenario().getSaMinutos();
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 3 — colapso motor={} seed={} (K={}, Sa={}min, Sc={}min, umbral={}%, async={}) ...",
+        log.info("Escenario 3 — colapso motor={} seed={} (K={}, Sa={}min, Sc={}min, umbral={}%, fechaInicio={}, async={}) ...",
                 motorRes, seed, k, saMin, scMin,
                 String.format("%.1f", umbralColapso * 100),
-                job != null);
+                fechaInicio, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k);
+        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio);
+        List<TemporalContext> warmupPlan = fechaInicio != null
+                ? construirPlanWarmup(k, fechaInicio, null)
+                : Collections.emptyList();
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
             SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
@@ -1692,6 +1580,13 @@ public class PlanificadorService {
         BacklogManager backlog = crearBacklogConPurga(enrutador);
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
 
+        // Warm-up (fechaInicio posterior al inicio de datos): pre-calcula el período previo
+        // respetando Ta pero SIN el sleep de Sa. El colapso solo se vigila en la fase visible.
+        Map<String, LuggageBatch> auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
+                solucionDummy, odStats, backlog, motorRes, seed,
+                props.getScenario().getTaSegundos() * 1000L, fechaInicio);
+        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
+
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
@@ -1721,6 +1616,7 @@ public class PlanificadorService {
                 job.taPromedioMs = taStats.promedio();
                 // Publicación incremental para dibujo en tiempo real desde el front.
                 job.publicarBloque(rv.bloque);
+                job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.alertaColapso = rv.alerta();
                 // Parada por orden del front: el usuario llamó a /cancelar.
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
@@ -2172,8 +2068,13 @@ public class PlanificadorService {
                     + Math.round(pre.utilAlmacenMax() * 100.0) + "% de capacidad";
         }
 
+        // Serie por slots para la animación en vivo (no se calcula en warm-up: no se publica).
+        List<SimulacionResponse.OcupacionAlmacenSlot> serieAlmacenes = fastForward
+                ? List.of()
+                : buildSerieAlmacenes(telemetryAirport, graph, enrutador);
+
         return new ResultadoVentana(bloque, finalBatches.size(), enrutadas, sinRuta, cumpleSLA, tardadas, maletas,
-                colapsoAlmacen, detalleColapso, alerta);
+                colapsoAlmacen, detalleColapso, alerta, serieAlmacenes);
     }
 
     /**
@@ -2658,6 +2559,47 @@ public class PlanificadorService {
         return out;
     }
 
+    // Package-private para tests (consistencia serie ↔ modelo interno).
+    // Serie temporal por SLOT de 60 min para la animación en vivo: por cada slot tocado por el
+    // bloque, la ocupación ACUMULADA vigente (global del enrutador, que tras commitBlock incluye
+    // el bloque y la espera en origen del backlog). Es la MISMA granularidad que valida el
+    // Dijkstra — el DTO no agrega ni descarta nada, solo decodifica la clave de slot a
+    // (aeropuerto, hora UTC).
+    List<SimulacionResponse.OcupacionAlmacenSlot> buildSerieAlmacenes(Map<Long, Integer> blockAirport,
+                                                                      Graph graph,
+                                                                      GreedyRepairOperator enrutador) {
+        if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
+
+        Map<Integer, Node> nodesByIdx = new HashMap<>();
+        for (Node node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
+
+        List<SimulacionResponse.OcupacionAlmacenSlot> out = new ArrayList<>(blockAirport.size());
+        for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
+            int ocupacion = enrutador != null
+                    ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
+                    : entry.getValue();
+            if (ocupacion <= 0) continue;
+            Node node = nodesByIdx.get(resourceIdx(entry.getKey()));
+            if (node == null) continue;
+
+            long slot = entry.getKey() & FlightKeyEncoder.DAY_MASK;   // índice de slot (epochMin/60)
+            long epochMin = slot * GreedyRepairOperator.STORAGE_SLOT_MIN;
+
+            SimulacionResponse.OcupacionAlmacenSlot dto = new SimulacionResponse.OcupacionAlmacenSlot();
+            dto.setAeropuerto(node.code);
+            dto.setHora(epochMinToIso(epochMin));
+            dto.setCapacidadMaxima(node.capacity);
+            dto.setOcupacion(ocupacion);
+            double porcentaje = porcentaje(ocupacion, node.capacity);
+            dto.setPorcentajeOcupacion(porcentaje);
+            dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
+            out.add(dto);
+        }
+        out.sort(Comparator.comparing(SimulacionResponse.OcupacionAlmacenSlot::getHora)
+                .thenComparing(SimulacionResponse.OcupacionAlmacenSlot::getAeropuerto));
+        return out;
+    }
+
     private List<SimulacionResponse.CargaVuelo> derivarCargasDesdeAsignaciones(
             SimulacionResponse.BloqueSimulacion bloque) {
         if (bloque == null || bloque.getAsignaciones() == null) return List.of();
@@ -2948,6 +2890,82 @@ public class PlanificadorService {
      * cobradas para siempre. Las rutas válidas (replanificables preventivos) no se
      * tocan: su entrega on-time sigue en pie y siguen contando como enrutadas.
      */
+    /**
+     * Ejecuta el plan de warm-up (pre-cálculo hasta {@code fechaInicio}) compartiendo
+     * graph/enrutador/backlog/odStats con la fase visible. Cada bloque corre con
+     * {@code fastForward=true}: el presupuesto Ta sigue siendo cota DURA del motor, pero se
+     * salta el sleep de Sa — el warm-up avanza a velocidad de cómputo. No publica bloques;
+     * el job queda en estado "calentando" y al terminar pasa a "ejecutando".
+     *
+     * @return el acumulador de auditoría del warm-up (descartable para métricas; de él se
+     *         deriva el estado inicial del front con {@link #construirEstadoInicial}).
+     */
+    private Map<String, LuggageBatch> ejecutarWarmup(List<TemporalContext> warmupPlan, JobState job,
+                                                     Graph graph, GreedyRepairOperator enrutador,
+                                                     AlnsSolution solucionDummy, Map<String, int[]> odStats,
+                                                     BacklogManager backlog, String motorRes, long seed,
+                                                     long taFijoMs, LocalDateTime fechaInicio) {
+        Map<String, LuggageBatch> auditWarmup = new LinkedHashMap<>();
+        if (warmupPlan == null || warmupPlan.isEmpty()) return auditWarmup;
+
+        if (job != null) {
+            job.estado = "calentando";
+            job.totalBloquesWarmup = warmupPlan.size();
+            job.bloqueWarmup = 0;
+        }
+        int intervaloWarmup = Math.max(1, warmupPlan.size() / 10);
+        long inicioWarmupMs = System.currentTimeMillis();
+        log.info("Warm-up iniciado: {} bloques hasta fechaInicio={}", warmupPlan.size(), fechaInicio);
+        int wIdx = 0;
+        for (TemporalContext ctx : warmupPlan) {
+            wIdx++;
+            Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
+            procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
+                    auditWarmup, motorRes, rngBloque, taFijoMs, true);
+            if (job != null) {
+                job.bloqueWarmup = wIdx;
+                if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
+            }
+            if (wIdx % intervaloWarmup == 0 || wIdx == warmupPlan.size()) {
+                log.info("Warm-up ({}): {}% — {}/{} | backlog actual={}",
+                        motorRes, (int) Math.round(wIdx * 100.0 / warmupPlan.size()),
+                        wIdx, warmupPlan.size(), backlog.size());
+            }
+        }
+        log.info("Warm-up completado en {} ms (backlog={}, pico={})",
+                System.currentTimeMillis() - inicioWarmupMs,
+                backlog.size(), backlog.picoHistorico());
+        if (job != null && !("cancelado".equals(job.estado) || job.canceladoPorUsuario)) {
+            job.estado = "ejecutando";
+        }
+        return auditWarmup;
+    }
+
+    /**
+     * Deriva del acumulador del warm-up el ESTADO INICIAL para el front: las asignaciones cuyos
+     * envíos siguen ACTIVOS al terminar el warm-up — su último arribo (UTC) es posterior al
+     * reloj UTC de la simulación (max readyTime del warm-up, mismo criterio que
+     * {@code llenarAcumuladosFisicos}). Incluye envíos en vuelo, en escala o con tramos aún por
+     * salir; excluye los ya entregados y los sinRuta (estos siguen vivos vía backlog y
+     * aparecerán en los bloques visibles). Package-private para tests.
+     */
+    List<SimulacionResponse.AsignacionMaleta> construirEstadoInicial(Map<String, LuggageBatch> auditWarmup) {
+        if (auditWarmup == null || auditWarmup.isEmpty()) return List.of();
+
+        long relojMin = Long.MIN_VALUE;
+        for (LuggageBatch b : auditWarmup.values()) {
+            long readyMin = toEpochMin(b.getReadyTime());
+            if (readyMin > relojMin) relojMin = readyMin;
+        }
+
+        List<LuggageBatch> activos = new ArrayList<>();
+        for (LuggageBatch b : auditWarmup.values()) {
+            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            if (enrutada && ultimoArriboMin(b) > relojMin) activos.add(b);
+        }
+        return buildAsignaciones(activos);
+    }
+
     private static BacklogManager crearBacklogConPurga(GreedyRepairOperator enrutador) {
         return new BacklogManager(0, true, b -> {
             if (enrutador.rutaUsaVueloCancelado(b)) {
@@ -3104,7 +3122,9 @@ public class PlanificadorService {
         Map<String, Integer> mapa = offsetPorCodigo;
         if (mapa == null) {
             mapa = new HashMap<>();
-            for (Aeropuerto a : dataLoader.getAeropuertos()) {
+            // dataLoader puede ser null en tests unitarios sin Spring: offset 0 (UTC = local).
+            List<Aeropuerto> aeropuertos = dataLoader != null ? dataLoader.getAeropuertos() : List.of();
+            for (Aeropuerto a : aeropuertos) {
                 if (a.getCodigo() != null && a.getOffsetHorario() != null) {
                     mapa.put(a.getCodigo(), a.getOffsetHorario());
                 }
@@ -3146,7 +3166,8 @@ public class PlanificadorService {
             SimulacionResponse.BloqueSimulacion bloque,
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
             boolean colapsoAlmacen, String detalleColapso,
-            com.tasfb2b.planificador.dto.AlertaColapso alerta) {
+            com.tasfb2b.planificador.dto.AlertaColapso alerta,
+            List<SimulacionResponse.OcupacionAlmacenSlot> serieAlmacenes) {
     }
 
     private record TotalesUnicos(
