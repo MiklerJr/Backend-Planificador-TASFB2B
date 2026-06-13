@@ -14,7 +14,7 @@ public class SimulacionResponse {
 
     // Parámetros de simulación para el frontend
     // Sc = k * saMinutos → cuántos minutos de datos consume el frontend por tick visual
-    private int k;           // factor de aceleración (K=1 día-a-día, K=14 sim-3días, K=75 colapso)
+    private int k;           // factor de aceleración (K=1 día-a-día, K=14 sim-3días, K=144 colapso)
     private int saMinutos;   // tamaño de ventana del planificador (Sa)
 
     @Data
@@ -180,6 +180,26 @@ public class SimulacionResponse {
         private String fecha;
         private int capacidadMaxima;
         private int ocupacionAsignada;
+        private double porcentajeOcupacion;
+        private String semaforo;
+    }
+
+    /**
+     * Serie temporal de ocupación de almacén por SLOT de 60 minutos — la granularidad nativa del
+     * modelo interno — para que el front actualice EN VIVO las maletas de cada almacén mientras
+     * su reloj de animación avanza dentro del bloque. {@code hora} es el INICIO del slot en eje
+     * UTC; {@code ocupacion} es el ACUMULADO vigente del slot (estadías commiteadas de todos los
+     * bloques hasta este, incluida la espera en origen de envíos sin ruta del backlog).
+     * La expone {@code GET /jobs/{id}/almacenes/serie?desde=N}.
+     */
+    @Data
+    public static class OcupacionAlmacenSlot {
+        private String aeropuerto;
+        /** Inicio del slot (ISO sin offset, eje UTC). El slot cubre [hora, hora+60min). */
+        private String hora;
+        private int capacidadMaxima;
+        /** Maletas presentes a la vez en el almacén durante este slot (acumulado global). */
+        private int ocupacion;
         private double porcentajeOcupacion;
         private String semaforo;
     }

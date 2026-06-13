@@ -63,6 +63,21 @@ public class PlanificadorController {
     }
 
     /**
+     * Catálogo estático de vuelos planeados del dataset (la red completa, ~2.866 vuelos):
+     * lista de {@code {id, origen, destino, fechaSalida, fechaLlegada, capacidadMaxima,
+     * cargaAsignada}}. Espejo de {@code /aeropuertos}: pensado para que el front lo cachee al
+     * cargar la app y pre-dibuje TODAS las aristas de la red sin esperar a {@code /resultado}.
+     * Horarios de plantilla base; los reales por día llegan en los tramos de cada bloque.
+     * {@code cargaAsignada} siempre 0 (la carga real es por bloque). No cambia en runtime.
+     */
+    @GetMapping("/vuelos")
+    public ResponseEntity<List<SimulacionResponse.VueloBackend>> vuelos() {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
+                .body(service.getVuelosPlaneados());
+    }
+
+    /**
      * Lista de jobs en memoria. Por defecto solo los activos (encolado,
      * calentando, ejecutando). Útil tras un refresh para reengancharse a una
      * simulación en marcha sin haber persistido el {@code jobId} en cliente.
@@ -116,13 +131,10 @@ public class PlanificadorController {
                 "Planificación viva: cada corrida cubre un único bloque Sa. " +
                 "El wall-clock por bloque es Sa real, sin aceleración.");
         esc1.put("kDefault", sc.getKDefault1());
+        esc1.put("kFijo", true);   // K inmutable por regla de negocio (E1=1)
         esc1.put("simulaTiempoReal", sc.isSimularTiempoReal1());
         esc1.put("endpoints", Map.of(
-                "iniciar",     "POST /api/planificador/escenario1/iniciar",
-                "inicializar", "POST /api/planificador/escenario1/inicializar",
-                "ventana",     "GET  /api/planificador/escenario1/ventana",
-                "estado",      "GET  /api/planificador/escenario1/estado",
-                "bloque",      "GET  /api/planificador/escenario1/bloque/{index}"
+                "iniciar", "POST /api/planificador/escenario1/iniciar"
         ));
 
         Map<String, Object> esc2 = new HashMap<>();
@@ -132,6 +144,7 @@ public class PlanificadorController {
                 "Replays/simulaciones de un período cerrado. Entre bloques duerme " +
                 "(Sa - Ta) cuando simularTiempoReal2=true, para imitar el ritmo real.");
         esc2.put("kDefault", sc.getKDefault2());
+        esc2.put("kFijo", true);   // K inmutable por regla de negocio (E2=144)
         esc2.put("simulaTiempoReal", sc.isSimularTiempoReal2());
         esc2.put("endpoints", Map.of(
                 "iniciar", "POST /api/planificador/escenario2/iniciar"
@@ -144,6 +157,7 @@ public class PlanificadorController {
                 "Estrés / capacity planning. Avanza lo más rápido posible (a menos " +
                 "que simularTiempoReal3=true) hasta que se dispara la condición de colapso.");
         esc3.put("kDefault", sc.getKDefault3());
+        esc3.put("kFijo", true);   // K inmutable por regla de negocio (E3=144)
         esc3.put("simulaTiempoReal", sc.isSimularTiempoReal3());
         esc3.put("umbralColapso", sc.getUmbralColapso());
         esc3.put("umbralColapsoBacklog", sc.getUmbralColapsoBacklog());
@@ -169,13 +183,13 @@ public class PlanificadorController {
      * @param k          Factor de aceleración de la simulación:
      *                   K=1  → operaciones día a día (tiempo real)
      *                   K=14 → simulación de 3 días (default)
-     *                   K=75 → simulación hasta el colapso logístico
+     *                   K=144 → simulación hasta el colapso logístico
      */
     /**
      * Ejecuta la planificación de pedidos-rutas.
      *
      * @param algoritmo   "alns" (default) o "aco"
-     * @param k           Factor de aceleración: K=1 día a día, K=14 sim-3días (default), K=75 colapso
+     * @param k           Factor de aceleración: K=1 día a día, K=14 sim-3días (default), K=144 colapso
      */
     @GetMapping("/ejecutar")
     public ResponseEntity<SimulacionResponse> ejecutar(
@@ -212,68 +226,52 @@ public class PlanificadorController {
      * Lanza el escenario 1 como job asíncrono. K se fija al default del yaml
      * (día a día). El front consume bloques vía
      * {@code GET /jobs/{jobId}/bloques?desde=N} igual que en E2/E3.
+     *
+     * <p>{@code fechaInicio} (opcional): si es posterior al inicio del dataset, el período
+     * previo se PRE-CALCULA como warm-up — respeta el presupuesto Ta por bloque pero ignora
+     * el sleep de Sa — y la fase visible arranca en fechaInicio respetando Sa. Mientras dura,
+     * el job está en estado "calentando"; el snapshot de aviones aún en el aire queda en
+     * {@code GET /jobs/{jobId}/estado-inicial}. 400 si fechaInicio está fuera del dataset.
      */
     @PostMapping("/escenario1/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc1Async(
             @RequestParam(defaultValue = "alns") String algoritmo,
-            @RequestParam(required = false)      Long   seed) {
-        JobState job = service.iniciarEscenario1Async(algoritmo, seed);
-        return ResponseEntity.accepted().body(Map.of(
-                "jobId",     job.getJobId(),
-                "escenario", "1",
-                "algoritmo", job.algoritmo,
-                "k",         job.getK(),
-                "seed",      job.seed,
-                "estado",    job.estado
-        ));
-    }
+            @RequestParam(required = false)      Long   seed,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
+        String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
+        if (error != null) return ResponseEntity.badRequest().body(Map.of("error", error));
 
-    @PostMapping("/escenario1/inicializar")
-    public ResponseEntity<Map<String, Object>> inicializarEsc1(
-            @RequestParam(defaultValue = "alns") String algoritmo,
-            @RequestParam(required = false)      Long   seed) {
-
-        return ResponseEntity.ok(service.inicializarEscenario1(algoritmo, seed));
-    }
-
-    @GetMapping("/escenario1/ventana")
-    public ResponseEntity<SimulacionResponse.BloqueSimulacion> siguienteVentana() {
-        try {
-            SimulacionResponse.BloqueSimulacion bloque = service.procesarSiguienteVentana();
-            if (bloque == null) return ResponseEntity.noContent().build(); // 204 = fin
-            return ResponseEntity.ok(bloque);
-        } catch (IllegalStateException e) {
-            return ResponseEntity.badRequest().build();
-        }
-    }
-
-    @GetMapping("/escenario1/estado")
-    public ResponseEntity<Map<String, Object>> estadoEsc1() {
-        return ResponseEntity.ok(service.getEstadoEscenario1());
-    }
-
-    @GetMapping("/escenario1/bloque/{index}")
-    public ResponseEntity<SimulacionResponse.BloqueSimulacion> getBloqueEsc1(@PathVariable int index) {
-        SimulacionResponse.BloqueSimulacion bloque = service.getBloqueEsc1(index);
-        if (bloque == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(bloque);
+        JobState job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio);
+        Map<String, Object> body = new HashMap<>();
+        body.put("jobId",     job.getJobId());
+        body.put("escenario", "1");
+        body.put("algoritmo", job.algoritmo);
+        body.put("k",         job.getK());
+        body.put("seed",      job.seed);
+        body.put("estado",    job.estado);
+        if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
+        return ResponseEntity.accepted().body(body);
     }
 
     // ── Escenarios 2/3 asíncronos ────────────────────────────────────────────
     // Soportan ejecuciones largas (30-90 min con sleep activo) sin bloquear el HTTP.
 
     /**
-     * Lanza el escenario 2. Todos los parámetros excepto {@code k} son opcionales —
-     * los que falten caen al default del yaml. Permite override por petición de
-     * {@code Sa}, {@code Ta} y {@code dias} para que cada job pueda ejecutar con
-     * su propia ventana sin tocar configuración global.
+     * Lanza el escenario 2. Todos los parámetros son opcionales — los que falten caen al
+     * default del yaml. Permite override por petición de {@code Sa}, {@code Ta} y {@code dias}
+     * para que cada job pueda ejecutar con su propia ventana sin tocar configuración global.
      *
-     * <p>Ejemplo: {@code /escenario2/iniciar?k=120&sa=5&dias=5&algoritmo=alns}
+     * <p><b>K es FIJO en el escenario 2 (regla de negocio: 144)</b>: el parámetro {@code k}
+     * se acepta solo por compatibilidad/verificación — si llega con un valor distinto al fijo
+     * se responde 400; el motor usa siempre el K del yaml.
+     *
+     * <p>Ejemplo: {@code /escenario2/iniciar?sa=5&dias=5&algoritmo=alns}
      * → cálculo dinámico {@code ventanas = (5·24·60)/5 = 1440} bloques de Sc=K·Sa.
      */
     @PostMapping("/escenario2/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc2(
-            @RequestParam(defaultValue = "14")    int    k,
+            @RequestParam(required = false)       Integer k,
             @RequestParam(defaultValue = "alns")  String algoritmo,
             @RequestParam(required = false)        Long  seed,
             @RequestParam(required = false)
@@ -283,8 +281,16 @@ public class PlanificadorController {
             @RequestParam(required = false)        Integer dias,
             @RequestParam(defaultValue = "false")  boolean procesamientoPrevio) {
 
+        int kFijo = props.getScenario().getKDefault2();
+        if (k != null && k != kFijo) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "k es fijo en el escenario 2: " + kFijo + " (recibido: " + k + ")"));
+        }
+        String error = service.validarParametrosEscenario(null, sa, ta, fechaInicio);
+        if (error != null) return ResponseEntity.badRequest().body(Map.of("error", error));
+
         EjecucionParams params = new EjecucionParams();
-        params.setK(k);
+        // K no se propaga del request: iniciarEscenario2Async fija siempre el del yaml.
         params.setMotor(algoritmo);
         params.setSeed(seed);
         params.setFechaInicio(fechaInicio);
@@ -302,7 +308,7 @@ public class PlanificadorController {
         body.put("jobId",     job.getJobId());
         body.put("escenario", "2");
         body.put("algoritmo", job.algoritmo);
-        body.put("k",         k);
+        body.put("k",         kFijo);
         body.put("seed",      job.seed);
         body.put("estado",    job.estado);
         if (sa != null)   body.put("sa", sa);
@@ -313,23 +319,103 @@ public class PlanificadorController {
         return ResponseEntity.accepted().body(body);
     }
     
+    /**
+     * Lanza el escenario 3 (hasta colapso). {@code fechaInicio} (opcional): igual que en E1 —
+     * warm-up Ta-only hasta esa fecha (estado "calentando", snapshot en
+     * {@code /jobs/{id}/estado-inicial}) y la vigilancia del colapso arranca desde fechaInicio.
+     *
+     * <p><b>K es FIJO en el escenario 3 (regla de negocio: 144)</b>: {@code k} se acepta solo
+     * por compatibilidad/verificación — 400 si llega distinto al fijo.
+     * 400 también si fechaInicio está fuera del dataset.
+     */
     @PostMapping("/escenario3/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc3(
-            @RequestParam(defaultValue = "75")    int    k,
+            @RequestParam(required = false)       Integer k,
             @RequestParam(defaultValue = "0.20")  double umbralColapso,
             @RequestParam(defaultValue = "alns")  String algoritmo,
-            @RequestParam(required = false)        Long  seed) {
+            @RequestParam(required = false)        Long  seed,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
+        int kFijo = props.getScenario().getKDefault3();
+        if (k != null && k != kFijo) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "k es fijo en el escenario 3: " + kFijo + " (recibido: " + k + ")"));
+        }
+        String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
+        if (error != null) return ResponseEntity.badRequest().body(Map.of("error", error));
+
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        JobState job = service.iniciarEscenario3Async(k, umbralColapso, algoritmo, seed);
+        JobState job = service.iniciarEscenario3Async(umbralColapso, algoritmo, seed, fechaInicio);
         return ResponseEntity.accepted().body(Map.of(
                 "jobId",         job.getJobId(),
                 "escenario",     "3",
                 "algoritmo",     job.algoritmo,
-                "k",             k,
+                "k",             kFijo,
                 "seed",          job.seed,
                 "umbralColapso", umbralColapso,
                 "estado",        job.estado
         ));
+    }
+
+    /**
+     * Snapshot del ESTADO INICIAL de un job con warm-up: las asignaciones pre-calculadas cuyos
+     * envíos siguen ACTIVOS al llegar a {@code fechaInicio} (en vuelo, en escala o con tramos
+     * por salir), con tramos UTC completos. Con esto el mapa pinta los aviones que ya están en
+     * el aire al inicio de la fase visible, usando la misma interpolación que con los bloques.
+     * <ul>
+     *   <li>404 — el job no existe.</li>
+     *   <li>204 — aún no disponible (job encolado o calentando).</li>
+     *   <li>200 — lista de asignaciones (vacía si el job no tuvo warm-up).</li>
+     * </ul>
+     */
+    @GetMapping("/jobs/{jobId}/estado-inicial")
+    public ResponseEntity<Map<String, Object>> estadoInicialJob(@PathVariable String jobId) {
+        JobState job = service.getJob(jobId);
+        if (job == null) return ResponseEntity.notFound().build();
+        List<SimulacionResponse.AsignacionMaleta> snapshot = job.estadoInicial;
+        if (snapshot == null) return ResponseEntity.noContent().build();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("jobId", job.getJobId());
+        if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
+        body.put("total", snapshot.size());
+        body.put("asignaciones", snapshot);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Serie temporal de ocupación de almacenes por SLOT de 60 min (eje UTC), una serie por bloque
+     * publicado desde {@code desde}. Es la granularidad nativa del modelo interno: con ella el
+     * front actualiza EN VIVO las maletas de cada almacén mientras su reloj de animación recorre
+     * el bloque (la ocupación de un slot es el ACUMULADO vigente, incluida la espera en origen de
+     * envíos sin ruta). Misma paginación que {@code /bloques}: {@code desde} = índice de bloque.
+     */
+    @GetMapping("/jobs/{jobId}/almacenes/serie")
+    public ResponseEntity<Map<String, Object>> serieAlmacenesJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde) {
+        JobState job = service.getJob(jobId);
+        if (job == null) return ResponseEntity.notFound().build();
+
+        int desdeNorm = Math.max(0, desde);
+        List<List<SimulacionResponse.OcupacionAlmacenSlot>> series = job.seriesDesde(desdeNorm);
+        List<Map<String, Object>> filas = new ArrayList<>(series.size());
+        for (int i = 0; i < series.size(); i++) {
+            Map<String, Object> fila = new LinkedHashMap<>();
+            fila.put("bloqueIdx", desdeNorm + i);
+            fila.put("slots", series.get(i));
+            filas.add(fila);
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", job.getJobId());
+        body.put("desde", desdeNorm);
+        body.put("total", job.seriesPublicadas());
+        body.put("terminado", !"encolado".equals(job.estado)
+                && !"calentando".equals(job.estado)
+                && !"ejecutando".equals(job.estado));
+        body.put("series", filas);
+        return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/estado")
@@ -514,28 +600,6 @@ public class PlanificadorController {
         }
         return ResponseEntity.accepted().body(Map.of(
                 "jobId",    jobId,
-                "encolado", true,
-                "origen",   orden.getOrigen(),
-                "destino",  orden.getDestino(),
-                "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
-    }
-
-    /**
-     * Cancela un vuelo concreto EN VIVO para el modo incremental de escenario 1 (paso a paso). La
-     * orden se aplica en la próxima llamada a {@code /escenario1/ventana}.
-     *
-     * @return 202 si se encoló, 409 si el escenario 1 no está inicializado.
-     */
-    @PostMapping("/escenario1/cancelar-vuelo")
-    public ResponseEntity<Map<String, Object>> cancelarVueloEsc1(
-            @RequestBody CancelacionVueloRequest orden) {
-        boolean ok = service.solicitarCancelacionVueloEsc1(orden);
-        if (!ok) {
-            return ResponseEntity.status(409).body(Map.of(
-                    "encolado", false,
-                    "motivo", "escenario 1 no inicializado (llame a /escenario1/inicializar primero)"));
-        }
-        return ResponseEntity.accepted().body(Map.of(
                 "encolado", true,
                 "origen",   orden.getOrigen(),
                 "destino",  orden.getDestino(),

@@ -79,6 +79,16 @@ public class JobState {
 
     /** Resultado completo cuando estado = "completado". Null mientras ejecuta. */
     public volatile SimulacionResponse resultado;
+
+    /**
+     * Snapshot del ESTADO INICIAL para el front cuando el job arrancó con {@code fechaInicio} +
+     * warm-up: las asignaciones pre-calculadas cuyos envíos siguen ACTIVOS al terminar el warm-up
+     * (en vuelo, en escala o con tramos futuros), con sus tramos UTC completos — lo que el mapa
+     * necesita para pintar los aviones que ya están en el aire en fechaInicio. Null mientras se
+     * calcula (estado "encolado"/"calentando"); lista vacía si no hubo warm-up. La expone
+     * {@code GET /jobs/{id}/estado-inicial}.
+     */
+    public volatile List<SimulacionResponse.AsignacionMaleta> estadoInicial;
     /** Mensaje de error cuando estado = "error". */
     public volatile String error;
     /**
@@ -170,9 +180,35 @@ public class JobState {
         return cancelacionesVueloPendientes;
     }
 
+    /**
+     * Series de ocupación de almacén por SLOT de 60 min, una entrada por bloque publicado (mismo
+     * orden e índices que {@link #bloquesParciales}). El front las consume con
+     * {@code GET /jobs/{id}/almacenes/serie?desde=N} para actualizar EN VIVO las maletas de cada
+     * almacén mientras su reloj de animación recorre el bloque.
+     */
+    private final List<List<SimulacionResponse.OcupacionAlmacenSlot>> seriesAlmacenes =
+            new CopyOnWriteArrayList<>();
+
     /** Publica un bloque procesado para que el front lo consuma incrementalmente. */
     public void publicarBloque(SimulacionResponse.BloqueSimulacion bloque) {
         if (bloque != null) bloquesParciales.add(bloque);
+    }
+
+    /** Publica la serie por slots del bloque recién publicado (mantener 1:1 con publicarBloque). */
+    public void publicarSerieAlmacenes(List<SimulacionResponse.OcupacionAlmacenSlot> serie) {
+        seriesAlmacenes.add(serie != null ? serie : List.of());
+    }
+
+    /** Series publicadas desde {@code desde} (inclusive), alineadas con los índices de bloque. */
+    public List<List<SimulacionResponse.OcupacionAlmacenSlot>> seriesDesde(int desde) {
+        int n = seriesAlmacenes.size();
+        if (desde < 0) desde = 0;
+        if (desde >= n) return List.of();
+        return List.copyOf(seriesAlmacenes.subList(desde, n));
+    }
+
+    public int seriesPublicadas() {
+        return seriesAlmacenes.size();
     }
 
     /** Devuelve los bloques publicados desde {@code desde} (inclusive). */
