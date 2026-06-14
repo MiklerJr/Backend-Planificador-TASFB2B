@@ -24,8 +24,10 @@ import java.util.Map;
  *
  * <p>Las corridas son <b>secuenciales</b> (single-thread) para que las mediciones
  * de Ta/tiempo real sean comparables sin contención de CPU entre simulaciones.
+ *
+ * <p>CORS lo aporta el {@code CorsFilter} global de {@code PlanificadorApplication} (fuente única
+ * desde la Tanda 1D); por eso este controller ya no lleva {@code @CrossOrigin}.
  */
-@CrossOrigin(origins = {"http://localhost:5173", "http://localhost:3000"})
 @RestController
 @RequestMapping("/api/planificador/comparativa")
 public class ComparativaController {
