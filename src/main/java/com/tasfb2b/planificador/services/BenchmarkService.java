@@ -4,7 +4,7 @@ import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.BenchmarkRequest;
 import com.tasfb2b.planificador.dto.BenchmarkResult;
 import com.tasfb2b.planificador.dto.BenchmarkRow;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -136,7 +136,7 @@ public class BenchmarkService {
 
     private BenchmarkRow construirFila(String escenario, int k, int saMin, int rep,
                                         SimulacionResponse res, long tiempoRealMs) {
-        SimulacionResponse.Metricas m = res.getMetricas();
+        Metricas m = res.getMetricas();
         BenchmarkRow row = new BenchmarkRow();
         row.setEscenario(escenario);
         row.setK(k);

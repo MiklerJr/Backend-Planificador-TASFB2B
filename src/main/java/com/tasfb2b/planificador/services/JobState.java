@@ -2,7 +2,7 @@ package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import lombok.Data;
 
@@ -88,7 +88,7 @@ public class JobState {
      * calcula (estado "encolado"/"calentando"); lista vacía si no hubo warm-up. La expone
      * {@code GET /jobs/{id}/estado-inicial}.
      */
-    public volatile List<SimulacionResponse.AsignacionMaleta> estadoInicial;
+    public volatile List<AsignacionMaleta> estadoInicial;
     /** Mensaje de error cuando estado = "error". */
     public volatile String error;
     /**
@@ -126,6 +126,20 @@ public class JobState {
      */
     public volatile LocalDateTime fechaInicio;
 
+    // ── Parámetros reproducibles para el reinicio (ver PlanificadorService.reiniciarJob) ──
+    // Junto con escenario/k/algoritmo/seed/fechaInicio permiten re-lanzar una corrida idéntica.
+    // Los overrides de E2 y el umbral de E3 antes solo vivían en el EjecucionParams del arranque.
+    /** E2: override de Sa (minutos). Null = default del yaml. */
+    public volatile Integer saMin;
+    /** E2: override de Ta (segundos). Null = default del yaml. */
+    public volatile Integer taSegundos;
+    /** E2: duración en días. Null = default (max-ventanas global). */
+    public volatile Integer dias;
+    /** E2: warm-up previo (hoy forzado a false en el controller). */
+    public volatile boolean procesamientoPrevio = false;
+    /** E3: umbral de colapso usado en el arranque. Null en E1/E2. */
+    public volatile Double umbralColapso;
+
     /**
      * Bloques publicados conforme van saliendo del motor (modo Sa/Ta).
      *
@@ -134,7 +148,7 @@ public class JobState {
      * Se llena vía {@link #publicarBloque}. {@link CopyOnWriteArrayList}
      * garantiza lectura concurrente sin bloquear al worker.
      */
-    private final List<SimulacionResponse.BloqueSimulacion> bloquesParciales =
+    private final List<BloqueSimulacion> bloquesParciales =
             new CopyOnWriteArrayList<>();
 
     public JobState(String jobId, String escenario, int k) {
@@ -186,21 +200,21 @@ public class JobState {
      * {@code GET /jobs/{id}/almacenes/serie?desde=N} para actualizar EN VIVO las maletas de cada
      * almacén mientras su reloj de animación recorre el bloque.
      */
-    private final List<List<SimulacionResponse.OcupacionAlmacenSlot>> seriesAlmacenes =
+    private final List<List<OcupacionAlmacenSlot>> seriesAlmacenes =
             new CopyOnWriteArrayList<>();
 
     /** Publica un bloque procesado para que el front lo consuma incrementalmente. */
-    public void publicarBloque(SimulacionResponse.BloqueSimulacion bloque) {
+    public void publicarBloque(BloqueSimulacion bloque) {
         if (bloque != null) bloquesParciales.add(bloque);
     }
 
     /** Publica la serie por slots del bloque recién publicado (mantener 1:1 con publicarBloque). */
-    public void publicarSerieAlmacenes(List<SimulacionResponse.OcupacionAlmacenSlot> serie) {
+    public void publicarSerieAlmacenes(List<OcupacionAlmacenSlot> serie) {
         seriesAlmacenes.add(serie != null ? serie : List.of());
     }
 
     /** Series publicadas desde {@code desde} (inclusive), alineadas con los índices de bloque. */
-    public List<List<SimulacionResponse.OcupacionAlmacenSlot>> seriesDesde(int desde) {
+    public List<List<OcupacionAlmacenSlot>> seriesDesde(int desde) {
         int n = seriesAlmacenes.size();
         if (desde < 0) desde = 0;
         if (desde >= n) return List.of();
@@ -212,7 +226,7 @@ public class JobState {
     }
 
     /** Devuelve los bloques publicados desde {@code desde} (inclusive). */
-    public List<SimulacionResponse.BloqueSimulacion> bloquesDesde(int desde) {
+    public List<BloqueSimulacion> bloquesDesde(int desde) {
         int n = bloquesParciales.size();
         if (desde < 0) desde = 0;
         if (desde >= n) return List.of();

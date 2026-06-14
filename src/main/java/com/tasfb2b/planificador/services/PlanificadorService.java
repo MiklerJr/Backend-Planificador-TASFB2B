@@ -7,10 +7,8 @@ import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.EjecucionParams;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.dto.EnvioDTO;
-import com.tasfb2b.planificador.dto.PlanificacionResultado;
-import com.tasfb2b.planificador.dto.ResumenPlanificacionGlobal;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Maleta;
@@ -19,6 +17,7 @@ import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
 import com.tasfb2b.planificador.util.DataLoader;
 import com.tasfb2b.planificador.util.FlightParser;
+import com.tasfb2b.planificador.util.SimulacionFormat;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -28,10 +27,7 @@ import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -54,18 +50,8 @@ public class PlanificadorService {
     private static final int PREWARM_ROUTE_CANDIDATES = 5;
 
     // ── DEPENDENCIAS ANTIGUAS (ACO) ─────────────────────────────────────
-    private final AeropuertoLoader aeropuertoLoader;
-    private final GraphBuilder graphBuilder;
     private final EnvioLoader envioLoader;
 
-    // ── CONSTANTES ACO ──────────────────────────────────────────────────
-    private static final int DEFAULT_TICK_MINUTES = 5;
-    private static final String[] ORIGENES_DISPONIBLES = {
-            "SKBO", "SEQM", "SVMI", "SBBR", "SPIM", "SLLP", "SCEL", "SABE",
-            "SGAS", "SUAA", "LATI", "EDDI", "LOWW", "EBCI", "UMMS", "LBSF",
-            "LKPR", "LDZA", "EKCH", "EHAM", "VIDP", "OSDI", "OERK", "OMDB",
-            "OAKB", "OOMS", "OYSN", "OPKC", "OJAI", "UBBB"
-    };
 
     // Cache perezosa código ICAO → offset horario (GMT), para reconstruir UTC real en el DTO.
     private volatile Map<String, Integer> offsetPorCodigo = null;
@@ -73,15 +59,13 @@ public class PlanificadorService {
     // ── ESTADO ESCENARIOS ALNS ──────────────────────────────────────────
     // (El modo E1 incremental paso a paso y su estado sc1* fueron eliminados: E1 corre
     //  únicamente como job asíncrono, igual que E2/E3.)
-    private volatile List<SimulacionResponse.BloqueSimulacion> bloquesCacheados = null;
+    private volatile List<BloqueSimulacion> bloquesCacheados = null;
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
     public PlanificadorService(DataLoader dataLoader,
                                AlgorithmMapper mapper,
                                PlanificadorProperties props,
                                JobsRegistry jobs,
-                               AeropuertoLoader aeropuertoLoader,
-                               GraphBuilder graphBuilder,
                                EnvioLoader envioLoader,
                                AuditoriaService auditoria,
                                AcoBlockEngine acoEngine) {
@@ -89,8 +73,6 @@ public class PlanificadorService {
         this.mapper = mapper;
         this.props = props;
         this.jobs = jobs;
-        this.aeropuertoLoader = aeropuertoLoader;
-        this.graphBuilder = graphBuilder;
         this.envioLoader = envioLoader;
         this.auditoria = auditoria;
         this.acoEngine = acoEngine;
@@ -119,6 +101,11 @@ public class PlanificadorService {
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = params.getFechaInicio();
+        // Persistir los overrides para poder reiniciar idéntico (ver reiniciarJob).
+        job.saMin = params.getSaMin();
+        job.taSegundos = params.getTaSegundos();
+        job.dias = params.getDias();
+        job.procesamientoPrevio = params.isProcesamientoPrevio();
 
         // Propagar el seed resuelto al params para que ejecutarALNS use el mismo.
         EjecucionParams pf = params;
@@ -151,6 +138,7 @@ public class PlanificadorService {
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
+        job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarJob)
         jobs.ejecutar(job, () -> {
             SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
             job.resultado = res;
@@ -238,6 +226,41 @@ public class PlanificadorService {
         return jobs.cancelar(jobId);
     }
 
+    /**
+     * Reinicia un job: detiene la ejecución en curso (si está activa) y lanza una NUEVA con los
+     * MISMOS parámetros de la ejecución anterior — incluida la misma seed, de modo que el reinicio
+     * re-juega una corrida idéntica. Devuelve el job nuevo (con jobId nuevo) o {@code null} si el
+     * job no existe o su escenario no es reiniciable.
+     *
+     * <p>El executor es single-thread: tras cancelar, el job nuevo se encola y arranca cuando el
+     * worker anterior retorna por la interrupción, sin solapamiento (no hace falta esperar).
+     */
+    public JobState reiniciarJob(String jobId) {
+        JobState viejo = getJob(jobId);
+        if (viejo == null) return null;
+        if (JobsRegistry.ESTADOS_ACTIVOS.contains(viejo.estado)) {
+            cancelarJob(jobId);
+        }
+        return switch (viejo.getEscenario()) {
+            case "1" -> iniciarEscenario1Async(viejo.algoritmo, viejo.seed, viejo.fechaInicio);
+            case "2" -> {
+                EjecucionParams p = new EjecucionParams();
+                p.setMotor(viejo.algoritmo);
+                p.setSeed(viejo.seed);
+                p.setFechaInicio(viejo.fechaInicio);
+                p.setSaMin(viejo.saMin);
+                p.setTaSegundos(viejo.taSegundos);
+                p.setDias(viejo.dias);
+                p.setProcesamientoPrevio(viejo.procesamientoPrevio);
+                yield iniciarEscenario2Async(p);
+            }
+            case "3" -> iniciarEscenario3Async(
+                    viejo.umbralColapso != null ? viejo.umbralColapso : 0.20,
+                    viejo.algoritmo, viejo.seed, viejo.fechaInicio);
+            default -> null;
+        };
+    }
+
     /** Lista los jobs activos (encolado/calentando/ejecutando). */
     public List<JobState> listarJobsActivos() {
         return jobs.listarActivos();
@@ -246,6 +269,36 @@ public class PlanificadorService {
     /** Lista todos los jobs vivos en memoria (activos y terminados). */
     public List<JobState> listarTodosLosJobs() {
         return jobs.listarTodos();
+    }
+
+    /**
+     * Read model del listado de jobs ({@code GET /jobs}). Antes el controller armaba el mapa a mano;
+     * aquí se construye el DTO tipado byte-compatible.
+     *
+     * @param activos si true, solo jobs en estado activo (encolado/calentando/ejecutando).
+     */
+    public JobsListResponse listarJobsResponse(boolean activos) {
+        List<JobState> lista = activos ? listarJobsActivos() : listarTodosLosJobs();
+        List<JobsListResponse.JobResumen> items = new ArrayList<>(lista.size());
+        for (JobState j : lista) {
+            JobsListResponse.JobResumen item = new JobsListResponse.JobResumen();
+            item.setJobId(j.getJobId());
+            item.setEscenario(j.getEscenario());
+            item.setAlgoritmo(j.algoritmo);
+            item.setEstado(j.estado);
+            item.setK(j.getK());
+            item.setSeed(j.seed);
+            if (j.fechaInicio != null) item.setFechaInicio(j.fechaInicio.toString());
+            item.setInicio(j.inicio.toString());
+            if (j.fin != null) item.setFin(j.fin.toString());
+            item.setProgreso(j.getProgreso());
+            item.setProgresoWarmup(j.getProgresoWarmup());
+            items.add(item);
+        }
+        JobsListResponse body = new JobsListResponse();
+        body.setJobs(items);
+        body.setTotal(items.size());
+        return body;
     }
 
     /** Posición del job en la cola del executor (1-based; 0 si ya corre o no existe). */
@@ -369,335 +422,148 @@ public class PlanificadorService {
     }
 
     /**
-     * Mapa estático de aeropuertos del dataset cargado. Pensado para que el
-     * front cachee las coordenadas al arrancar la sesión y pueda dibujar
-     * los bloques de forma incremental sin esperar a {@code /resultado}.
-     */
-    public Map<String, SimulacionResponse.AeropuertoDTO> getAeropuertosInfo() {
-        Map<String, SimulacionResponse.AeropuertoDTO> info = new LinkedHashMap<>();
-        for (Aeropuerto a : dataLoader.getAeropuertos()) {
-            SimulacionResponse.AeropuertoDTO dto = new SimulacionResponse.AeropuertoDTO();
-            dto.setCodigo(a.getCodigo());
-            dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
-            dto.setLongitud(a.getLongitud() != null ? a.getLongitud() : 0.0);
-            dto.setCapacidadAlmacen(a.getCapacidad());
-            info.put(a.getCodigo(), dto);
-        }
-        return info;
-    }
-
-    /**
-     * Catálogo estático de vuelos planeados del dataset cargado (la red completa, ~2.866 vuelos).
-     * Espejo de {@link #getAeropuertosInfo()}: pensado para que el front cachee la red al arrancar
-     * la sesión y pre-dibuje TODAS las aristas sin esperar a {@code /resultado} (que solo llega al
-     * final). Devuelve los horarios de plantilla base (sin desplazamiento de fecha); los horarios
-     * reales por día llegan en los tramos UTC de cada bloque. {@code cargaAsignada} siempre 0: la
-     * carga real es por bloque (ver {@code CargaVuelo} / {@code /jobs/{id}/vuelos/usados}).
-     */
-    public List<SimulacionResponse.VueloBackend> getVuelosPlaneados() {
-        List<Vuelo> vuelos = dataLoader.getVuelos();
-        List<SimulacionResponse.VueloBackend> out = new ArrayList<>(vuelos.size());
-        for (Vuelo v : vuelos) {
-            SimulacionResponse.VueloBackend vb = new SimulacionResponse.VueloBackend();
-            vb.setId(vueloFrontId(v));
-            vb.setOrigen(v.getOrigen());
-            vb.setDestino(v.getDestino());
-            vb.setFechaSalida(v.getFechaHoraSalida() != null ? v.getFechaHoraSalida().toString() : null);
-            vb.setFechaLlegada(v.getFechaHoraLlegada() != null ? v.getFechaHoraLlegada().toString() : null);
-            vb.setCapacidadMaxima(v.getCapacidad() != null ? v.getCapacidad() : 0);
-            vb.setCargaAsignada(0);
-            out.add(vb);
-        }
-        return out;
-    }
-
-    /**
-     * Metadatos del dataset cargado (rango de fechas, días disponibles, total
-     * de maletas). Útil para que el front valide {@code fechaInicio} contra
-     * el rango antes de invocar {@code /escenario2/iniciar}.
+     * Catálogo de escenarios disponibles para el front. Devuelve los valores por defecto
+     * (Sa, Ta, K, umbrales) que toma el backend desde {@link PlanificadorProperties.Scenario},
+     * junto con una descripción human-readable y la lista de motores soportados.
      *
-     * <p>Devuelve nulls en los campos de fecha si el dataset está vacío.
+     * <p>Pensado para que el front no tenga que hardcodear los defaults ni los textos de los
+     * escenarios. Antes se construía a mano en el controller; se movió aquí en la Tanda 1D para
+     * que el controller solo delegue.
      */
-    public Map<String, Object> getDatasetInfo() {
-        LocalDateTime primera = dataLoader.getPrimeraVentana();
-        LocalDateTime ultima  = dataLoader.getUltimaVentana();
-        long diasDisponibles = 0L;
-        if (primera != null && ultima != null) {
-            diasDisponibles = java.time.Duration.between(primera, ultima).toDays();
-            if (diasDisponibles < 1) diasDisponibles = 1; // mínimo 1 día si hay datos
-        }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("primeraVentana", primera != null ? primera.toString() : null);
-        out.put("ultimaVentana",  ultima  != null ? ultima.toString()  : null);
-        out.put("diasDisponibles", diasDisponibles);
-        // totalMaletas queda por compatibilidad: historicamente equivale a filas/envios.
-        out.put("totalMaletas", dataLoader.getTotalMaletas());
-        out.put("totalEnvios", dataLoader.getTotalEnvios());
-        out.put("totalMaletasIndividuales", dataLoader.getTotalMaletasIndividuales());
-        out.put("totalAeropuertos", dataLoader.getAeropuertos().size());
-        out.put("totalVuelos", dataLoader.getVuelos().size());
-        return out;
-    }
+    public Map<String, Object> getCatalogoEscenarios() {
+        PlanificadorProperties.Scenario sc = props.getScenario();
 
-    /**
-     * Read model liviano para dashboard operativo. No modifica el job ni fuerza
-     * recalculos del motor; usa el resultado final si existe o los bloques ya
-     * publicados si el job sigue corriendo.
-     */
-    public Map<String, Object> getDashboardJob(String jobId) {
-        JobState job = getJob(jobId);
-        if (job == null) return null;
-
-        SimulacionResponse.Metricas metricas = job.resultado != null
-                ? job.resultado.getMetricas()
-                : metricasDesdeBloques(job.bloquesDesde(0));
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("jobId", job.getJobId());
-        body.put("escenario", job.getEscenario());
-        body.put("algoritmo", job.algoritmo);
-        body.put("estado", job.estado);
-        body.put("k", job.getK());
-        body.put("seed", job.seed);
-        if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
-        body.put("inicio", job.inicio.toString());
-        if (job.fin != null) body.put("fin", job.fin.toString());
-        body.put("progreso", job.getProgreso());
-        body.put("progresoWarmup", job.getProgresoWarmup());
-        body.put("bloqueActual", job.bloqueActual);
-        body.put("totalBloques", job.totalBloques);
-        body.put("bloquesPublicados", job.bloquesPublicados());
-        body.put("posicionEnCola", posicionEnCola(jobId));
-        body.put("canceladoPorUsuario", job.canceladoPorUsuario);
-        if (job.error != null) body.put("error", job.error);
-        body.put("metricas", metricas);
-        body.put("tasas", tasas(metricas));
-        body.put("ultimoBloque", ultimoBloqueResumen(job));
-        return body;
-    }
-
-    public Map<String, Object> getIndicadoresJob(String jobId) {
-        JobState job = getJob(jobId);
-        if (job == null) return null;
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("jobId", jobId);
-        body.put("umbrales", Map.of(
-                "verdeHasta", CostFunction.UMBRAL_VERDE,
-                "ambarHasta", CostFunction.UMBRAL_AMBAR
+        Map<String, Object> esc1 = new HashMap<>();
+        esc1.put("id", 1);
+        esc1.put("nombre", "Día a día (tiempo real)");
+        esc1.put("descripcion",
+                "Planificación viva: cada corrida cubre un único bloque Sa. " +
+                "El wall-clock por bloque es Sa real, sin aceleración.");
+        esc1.put("kDefault", sc.getKDefault1());
+        esc1.put("kFijo", true);   // K inmutable por regla de negocio (E1=1)
+        esc1.put("simulaTiempoReal", sc.isSimularTiempoReal1());
+        esc1.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario1/iniciar"
         ));
-        body.put("vuelos", getCargaVuelosJob(jobId).get("vuelos"));
-        body.put("almacenes", getOcupacionAlmacenesJob(jobId).get("almacenes"));
-        return body;
-    }
 
-    public Map<String, Object> getCargaVuelosJob(String jobId) {
-        JobState job = getJob(jobId);
-        if (job == null) return null;
+        Map<String, Object> esc2 = new HashMap<>();
+        esc2.put("id", 2);
+        esc2.put("nombre", "Período (3/5/7 días)");
+        esc2.put("descripcion",
+                "Replays/simulaciones de un período cerrado. Entre bloques duerme " +
+                "(Sa - Ta) cuando simularTiempoReal2=true, para imitar el ritmo real.");
+        esc2.put("kDefault", sc.getKDefault2());
+        esc2.put("kFijo", true);   // K inmutable por regla de negocio (E2=144)
+        esc2.put("simulaTiempoReal", sc.isSimularTiempoReal2());
+        esc2.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario2/iniciar"
+        ));
 
-        List<Map<String, Object>> vuelos = new ArrayList<>();
-        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(0)) {
-            for (SimulacionResponse.CargaVuelo carga : cargasDelBloque(bloque)) {
-                Map<String, Object> row = cargaVueloToMap(carga);
-                row.put("bloqueIdx", bloque.getBloqueIdx());
-                row.put("horaInicio", bloque.getHoraInicio());
-                row.put("horaFin", bloque.getHoraFin());
-                vuelos.add(row);
-            }
-        }
+        Map<String, Object> esc3 = new HashMap<>();
+        esc3.put("id", 3);
+        esc3.put("nombre", "Hasta colapso");
+        esc3.put("descripcion",
+                "Estrés / capacity planning. Avanza lo más rápido posible (a menos " +
+                "que simularTiempoReal3=true) hasta que se dispara la condición de colapso.");
+        esc3.put("kDefault", sc.getKDefault3());
+        esc3.put("kFijo", true);   // K inmutable por regla de negocio (E3=144)
+        esc3.put("simulaTiempoReal", sc.isSimularTiempoReal3());
+        esc3.put("umbralColapso", sc.getUmbralColapso());
+        esc3.put("umbralColapsoBacklog", sc.getUmbralColapsoBacklog());
+        esc3.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario3/iniciar"
+        ));
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("jobId", jobId);
-        body.put("total", vuelos.size());
-        body.put("vuelos", vuelos);
+        Map<String, Object> body = new HashMap<>();
+        body.put("saMinutos", sc.getSaMinutos());
+        body.put("taSegundos", sc.getTaSegundos());
+        body.put("motoresSoportados", List.of(MOTOR_ALNS, MOTOR_ACO));
+        body.put("escenarios", List.of(esc1, esc2, esc3));
         return body;
     }
 
     /**
-     * Vuelos efectivamente usados por las asignaciones publicadas desde el bloque {@code desde}.
-     * Eje temporal: {@code flightKey}, {@code fechaSalida} y {@code fechaLlegada} están en UTC
-     * (mismo eje que {@code TramoRuta.salidaUtc} y {@code CargaVuelo.fechaSalida}), de modo que
-     * el front puede animar el vuelo-día sobre un reloj global sin mezclar husos.
+     * Serie de ocupación de almacenes por slot ({@code GET /jobs/{id}/almacenes/serie?desde=N}).
+     * Antes el controller armaba el mapa a mano; aquí se construye el DTO tipado byte-compatible.
+     * Devuelve {@code null} si el job no existe (el controller responde 404).
      */
-    public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
+    public SerieAlmacenesResponse getSerieAlmacenes(String jobId, int desde) {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
-        int desdeNormalizado = Math.max(0, desde);
-        Map<String, VueloUsadoAccumulator> acc = new LinkedHashMap<>();
-
-        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(desdeNormalizado)) {
-            if (bloque.getAsignaciones() == null) continue;
-
-            for (int asignacionIdx = 0; asignacionIdx < bloque.getAsignaciones().size(); asignacionIdx++) {
-                SimulacionResponse.AsignacionMaleta asignacion = bloque.getAsignaciones().get(asignacionIdx);
-                if (asignacion == null
-                        || !asignacion.isEnrutada()
-                        || asignacion.getTramos() == null
-                        || asignacion.getTramos().isEmpty()) continue;
-
-                String envioId = safe(asignacion.getBatchId());
-                String envioKey = !envioId.isEmpty()
-                        ? envioId
-                        : "sin-id:" + bloque.getBloqueIdx() + ":" + asignacionIdx;
-
-                for (SimulacionResponse.TramoRuta tramo : asignacion.getTramos()) {
-                    if (tramo == null) continue;
-
-                    String vueloId = safe(tramo.getVueloId());
-                    // Eje UTC: flightKey y fechas del vuelo-día en el MISMO eje que TramoRuta.salidaUtc
-                    // y CargaVuelo.fechaSalida. Las horas locales mezclan husos (salida local del
-                    // origen vs llegada local del destino) y no sirven como eje del mapa.
-                    String salida = safe(tramo.getSalidaUtc());
-                    String llegada = safe(tramo.getLlegadaUtc());
-                    String key = bloque.getBloqueIdx() + "|" + vueloId + "|" + salida;
-
-                    VueloUsadoAccumulator vuelo = acc.computeIfAbsent(key, k -> {
-                        VueloUsadoAccumulator nuevo = new VueloUsadoAccumulator();
-                        nuevo.row.setFlightKey(vueloId + "|" + salida);
-                        nuevo.row.setBloqueIdx(bloque.getBloqueIdx());
-                        nuevo.row.setHoraInicio(bloque.getHoraInicio());
-                        nuevo.row.setHoraFin(bloque.getHoraFin());
-                        nuevo.row.setVueloId(vueloId);
-                        nuevo.row.setOrigen(safe(tramo.getOrigen()));
-                        nuevo.row.setDestino(safe(tramo.getDestino()));
-                        nuevo.row.setFechaSalida(salida);
-                        nuevo.row.setFechaLlegada(llegada);
-                        return nuevo;
-                    });
-
-                    if (vuelo.envioKeys.add(envioKey)) {
-                        vuelo.row.setCantidadMaletas(vuelo.row.getCantidadMaletas() + asignacion.getCantidad());
-                        if (!envioId.isEmpty()) {
-                            vuelo.envioIds.add(envioId);
-                        }
-                    }
-                }
-            }
+        int desdeNorm = Math.max(0, desde);
+        List<List<OcupacionAlmacenSlot>> series = job.seriesDesde(desdeNorm);
+        List<SerieAlmacenesResponse.SerieItem> filas = new ArrayList<>(series.size());
+        for (int i = 0; i < series.size(); i++) {
+            SerieAlmacenesResponse.SerieItem item = new SerieAlmacenesResponse.SerieItem();
+            item.setBloqueIdx(desdeNorm + i);
+            item.setSlots(series.get(i));
+            filas.add(item);
         }
 
-        List<VuelosUsadosResponse.VueloUsado> vuelos = acc.values().stream()
-                .map(VueloUsadoAccumulator::toDto)
-                .sorted(Comparator.comparingInt(VuelosUsadosResponse.VueloUsado::getBloqueIdx)
-                        .thenComparing(VuelosUsadosResponse.VueloUsado::getFechaSalida)
-                        .thenComparing(VuelosUsadosResponse.VueloUsado::getVueloId))
-                .collect(Collectors.toList());
-
-        VuelosUsadosResponse response = new VuelosUsadosResponse();
-        response.setJobId(jobId);
-        response.setDesde(desdeNormalizado);
-        response.setBloquesPublicados(job.bloquesPublicados());
-        response.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
-        response.setTotal(vuelos.size());
-        response.setVuelos(vuelos);
-        return response;
-    }
-
-    public Map<String, Object> getOcupacionAlmacenesJob(String jobId) {
-        JobState job = getJob(jobId);
-        if (job == null) return null;
-
-        List<Map<String, Object>> almacenes = new ArrayList<>();
-        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(0)) {
-            for (SimulacionResponse.OcupacionAlmacen ocupacion : ocupacionesDelBloque(bloque)) {
-                Map<String, Object> row = ocupacionAlmacenToMap(ocupacion);
-                row.put("bloqueIdx", bloque.getBloqueIdx());
-                row.put("horaInicio", bloque.getHoraInicio());
-                row.put("horaFin", bloque.getHoraFin());
-                almacenes.add(row);
-            }
-        }
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("jobId", jobId);
-        body.put("total", almacenes.size());
-        body.put("almacenes", almacenes);
+        SerieAlmacenesResponse body = new SerieAlmacenesResponse();
+        body.setJobId(job.getJobId());
+        body.setDesde(desdeNorm);
+        body.setTotal(job.seriesPublicadas());
+        body.setTerminado(!"encolado".equals(job.estado)
+                && !"calentando".equals(job.estado)
+                && !"ejecutando".equals(job.estado));
+        body.setSeries(filas);
         return body;
     }
 
-    public Map<String, Object> getAsignacionesJob(String jobId, int desde,
-                                                  String aeropuerto,
-                                                  String vueloId,
-                                                  boolean soloEnrutadas) {
-        JobState job = getJob(jobId);
-        if (job == null) return null;
-
-        String aeropuertoNorm = normalizarCodigo(aeropuerto);
-        String vueloNorm = normalizarTexto(vueloId);
-        List<Map<String, Object>> asignaciones = new ArrayList<>();
-
-        for (SimulacionResponse.BloqueSimulacion bloque : job.bloquesDesde(desde)) {
-            if (bloque.getAsignaciones() == null) continue;
-            for (SimulacionResponse.AsignacionMaleta asignacion : bloque.getAsignaciones()) {
-                if (soloEnrutadas && !asignacion.isEnrutada()) continue;
-                if (aeropuertoNorm != null && !pasaFiltroAeropuerto(asignacion, aeropuertoNorm)) continue;
-                if (vueloNorm != null && !pasaFiltroVuelo(asignacion, vueloNorm)) continue;
-
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("bloqueIdx", bloque.getBloqueIdx());
-                row.put("horaInicio", bloque.getHoraInicio());
-                row.put("horaFin", bloque.getHoraFin());
-                row.put("asignacion", asignacion);
-                asignaciones.add(row);
-            }
-        }
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("jobId", jobId);
-        body.put("desde", Math.max(0, desde));
-        body.put("aeropuerto", aeropuertoNorm);
-        body.put("vueloId", vueloNorm);
-        body.put("soloEnrutadas", soloEnrutadas);
-        body.put("total", asignaciones.size());
-        body.put("asignaciones", asignaciones);
+    /**
+     * Construye el cuerpo de {@code GET /jobs/{id}/estado-inicial} a partir de un job cuyo
+     * {@code estadoInicial} ya está calculado (no {@code null}). Las decisiones de estado HTTP
+     * (404 si el job no existe, 204 si el snapshot aún no está) se quedan en el controller; aquí solo
+     * se serializa el snapshot. Byte-compatible con el mapa anterior.
+     */
+    public EstadoInicialResponse buildEstadoInicialResponse(JobState job) {
+        EstadoInicialResponse body = new EstadoInicialResponse();
+        body.setJobId(job.getJobId());
+        if (job.fechaInicio != null) body.setFechaInicio(job.fechaInicio.toString());
+        List<AsignacionMaleta> snapshot = job.estadoInicial;
+        body.setTotal(snapshot.size());
+        body.setAsignaciones(snapshot);
         return body;
     }
 
-    public Map<String, Object> getDemandaResumen(LocalDateTime desde,
-                                                 LocalDateTime hasta,
-                                                 int top) {
-        LocalDateTime primera = dataLoader.getPrimeraVentana();
-        LocalDateTime ultima = dataLoader.getUltimaVentana();
-        LocalDateTime inicio = desde != null ? desde : primera;
-        LocalDateTime fin = hasta != null ? hasta : (ultima != null ? ultima.plusMinutes(1) : null);
-        int limite = Math.max(1, Math.min(top <= 0 ? 20 : top, 200));
+    /**
+     * Estado y progreso de un job ({@code GET /jobs/{id}/estado}). Antes el controller armaba el
+     * mapa a mano; aquí se construye el DTO tipado byte-compatible (incluye warm-up, posición en
+     * cola, alerta de colapso inminente y cancelaciones de vuelo ya aplicadas).
+     */
+    public EstadoJobResponse getEstadoJob(String jobId) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("desde", inicio != null ? inicio.toString() : null);
-        body.put("hasta", fin != null ? fin.toString() : null);
-        body.put("top", limite);
-
-        if (inicio == null || fin == null || !inicio.isBefore(fin)) {
-            body.put("totalEnvios", 0);
-            body.put("totalMaletas", 0L);
-            body.put("porOrigen", List.of());
-            body.put("porDestino", List.of());
-            body.put("porOD", List.of());
-            return body;
-        }
-
-        Map<String, long[]> porOrigen = new HashMap<>();
-        Map<String, long[]> porDestino = new HashMap<>();
-        Map<String, long[]> porOd = new HashMap<>();
-        long totalMaletas = 0L;
-        int totalEnvios = 0;
-
-        for (Maleta maleta : dataLoader.getMaletasEnRango(inicio, fin)) {
-            String origen = maleta.getAeropuertoOrigen() != null ? maleta.getAeropuertoOrigen().getCodigo() : "";
-            String destino = maleta.getAeropuertoDestino() != null ? maleta.getAeropuertoDestino().getCodigo() : "";
-            long cantidad = maleta.getCantidad() != null ? maleta.getCantidad() : 0L;
-            totalEnvios++;
-            totalMaletas += cantidad;
-            acumularDemanda(porOrigen, origen, cantidad);
-            acumularDemanda(porDestino, destino, cantidad);
-            acumularDemanda(porOd, origen + "->" + destino, cantidad);
-        }
-
-        body.put("totalEnvios", totalEnvios);
-        body.put("totalMaletas", totalMaletas);
-        body.put("porOrigen", demandaRows(porOrigen, limite));
-        body.put("porDestino", demandaRows(porDestino, limite));
-        body.put("porOD", demandaRows(porOd, limite));
+        EstadoJobResponse body = new EstadoJobResponse();
+        body.setJobId(job.getJobId());
+        body.setEscenario(job.getEscenario());
+        body.setAlgoritmo(job.algoritmo);
+        body.setSeed(job.seed);
+        if (job.fechaInicio != null) body.setFechaInicio(job.fechaInicio.toString());
+        body.setK(job.getK());
+        body.setEstado(job.estado);
+        body.setBloqueActual(job.bloqueActual);
+        body.setTotalBloques(job.totalBloques);
+        body.setProgreso(job.getProgreso());
+        // Warm-up: el front consulta estos campos mientras estado="calentando".
+        body.setBloqueWarmup(job.bloqueWarmup);
+        body.setTotalBloquesWarmup(job.totalBloquesWarmup);
+        body.setProgresoWarmup(job.getProgresoWarmup());
+        // Cola: posicionEnCola indica el turno (1-based) si estado="encolado"; 0 si ya corre o terminó.
+        body.setPosicionEnCola(posicionEnCola(jobId));
+        // Cancelación: distingue cancelación voluntaria de fallo real sin parsear `error`.
+        body.setCanceladoPorUsuario(job.canceladoPorUsuario);
+        body.setTaPromedioMs(job.taPromedioMs);
+        body.setInicio(job.inicio.toString());
+        if (job.fin != null) body.setFin(job.fin.toString());
+        if (job.error != null) body.setError(job.error);
+        // Alerta de colapso INMINENTE (pre-colapso) del último bloque, si existe.
+        if (job.alertaColapso != null) body.setAlertaColapso(job.alertaColapso);
+        // Cancelaciones de vuelo YA aplicadas (con envíos afectados), en orden de aplicación.
+        body.setVuelosCancelados(job.getVuelosCancelados());
         return body;
     }
 
@@ -795,7 +661,7 @@ public class PlanificadorService {
         int totalVuelosCancelados = 0;
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
 
-        List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
+        List<BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
         Map<String, int[]> odStats = new HashMap<>();
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
@@ -960,346 +826,9 @@ public class PlanificadorService {
         return res;
     }
 
-    public SimulacionResponse.BloqueSimulacion getBloque(int index) {
+    public BloqueSimulacion getBloque(int index) {
         if (bloquesCacheados == null || index < 0 || index >= bloquesCacheados.size()) return null;
         return bloquesCacheados.get(index);
-    }
-
-    public ResumenPlanificacionGlobal procesarTodosLosOrigenes() {
-        return procesarTodosLosOrigenesConLimite(Integer.MAX_VALUE, DEFAULT_TICK_MINUTES);
-    }
-
-    public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePorOrigen) {
-        return procesarTodosLosOrigenesConLimite(limitePorOrigen, DEFAULT_TICK_MINUTES);
-    }
-
-    public ResumenPlanificacionGlobal procesarTodosLosOrigenesConLimite(int limitePorOrigen, int tickMinutosSimulacion) {
-        TaStats.PlanRequest request = TaStats.PlanRequest.todos(limitePorOrigen, tickMinutosSimulacion);
-        return procesarBase(request);
-    }
-
-    public List<PlanificacionResultado> procesarTodosLosEnvios(String origen) {
-        TaStats.PlanRequest request = TaStats.PlanRequest.unOrigen(origen, Integer.MAX_VALUE, DEFAULT_TICK_MINUTES);
-        return procesarBaseConResultados(request).resultados;
-    }
-
-    public List<PlanificacionResultado> procesarConLimite(String origen, int limite) {
-        TaStats.PlanRequest request = TaStats.PlanRequest.unOrigen(origen, limite, DEFAULT_TICK_MINUTES);
-        return procesarBaseConResultados(request).resultados;
-    }
-
-    public String ejecutarACOporEnvio(String origen, int limite) {
-        TaStats.PlanRequest request = TaStats.PlanRequest.unOrigen(origen, limite, DEFAULT_TICK_MINUTES);
-        ResumenPlanificacionGlobal resumen = procesarBase(request);
-        return "ACO ejecutado para " + resumen.totalEnviosProcesados + " envíos desde " + origen;
-    }
-
-    public String exportarAuditoriaCsv(int limitePorOrigen, int tickMinutosSimulacion, int sampleSize, String outputPath) {
-        TaStats.PlanRequest request = TaStats.PlanRequest.todos(limitePorOrigen, tickMinutosSimulacion);
-        TaStats.BaseRunResult run = procesarBaseConResultados(request);
-
-        List<TaStats.AuditRecord> registros = sampleAudit(run.auditoria, sampleSize);
-        String csv = construirCsvAuditoria(registros);
-        Path out = Path.of(outputPath);
-
-        try {
-            if (out.getParent() != null) {
-                Files.createDirectories(out.getParent());
-            }
-            Files.writeString(out, csv);
-        } catch (IOException e) {
-            throw new RuntimeException("No se pudo escribir auditoría CSV en " + outputPath, e);
-        }
-
-        return out.toAbsolutePath().toString();
-    }
-
-    private String construirCsvAuditoria(List<TaStats.AuditRecord> rows) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,")
-                .append("tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,")
-                .append("cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad\n");
-        for (TaStats.AuditRecord r : rows) {
-            sb.append(csv(r.idEnvio)).append(',')
-                    .append(csv(r.origen)).append(',')
-                    .append(csv(r.destino)).append(',')
-                    .append(csv(r.registroHHMM)).append(',')
-                    .append(r.deadlineMin).append(',')
-                    .append(r.exitoso).append(',')
-                    .append(csv(r.motivoFalla)).append(',')
-                    .append(csv(r.ruta)).append(',')
-                    .append(r.numTramos).append(',')
-                    .append(r.numEscalas).append(',')
-                    .append(r.tiempoVueloMin).append(',')
-                    .append(r.tiempoEsperaMin).append(',')
-                    .append(r.tiempoTotalMin).append(',')
-                    .append(r.llegadaMin).append(',')
-                    .append(r.slackSlaMin).append(',')
-                    .append(r.costoTotal).append(',')
-                    .append(r.cumpleSla).append(',')
-                    .append(r.sinCiclos).append(',')
-                    .append(r.sinDirecto).append(',')
-                    .append(r.escalaMinOk).append(',')
-                    .append(r.capacidadVuelosOk).append(',')
-                    .append(r.almacenDestinoOk).append(',')
-                    .append(r.scoreCalidad)
-                    .append('\n');
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Limpia o escapa los textos para que no rompan el formato del archivo CSV.
-     */
-    private String csv(String texto) {
-        if (texto == null) {
-            return "";
-        }
-        // Si el texto tiene comillas, saltos de línea o comas, lo escapamos correctamente
-        if (texto.contains(",") || texto.contains("\"") || texto.contains("\n")) {
-            return "\"" + texto.replace("\"", "\"\"") + "\"";
-        }
-        return texto;
-    }
-
-    public List<PlanificacionResultado> procesarTodosLosOrigenesConResultados(int limitePorOrigen, int tickMinutosSimulacion) {
-        TaStats.PlanRequest request = TaStats.PlanRequest.todos(limitePorOrigen, tickMinutosSimulacion);
-        return procesarBaseConResultados(request).resultados;
-    }
-
-    private ResumenPlanificacionGlobal procesarBase(TaStats.PlanRequest request) {
-        return procesarBaseConResultados(request).resumen;
-    }
-
-    private TaStats.BaseRunResult procesarBaseConResultados(TaStats.PlanRequest request) {
-        long startTime = System.currentTimeMillis();
-
-        int tick = Math.max(1, request.tickMinutosSimulacion);
-        int limite = (request.limitePorOrigen <= 0) ? Integer.MAX_VALUE : request.limitePorOrigen;
-
-        List<Aeropuerto> aeropuertos = dataLoader.getAeropuertos();
-        List<Vuelo> vuelos = dataLoader.getVuelos();
-
-        Map<String, Integer> offsetPorCodigo = new HashMap<>();
-        for (Aeropuerto a : aeropuertos) {
-            offsetPorCodigo.put(a.getCodigo(), a.getOffsetHorario() != null ? a.getOffsetHorario() : 0);
-        }
-
-
-        ResumenPlanificacionGlobal resumen = new ResumenPlanificacionGlobal();
-        resumen.estadisticasPorOrigen = new HashMap<>();
-        List<PlanificacionResultado> resultados = new ArrayList<>();
-        List<TaStats.AuditRecord> auditoria = new ArrayList<>();
-
-        ConfigACO config = new ConfigACO();
-        config.antCount = 10;
-        config.iterations = 50;
-
-        for (String origen : request.origenes) {
-            // CORRECCIÓN 4: Crear la variable offsetOrigen sacándola del mapa
-            int offsetOrigen = offsetPorCodigo.getOrDefault(origen, 0);
-
-            Graph graph = mapper.mapToGraph(aeropuertos, vuelos);
-            
-            // FASE 2: Obtenemos los envíos directamente desde PostgreSQL ya filtrados y ordenados
-            List<EnvioDTO> envios = envioLoader.cargarEnviosOptimizados(origen, limite);
-            
-            if (envios.isEmpty()) {
-                continue;
-            }
-
-            ResumenPlanificacionGlobal.EstadisticaOrigen stats = new ResumenPlanificacionGlobal.EstadisticaOrigen();
-            stats.origen = origen;
-
-            PriorityQueue<TaStats.ScheduledEvent> eventos = new PriorityQueue<>(Comparator.comparingInt(ev -> ev.minute));
-            List<EnvioDTO> pendientes = new ArrayList<>();
-
-            int idxSiguiente = 0;
-            int tiempoActual = envios.get(0).horaRegistro * 60 + envios.get(0).minutoRegistro;
-
-            while (idxSiguiente < envios.size() || !pendientes.isEmpty() || !eventos.isEmpty()) {
-                while (!eventos.isEmpty() && eventos.peek().minute <= tiempoActual) {
-                    eventos.poll().action.run();
-                }
-
-                while (idxSiguiente < envios.size()) {
-                    EnvioDTO proximo = envios.get(idxSiguiente);
-                    int registroMin = proximo.horaRegistro * 60 + proximo.minutoRegistro;
-                    if (registroMin > tiempoActual) {
-                        break;
-                    }
-                    pendientes.add(proximo);
-                    idxSiguiente++;
-                }
-
-                Iterator<EnvioDTO> it = pendientes.iterator();
-                while (it.hasNext()) {
-                    EnvioDTO envio = it.next();
-
-                    if (request.destinosPermitidos != null
-                            && !request.destinosPermitidos.contains(envio.destinoICAO)) {
-                        continue;
-                    }
-
-                    TaStats.AttemptResult intento = intentarPlanificarEnvio(
-                            origen, offsetOrigen, envio, graph, config, eventos, tiempoActual, tick
-                    );
-
-                    if (intento == null) {
-                        continue;
-                    }
-
-                    PlanificacionResultado resultado = intento.resultado;
-
-                    resultados.add(resultado);
-                    auditoria.add(intento.auditRecord);
-                    stats.totalEnvios++;
-                    resumen.totalEnviosProcesados++;
-                    resumen.totalMaletas += envio.cantidadMaletas;
-
-                    if (resultado.exitoso) {
-                        stats.exitosos++;
-                        stats.rutasConEscala++;
-                        resumen.totalEnviosExitosos++;
-                        resumen.costoPromedioExitosos += resultado.costoTotal;
-                    } else {
-                        stats.fallidos++;
-                    }
-
-                    it.remove();
-                }
-
-                tiempoActual += tick;
-            }
-
-            resumen.estadisticasPorOrigen.put(origen, stats);
-        }
-
-        resumen.totalEnviosFallidos = resumen.totalEnviosProcesados - resumen.totalEnviosExitosos;
-        resumen.tiempoEjecucionMs = System.currentTimeMillis() - startTime;
-        if (resumen.totalEnviosExitosos > 0) {
-            resumen.costoPromedioExitosos = resumen.costoPromedioExitosos / resumen.totalEnviosExitosos;
-        }
-
-        return new TaStats.BaseRunResult(resumen, resultados, auditoria);
-    }
-
-    /**
-     * <b>VÍA DE PRUEBAS / DIAGNÓSTICO — NO ES PRODUCCIÓN.</b>
-     *
-     * <p>Ejecuta una corrida ACO directa ({@code new AlgorithmACO(...)}, el ACO
-     * clásico de diagnóstico). En este modo el algoritmo usa los contadores
-     * globales mutables {@code Edge.usedCapacity} y {@code Node.storeLoad}, que
-     * NO respetan el modelo flight-day/airport-day que sí aplica la vía de
-     * producción ({@link AcoBlockEngine}).
-     *
-     * <p>Solo se invoca desde flujos de simulación interna
-     * ({@code procesarBaseConResultados}, {@code ejecutarHastaColapso}) y tests.
-     * Sus métricas <b>no son comparables</b> con las que produce el endpoint
-     * principal de planificación.
-     *
-     * <p>El front <b>no llega aquí</b> en el flujo normal de planificación con
-     * {@code motor=aco}; ese flujo entra por {@link AcoBlockEngine#procesar}.
-     */
-    private TaStats.AttemptResult intentarPlanificarEnvio(
-            String origen,
-            int offsetOrigen,
-            EnvioDTO e,
-            Graph graph,
-            ConfigACO config,
-            PriorityQueue<TaStats.ScheduledEvent> eventos,
-            int tiempoActual,
-            int tick
-    ) {
-        CostFunction.EnvioContext ctx = new CostFunction.EnvioContext(
-                origen, e.destinoICAO, e.cantidadMaletas, e.horaRegistro, e.minutoRegistro, offsetOrigen
-        );
-
-        if (tiempoActual > ctx.deadlineMinutos) {
-            PlanificacionResultado r = PlanificacionResultado.fallido(e.id, origen, e.destinoICAO, "Deadline excedido");
-            return new TaStats.AttemptResult(r, TaStats.AuditRecord.fallido(origen, e, ctx.deadlineMinutos, "Deadline excedido", tiempoActual));
-        }
-
-        try {
-            AlgorithmACO aco = new AlgorithmACO(graph, config, ctx);
-            aco.run(origen, e.destinoICAO);
-            Ant mejor = aco.getMejorAnt();
-
-            if (mejor != null && !mejor.path.isEmpty() && !mejor.edgesPath.isEmpty()) {
-                if (!e.destinoICAO.equals(mejor.path.get(mejor.path.size() - 1).code)) {
-                    if (tiempoActual + tick > ctx.deadlineMinutos) {
-                        PlanificacionResultado r = PlanificacionResultado.fallido(
-                                e.id, origen, e.destinoICAO, "Ruta incompleta: no llega al destino"
-                        );
-                        return new TaStats.AttemptResult(r, TaStats.AuditRecord.fallido(
-                                origen, e, ctx.deadlineMinutos,
-                                "Ruta incompleta: no llega al destino", tiempoActual
-                        ));
-                    }
-                    return null;
-                }
-
-                Node destinoFinal = graph.nodes.get(e.destinoICAO);
-                if (destinoFinal == null || !destinoFinal.hasStorageCapacity(e.cantidadMaletas)) {
-                    PlanificacionResultado r = PlanificacionResultado.fallido(
-                            e.id, origen, e.destinoICAO, "Sin capacidad de almacenamiento en destino");
-                    return new TaStats.AttemptResult(r, TaStats.AuditRecord.fallido(origen, e, ctx.deadlineMinutos,
-                            "Sin capacidad de almacenamiento en destino", tiempoActual));
-                }
-
-                boolean escalaMinOk = cumpleEscalaMinima(mejor.edgesPath);
-                int tiempoVueloMin = calcularTiempoVueloMin(mejor.edgesPath);
-                int tiempoEsperaMin = calcularTiempoEsperaMin(mejor.edgesPath);
-                int tiempoTotalMin = tiempoVueloMin + tiempoEsperaMin;
-                int llegadaMin = ctx.minutosRegistro + tiempoTotalMin;
-                int slack = ctx.deadlineMinutos - llegadaMin;
-                boolean sinDirecto = mejor.edgesPath.size() > 1;
-                boolean sinCiclos = sinCiclos(mejor.path);
-                boolean capacidadVuelosOk = mejor.edgesPath.stream().allMatch(ed -> ed.hasCapacity(e.cantidadMaletas));
-                boolean cumpleSLA = llegadaMin <= ctx.deadlineMinutos;
-                int score = calcularScore(sinDirecto, sinCiclos, escalaMinOk, capacidadVuelosOk, true, cumpleSLA,
-                        mejor.edgesPath.size() - 1, tiempoEsperaMin, slack);
-
-                destinoFinal.storeLoad(e.cantidadMaletas);
-                int minutosRuta = estimarMinutosRuta(mejor.edgesPath);
-                int liberarDestinoEn = tiempoActual + minutosRuta + CostFunction.TIEMPO_DESTINO_FINAL;
-                eventos.add(new TaStats.ScheduledEvent(liberarDestinoEn,
-                        () -> destinoFinal.releaseLoad(e.cantidadMaletas)));
-
-                int minutosAcumulados = 0;
-                for (Edge edge : mejor.edgesPath) {
-                    edge.useCapacity(e.cantidadMaletas);
-
-                    minutosAcumulados += (int) Math.max(1, Math.round(
-                            CostFunction.calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString())
-                    ));
-                    int liberarEn = tiempoActual + minutosAcumulados;
-                    eventos.add(new TaStats.ScheduledEvent(liberarEn,
-                            () -> edge.usedCapacity = Math.max(0, edge.usedCapacity - e.cantidadMaletas)));
-                    minutosAcumulados += CostFunction.TIEMPO_MIN_ESCALA;
-                }
-
-                List<String> ruta = mejor.path.stream().map(n -> n.code).toList();
-                PlanificacionResultado r = new PlanificacionResultado(
-                        e.id, origen, e.destinoICAO, e.cantidadMaletas, ruta, mejor.totalCost, true
-                );
-                TaStats.AuditRecord audit = TaStats.AuditRecord.exitoso(origen, e, ctx.deadlineMinutos, ruta, mejor.totalCost,
-                        mejor.edgesPath.size(), tiempoVueloMin, tiempoEsperaMin, tiempoTotalMin, llegadaMin, slack,
-                        cumpleSLA, sinCiclos, sinDirecto, escalaMinOk, capacidadVuelosOk, true, score);
-                return new TaStats.AttemptResult(r, audit);
-            }
-
-            if (tiempoActual + tick > ctx.deadlineMinutos) {
-                PlanificacionResultado r = PlanificacionResultado.fallido(e.id, origen, e.destinoICAO, "No se encontró ruta válida");
-                return new TaStats.AttemptResult(r, TaStats.AuditRecord.fallido(origen, e, ctx.deadlineMinutos,
-                        "No se encontró ruta válida", tiempoActual));
-            }
-
-            return null;
-        } catch (Exception ex) {
-            PlanificacionResultado r = PlanificacionResultado.fallido(e.id, origen, e.destinoICAO, ex.getMessage());
-            return new TaStats.AttemptResult(r, TaStats.AuditRecord.fallido(origen, e, ctx.deadlineMinutos, ex.getMessage(), tiempoActual));
-        }
     }
 
 
@@ -1353,7 +882,7 @@ public class PlanificadorService {
         int totalVuelosCancelados = 0;
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
 
-        List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>(plan.size());
+        List<BloqueSimulacion> bloques = new ArrayList<>(plan.size());
         Map<String, int[]> odStats = new HashMap<>();
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
@@ -1560,7 +1089,7 @@ public class PlanificadorService {
         // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
 
-        List<SimulacionResponse.BloqueSimulacion> bloques = new ArrayList<>();
+        List<BloqueSimulacion> bloques = new ArrayList<>();
         Map<String, int[]> odStats = new HashMap<>();
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
@@ -1865,7 +1394,7 @@ public class PlanificadorService {
             }
         }
 
-        // 3. Motor: ALNS (Greedy + Dijkstra + ALNS) o ACO (AlgorithmACO por batch).
+        // 3. Motor: ALNS (Greedy + Dijkstra + ALNS) o ACO (AcoBlockEngine por bloque).
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
         Map<Long, Integer> telemetryFlight = blockFlight;
@@ -1961,9 +1490,9 @@ public class PlanificadorService {
             }
         }
 
-        List<SimulacionResponse.AsignacionMaleta> asignaciones = buildAsignaciones(finalBatches);
+        List<AsignacionMaleta> asignaciones = buildAsignaciones(finalBatches);
 
-        int enrutadas = (int) asignaciones.stream().filter(SimulacionResponse.AsignacionMaleta::isEnrutada).count();
+        int enrutadas = (int) asignaciones.stream().filter(AsignacionMaleta::isEnrutada).count();
         int cumpleSLA = (int) asignaciones.stream().filter(a -> a.isEnrutada() && a.isCumpleSLA()).count();
         int tardadas = enrutadas - cumpleSLA;
         int sinRuta = finalBatches.size() - enrutadas;
@@ -1971,7 +1500,7 @@ public class PlanificadorService {
                 .mapToLong(m -> m.getCantidad() != null ? m.getCantidad() : 0L)
                 .sum();
 
-        for (SimulacionResponse.AsignacionMaleta a : asignaciones) {
+        for (AsignacionMaleta a : asignaciones) {
             int[] s = odStats.computeIfAbsent(a.getOrigen() + "->" + a.getDestino(), key -> new int[2]);
             s[0]++;
             if (a.isEnrutada()) s[1]++;
@@ -2033,7 +1562,7 @@ public class PlanificadorService {
         // Si Ta no está configurado, queda el legacy (taMs = tiempo medido).
         ctx.marcarFin(taFijoMs);
 
-        SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
+        BloqueSimulacion bloque = new BloqueSimulacion();
         bloque.setHoraInicio(ctx.scStart.toString());
         bloque.setHoraFin(ctx.scEnd.toString());
         // Rango UTC real del bloque = min/max de los registroUtc de sus asignaciones. No se deriva
@@ -2048,6 +1577,9 @@ public class PlanificadorService {
         // (global incluye este bloque) de cada recurso tocado, no el delta del bloque.
         bloque.setCargasVuelos(buildCargasVuelos(telemetryFlight, graph, enrutador));
         bloque.setOcupacionAlmacenes(buildOcupacionAlmacenes(telemetryAirport, graph, enrutador));
+        // Alerta de almacén cerca de colapso, ESPECÍFICA de este bloque: viaja embebida para que el
+        // front la muestre sincronizada con la animación, aunque el backend ya vaya en bloques futuros.
+        bloque.setAlertaAlmacen(construirAlertaAlmacen(bloque.getOcupacionAlmacenes(), ctx.bloqueIdx));
         bloque.setBloqueIdx(ctx.bloqueIdx);
         bloque.setTaMs(ctx.taMs);
         bloque.setScMinutos(ctx.scMinutos);
@@ -2069,7 +1601,7 @@ public class PlanificadorService {
         }
 
         // Serie por slots para la animación en vivo (no se calcula en warm-up: no se publica).
-        List<SimulacionResponse.OcupacionAlmacenSlot> serieAlmacenes = fastForward
+        List<OcupacionAlmacenSlot> serieAlmacenes = fastForward
                 ? List.of()
                 : buildSerieAlmacenes(telemetryAirport, graph, enrutador);
 
@@ -2296,10 +1828,10 @@ public class PlanificadorService {
      * Construye los DTOs de asignación para una lista de batches ya ruteados.
      * Visible a nivel de paquete para pruebas de la conversión a UTC (husos).
      */
-    List<SimulacionResponse.AsignacionMaleta> buildAsignaciones(List<LuggageBatch> batches) {
+    List<AsignacionMaleta> buildAsignaciones(List<LuggageBatch> batches) {
         return batches.stream().map(b -> {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
-            SimulacionResponse.AsignacionMaleta asig = new SimulacionResponse.AsignacionMaleta();
+            AsignacionMaleta asig = new AsignacionMaleta();
             asig.setBatchId(b.getId());
             asig.setOrigen(b.getOriginCode());
             asig.setDestino(b.getDestCode());
@@ -2320,7 +1852,7 @@ public class PlanificadorService {
                 asig.setRegistroLocal(epochMinToIso(readyUtcMin + offsetHoras(b.getOriginCode()) * 60L));
             }
 
-            List<SimulacionResponse.TramoRuta> tramos = Collections.emptyList();
+            List<TramoRuta> tramos = Collections.emptyList();
             if (enrutada && b.getAssignedDepartures() != null && !b.getAssignedDepartures().isEmpty()) {
                 var route = b.getAssignedRoute();
                 var deps = b.getAssignedDepartures();
@@ -2331,7 +1863,7 @@ public class PlanificadorService {
                     long arrMin = depMin + edge.durationMinutes; // UTC; duración real de vuelo
                     String origen  = edge.from != null ? edge.from.code : "";
                     String destino = edge.to != null ? edge.to.code : "";
-                    SimulacionResponse.TramoRuta tr = new SimulacionResponse.TramoRuta();
+                    TramoRuta tr = new TramoRuta();
                     tr.setVueloId(edge.id);
                     tr.setOrigen(origen);
                     tr.setDestino(destino);
@@ -2381,109 +1913,18 @@ public class PlanificadorService {
         log.info("=======================");
     }
 
-    private SimulacionResponse.Metricas metricasDesdeBloques(List<SimulacionResponse.BloqueSimulacion> bloques) {
-        SimulacionResponse.Metricas m = new SimulacionResponse.Metricas();
-        if (bloques == null || bloques.isEmpty()) return m;
-
-        int procesadas = 0;
-        int enrutadas = 0;
-        int cumpleSla = 0;
-        long maletas = 0L;
-        long taMin = Long.MAX_VALUE;
-        long taMax = 0L;
-        long taTotal = 0L;
-        int taCount = 0;
-
-        for (SimulacionResponse.BloqueSimulacion bloque : bloques) {
-            procesadas += bloque.getMaletasProcesadas();
-            enrutadas += bloque.getMaletasEnrutadas();
-            if (bloque.getAsignaciones() != null) {
-                for (SimulacionResponse.AsignacionMaleta a : bloque.getAsignaciones()) {
-                    maletas += a.getCantidad();
-                    if (a.isEnrutada() && a.isCumpleSLA()) cumpleSla++;
-                }
-            }
-            if (bloque.getTaMs() > 0) {
-                taMin = Math.min(taMin, bloque.getTaMs());
-                taMax = Math.max(taMax, bloque.getTaMs());
-                taTotal += bloque.getTaMs();
-                taCount++;
-            }
-        }
-
-        m.setProcesadas(procesadas);
-        m.setEnrutadas(enrutadas);
-        m.setSinRuta(Math.max(0, procesadas - enrutadas));
-        m.setCumpleSLA(cumpleSla);
-        m.setTardadas(enrutadas - cumpleSla);
-        m.setMaletasIndividuales(maletas);
-        if (taCount > 0) {
-            m.setTaMinMs(taMin);
-            m.setTaMaxMs(taMax);
-            m.setTaPromedioMs(taTotal / taCount);
-            m.setTiempoTotalAlgMs(taTotal);
-        }
-        return m;
-    }
-
-    private static Map<String, Object> tasas(SimulacionResponse.Metricas m) {
-        Map<String, Object> tasas = new LinkedHashMap<>();
-        int procesadas = m != null ? m.getProcesadas() : 0;
-        tasas.put("enrutamientoPct", porcentaje(m != null ? m.getEnrutadas() : 0, procesadas));
-        tasas.put("sinRutaPct", porcentaje(m != null ? m.getSinRuta() : 0, procesadas));
-        tasas.put("cumpleSlaPct", porcentaje(m != null ? m.getCumpleSLA() : 0, procesadas));
-        tasas.put("tardadasPct", porcentaje(m != null ? m.getTardadas() : 0, procesadas));
-        return tasas;
-    }
-
-    private static Map<String, Object> ultimoBloqueResumen(JobState job) {
-        if (job == null || job.bloquesPublicados() == 0) return null;
-        List<SimulacionResponse.BloqueSimulacion> ultimos =
-                job.bloquesDesde(job.bloquesPublicados() - 1);
-        if (ultimos.isEmpty()) return null;
-        SimulacionResponse.BloqueSimulacion b = ultimos.get(0);
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("bloqueIdx", b.getBloqueIdx());
-        out.put("horaInicio", b.getHoraInicio());
-        out.put("horaFin", b.getHoraFin());
-        out.put("maletasProcesadas", b.getMaletasProcesadas());
-        out.put("maletasEnrutadas", b.getMaletasEnrutadas());
-        out.put("maletasProcesadasAcum", b.getMaletasProcesadasAcum());
-        out.put("maletasEnrutadasAcum", b.getMaletasEnrutadasAcum());
-        out.put("maletasEntregadasAcum", b.getMaletasEntregadasAcum());
-        out.put("taMs", b.getTaMs());
-        out.put("scMinutos", b.getScMinutos());
-        return out;
-    }
-
-    private List<SimulacionResponse.CargaVuelo> cargasDelBloque(SimulacionResponse.BloqueSimulacion bloque) {
-        if (bloque == null) return List.of();
-        if (bloque.getCargasVuelos() != null && !bloque.getCargasVuelos().isEmpty()) {
-            return bloque.getCargasVuelos();
-        }
-        return derivarCargasDesdeAsignaciones(bloque);
-    }
-
-    private List<SimulacionResponse.OcupacionAlmacen> ocupacionesDelBloque(SimulacionResponse.BloqueSimulacion bloque) {
-        if (bloque == null) return List.of();
-        if (bloque.getOcupacionAlmacenes() != null && !bloque.getOcupacionAlmacenes().isEmpty()) {
-            return bloque.getOcupacionAlmacenes();
-        }
-        return derivarOcupacionesDesdeAsignaciones(bloque);
-    }
-
     // Package-private para tests (telemetría por bloque vs ocupación acumulada).
     // El mapa del bloque selecciona QUÉ vuelos-día reportar (los tocados en este bloque); la carga
     // reportada es la ACUMULADA global del enrutador, que tras commitBlock ya incluye el bloque.
     // Sin enrutador (legacy/tests) se reporta el delta del bloque, como antes del fix.
-    List<SimulacionResponse.CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Graph graph,
+    List<CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Graph graph,
                                                           GreedyRepairOperator enrutador) {
         if (blockFlight == null || blockFlight.isEmpty() || graph == null) return List.of();
 
         Map<Integer, Edge> edgesByIdx = new HashMap<>();
         for (Edge edge : graph.edges) edgesByIdx.put(edge.idx, edge);
 
-        List<SimulacionResponse.CargaVuelo> out = new ArrayList<>();
+        List<CargaVuelo> out = new ArrayList<>();
         for (Map.Entry<Long, Integer> entry : blockFlight.entrySet()) {
             int carga = enrutador != null
                     ? enrutador.ocupacionGlobalVuelo(entry.getKey())
@@ -2497,7 +1938,7 @@ public class PlanificadorService {
                     .plusMinutes(edge.depMinuteOfDay);
             LocalDateTime llegada = salida.plusMinutes(edge.durationMinutes);
 
-            SimulacionResponse.CargaVuelo dto = new SimulacionResponse.CargaVuelo();
+            CargaVuelo dto = new CargaVuelo();
             dto.setVueloId(edge.id);
             dto.setOrigen(edge.from != null ? edge.from.code : "");
             dto.setDestino(edge.to != null ? edge.to.code : "");
@@ -2505,11 +1946,11 @@ public class PlanificadorService {
             dto.setFechaLlegada(llegada.toString());
             dto.setCapacidadMaxima(edge.capacity);
             dto.setCargaAsignada(carga);
-            completarCargaVuelo(dto);
+            SimulacionFormat.completarCargaVuelo(dto);
             out.add(dto);
         }
-        out.sort(Comparator.comparing(SimulacionResponse.CargaVuelo::getFechaSalida)
-                .thenComparing(SimulacionResponse.CargaVuelo::getVueloId));
+        out.sort(Comparator.comparing(CargaVuelo::getFechaSalida)
+                .thenComparing(CargaVuelo::getVueloId));
         return out;
     }
 
@@ -2517,7 +1958,7 @@ public class PlanificadorService {
     // El mapa del bloque selecciona QUÉ slots reportar (los tocados en este bloque); la ocupación
     // reportada es la ACUMULADA global del enrutador (tras commitBlock incluye el bloque, más la
     // espera en origen del backlog). Sin enrutador (legacy/tests) se reporta el delta del bloque.
-    List<SimulacionResponse.OcupacionAlmacen> buildOcupacionAlmacenes(Map<Long, Integer> blockAirport,
+    List<OcupacionAlmacen> buildOcupacionAlmacenes(Map<Long, Integer> blockAirport,
                                                                        Graph graph,
                                                                        GreedyRepairOperator enrutador) {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
@@ -2541,21 +1982,21 @@ public class PlanificadorService {
             picoPorAeroDia.merge(claveAeroDia, ocupacion, Integer::max);
         }
 
-        List<SimulacionResponse.OcupacionAlmacen> out = new ArrayList<>();
+        List<OcupacionAlmacen> out = new ArrayList<>();
         for (Map.Entry<Long, Integer> entry : picoPorAeroDia.entrySet()) {
             Node node = nodesByIdx.get(resourceIdx(entry.getKey()));
             if (node == null) continue;
 
-            SimulacionResponse.OcupacionAlmacen dto = new SimulacionResponse.OcupacionAlmacen();
+            OcupacionAlmacen dto = new OcupacionAlmacen();
             dto.setAeropuerto(node.code);
             dto.setFecha(LocalDate.ofEpochDay(epochDay(entry.getKey())).toString());
             dto.setCapacidadMaxima(node.capacity);
             dto.setOcupacionAsignada(entry.getValue());   // pico concurrente del día
-            completarOcupacionAlmacen(dto);
+            SimulacionFormat.completarOcupacionAlmacen(dto);
             out.add(dto);
         }
-        out.sort(Comparator.comparing(SimulacionResponse.OcupacionAlmacen::getFecha)
-                .thenComparing(SimulacionResponse.OcupacionAlmacen::getAeropuerto));
+        out.sort(Comparator.comparing(OcupacionAlmacen::getFecha)
+                .thenComparing(OcupacionAlmacen::getAeropuerto));
         return out;
     }
 
@@ -2565,7 +2006,7 @@ public class PlanificadorService {
     // el bloque y la espera en origen del backlog). Es la MISMA granularidad que valida el
     // Dijkstra — el DTO no agrega ni descarta nada, solo decodifica la clave de slot a
     // (aeropuerto, hora UTC).
-    List<SimulacionResponse.OcupacionAlmacenSlot> buildSerieAlmacenes(Map<Long, Integer> blockAirport,
+    List<OcupacionAlmacenSlot> buildSerieAlmacenes(Map<Long, Integer> blockAirport,
                                                                       Graph graph,
                                                                       GreedyRepairOperator enrutador) {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
@@ -2573,7 +2014,7 @@ public class PlanificadorService {
         Map<Integer, Node> nodesByIdx = new HashMap<>();
         for (Node node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
 
-        List<SimulacionResponse.OcupacionAlmacenSlot> out = new ArrayList<>(blockAirport.size());
+        List<OcupacionAlmacenSlot> out = new ArrayList<>(blockAirport.size());
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
             int ocupacion = enrutador != null
                     ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
@@ -2585,192 +2026,51 @@ public class PlanificadorService {
             long slot = entry.getKey() & FlightKeyEncoder.DAY_MASK;   // índice de slot (epochMin/60)
             long epochMin = slot * GreedyRepairOperator.STORAGE_SLOT_MIN;
 
-            SimulacionResponse.OcupacionAlmacenSlot dto = new SimulacionResponse.OcupacionAlmacenSlot();
+            OcupacionAlmacenSlot dto = new OcupacionAlmacenSlot();
             dto.setAeropuerto(node.code);
             dto.setHora(epochMinToIso(epochMin));
             dto.setCapacidadMaxima(node.capacity);
             dto.setOcupacion(ocupacion);
-            double porcentaje = porcentaje(ocupacion, node.capacity);
+            double porcentaje = SimulacionFormat.porcentaje(ocupacion, node.capacity);
             dto.setPorcentajeOcupacion(porcentaje);
-            dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
+            dto.setSemaforo(SimulacionFormat.semaforoPorPorcentaje(porcentaje));
             out.add(dto);
         }
-        out.sort(Comparator.comparing(SimulacionResponse.OcupacionAlmacenSlot::getHora)
-                .thenComparing(SimulacionResponse.OcupacionAlmacenSlot::getAeropuerto));
+        out.sort(Comparator.comparing(OcupacionAlmacenSlot::getHora)
+                .thenComparing(OcupacionAlmacenSlot::getAeropuerto));
         return out;
     }
 
-    private List<SimulacionResponse.CargaVuelo> derivarCargasDesdeAsignaciones(
-            SimulacionResponse.BloqueSimulacion bloque) {
-        if (bloque == null || bloque.getAsignaciones() == null) return List.of();
-        Map<String, Integer> capacidades = capacidadesVuelosPorId();
-        Map<String, SimulacionResponse.CargaVuelo> acc = new LinkedHashMap<>();
+    /**
+     * Construye la alerta de almacén del bloque: el almacén con mayor % de ocupación entre los del
+     * bloque, reusando su semáforo ya calculado ("VERDE"/"AMBAR"/"ROJO", umbrales 0.70/0.90). Si el
+     * bloque no tocó ningún almacén, devuelve nivel "VERDE" sin almacén crítico. La alerta viaja
+     * embebida en el bloque para sincronizarse con la animación del front.
+     */
+    // package-private para test unitario (AlertaAlmacenTest, mismo paquete).
+    static AlertaAlmacen construirAlertaAlmacen(
+            List<OcupacionAlmacen> ocupaciones, int bloqueIdx) {
+        AlertaAlmacen alerta = new AlertaAlmacen();
+        alerta.setBloqueIdx(bloqueIdx);
 
-        for (SimulacionResponse.AsignacionMaleta asignacion : bloque.getAsignaciones()) {
-            if (!asignacion.isEnrutada() || asignacion.getTramos() == null) continue;
-            for (SimulacionResponse.TramoRuta tramo : asignacion.getTramos()) {
-                String vueloId = safe(tramo.getVueloId());
-                // Eje UTC, igual que buildCargasVuelos: el mismo campo no puede cambiar de eje
-                // según el camino (principal vs fallback legacy).
-                String salida = safe(tramo.getSalidaUtc());
-                String key = vueloId + "|" + salida;
-                SimulacionResponse.CargaVuelo dto = acc.computeIfAbsent(key, k -> {
-                    SimulacionResponse.CargaVuelo nuevo = new SimulacionResponse.CargaVuelo();
-                    nuevo.setVueloId(vueloId);
-                    nuevo.setOrigen(safe(tramo.getOrigen()));
-                    nuevo.setDestino(safe(tramo.getDestino()));
-                    nuevo.setFechaSalida(salida);
-                    nuevo.setFechaLlegada(safe(tramo.getLlegadaUtc()));
-                    nuevo.setCapacidadMaxima(capacidades.getOrDefault(vueloId, 0));
-                    return nuevo;
-                });
-                dto.setCargaAsignada(dto.getCargaAsignada() + asignacion.getCantidad());
+        OcupacionAlmacen peor = null;
+        if (ocupaciones != null) {
+            for (OcupacionAlmacen o : ocupaciones) {
+                if (peor == null || o.getPorcentajeOcupacion() > peor.getPorcentajeOcupacion()) {
+                    peor = o;
+                }
             }
         }
-
-        acc.values().forEach(PlanificadorService::completarCargaVuelo);
-        return new ArrayList<>(acc.values());
-    }
-
-    private List<SimulacionResponse.OcupacionAlmacen> derivarOcupacionesDesdeAsignaciones(
-            SimulacionResponse.BloqueSimulacion bloque) {
-        if (bloque == null || bloque.getAsignaciones() == null) return List.of();
-        Map<String, Integer> capacidades = capacidadesAlmacenPorCodigo();
-        Map<String, SimulacionResponse.OcupacionAlmacen> acc = new LinkedHashMap<>();
-
-        for (SimulacionResponse.AsignacionMaleta asignacion : bloque.getAsignaciones()) {
-            if (!asignacion.isEnrutada()
-                    || asignacion.getTramos() == null
-                    || asignacion.getTramos().isEmpty()) continue;
-
-            SimulacionResponse.TramoRuta ultimo =
-                    asignacion.getTramos().get(asignacion.getTramos().size() - 1);
-            String aeropuerto = safe(ultimo.getDestino());
-            // Eje UTC: el camino principal (buildOcupacionAlmacenes) deriva la fecha del
-            // almacén-día del slot UTC; el fallback debe usar el mismo eje.
-            String fecha = fechaDe(ultimo.getLlegadaUtc());
-            String key = aeropuerto + "|" + fecha;
-            SimulacionResponse.OcupacionAlmacen dto = acc.computeIfAbsent(key, k -> {
-                SimulacionResponse.OcupacionAlmacen nuevo = new SimulacionResponse.OcupacionAlmacen();
-                nuevo.setAeropuerto(aeropuerto);
-                nuevo.setFecha(fecha);
-                nuevo.setCapacidadMaxima(capacidades.getOrDefault(aeropuerto, 0));
-                return nuevo;
-            });
-            dto.setOcupacionAsignada(dto.getOcupacionAsignada() + asignacion.getCantidad());
+        if (peor == null) {
+            alerta.setNivel("VERDE");
+            return alerta;
         }
-
-        acc.values().forEach(PlanificadorService::completarOcupacionAlmacen);
-        return new ArrayList<>(acc.values());
-    }
-
-    private Map<String, Integer> capacidadesVuelosPorId() {
-        Map<String, Integer> out = new HashMap<>();
-        for (Vuelo vuelo : dataLoader.getVuelos()) {
-            out.put(vueloFrontId(vuelo), vuelo.getCapacidad() != null ? vuelo.getCapacidad() : 0);
-        }
-        return out;
-    }
-
-    private Map<String, Integer> capacidadesAlmacenPorCodigo() {
-        Map<String, Integer> out = new HashMap<>();
-        for (Aeropuerto aeropuerto : dataLoader.getAeropuertos()) {
-            out.put(aeropuerto.getCodigo(), aeropuerto.getCapacidad() != null ? aeropuerto.getCapacidad() : 0);
-        }
-        return out;
-    }
-
-    private static void completarCargaVuelo(SimulacionResponse.CargaVuelo dto) {
-        double porcentaje = porcentaje(dto.getCargaAsignada(), dto.getCapacidadMaxima());
-        dto.setPorcentajeCarga(porcentaje);
-        dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
-    }
-
-    private static void completarOcupacionAlmacen(SimulacionResponse.OcupacionAlmacen dto) {
-        double porcentaje = porcentaje(dto.getOcupacionAsignada(), dto.getCapacidadMaxima());
-        dto.setPorcentajeOcupacion(porcentaje);
-        dto.setSemaforo(semaforoPorPorcentaje(porcentaje));
-    }
-
-    private static class VueloUsadoAccumulator {
-        private final VuelosUsadosResponse.VueloUsado row = new VuelosUsadosResponse.VueloUsado();
-        private final Set<String> envioKeys = new LinkedHashSet<>();
-        private final List<String> envioIds = new ArrayList<>();
-
-        private VuelosUsadosResponse.VueloUsado toDto() {
-            row.setCantidadEnvios(envioKeys.size());
-            row.setEnvioIds(List.copyOf(envioIds));
-            return row;
-        }
-    }
-
-    private static Map<String, Object> cargaVueloToMap(SimulacionResponse.CargaVuelo c) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("vueloId", c.getVueloId());
-        out.put("origen", c.getOrigen());
-        out.put("destino", c.getDestino());
-        out.put("fechaSalida", c.getFechaSalida());
-        out.put("fechaLlegada", c.getFechaLlegada());
-        out.put("capacidadMaxima", c.getCapacidadMaxima());
-        out.put("cargaAsignada", c.getCargaAsignada());
-        out.put("porcentajeCarga", c.getPorcentajeCarga());
-        out.put("semaforo", c.getSemaforo());
-        return out;
-    }
-
-    private static Map<String, Object> ocupacionAlmacenToMap(SimulacionResponse.OcupacionAlmacen o) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("aeropuerto", o.getAeropuerto());
-        out.put("fecha", o.getFecha());
-        out.put("capacidadMaxima", o.getCapacidadMaxima());
-        out.put("ocupacionAsignada", o.getOcupacionAsignada());
-        out.put("porcentajeOcupacion", o.getPorcentajeOcupacion());
-        out.put("semaforo", o.getSemaforo());
-        return out;
-    }
-
-    private static boolean pasaFiltroAeropuerto(SimulacionResponse.AsignacionMaleta a, String aeropuerto) {
-        if (aeropuerto.equalsIgnoreCase(safe(a.getOrigen()))
-                || aeropuerto.equalsIgnoreCase(safe(a.getDestino()))) return true;
-        if (a.getTramos() == null) return false;
-        for (SimulacionResponse.TramoRuta tramo : a.getTramos()) {
-            if (aeropuerto.equalsIgnoreCase(safe(tramo.getOrigen()))
-                    || aeropuerto.equalsIgnoreCase(safe(tramo.getDestino()))) return true;
-        }
-        return false;
-    }
-
-    private static boolean pasaFiltroVuelo(SimulacionResponse.AsignacionMaleta a, String vueloId) {
-        if (a.getTramos() == null) return false;
-        for (SimulacionResponse.TramoRuta tramo : a.getTramos()) {
-            if (vueloId.equalsIgnoreCase(safe(tramo.getVueloId()))) return true;
-        }
-        return false;
-    }
-
-    private static void acumularDemanda(Map<String, long[]> acc, String key, long cantidad) {
-        long[] stats = acc.computeIfAbsent(safe(key), k -> new long[2]);
-        stats[0]++;
-        stats[1] += cantidad;
-    }
-
-    private static List<Map<String, Object>> demandaRows(Map<String, long[]> acc, int limite) {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        acc.entrySet().stream()
-                .sorted((a, b) -> {
-                    int byMaletas = Long.compare(b.getValue()[1], a.getValue()[1]);
-                    if (byMaletas != 0) return byMaletas;
-                    return Long.compare(b.getValue()[0], a.getValue()[0]);
-                })
-                .limit(limite)
-                .forEach(e -> {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("clave", e.getKey());
-                    row.put("envios", e.getValue()[0]);
-                    row.put("maletas", e.getValue()[1]);
-                    rows.add(row);
-                });
-        return rows;
+        alerta.setNivel(peor.getSemaforo());
+        alerta.setAlmacenCritico(peor.getAeropuerto());
+        alerta.setCapacidadMaxima(peor.getCapacidadMaxima());
+        alerta.setOcupacion(peor.getOcupacionAsignada());
+        alerta.setPorcentajeOcupacion(peor.getPorcentajeOcupacion());
+        return alerta;
     }
 
     private static int resourceIdx(long key) {
@@ -2781,35 +2081,6 @@ public class PlanificadorService {
         return key & FlightKeyEncoder.DAY_MASK;
     }
 
-    private static double porcentaje(long valor, long total) {
-        if (total <= 0) return 0.0;
-        return Math.round((valor * 10000.0) / total) / 100.0;
-    }
-
-    private static String semaforoPorPorcentaje(double porcentaje) {
-        double ratio = porcentaje / 100.0;
-        if (ratio <= CostFunction.UMBRAL_VERDE) return "VERDE";
-        if (ratio <= CostFunction.UMBRAL_AMBAR) return "AMBAR";
-        return "ROJO";
-    }
-
-    private static String normalizarCodigo(String value) {
-        String text = normalizarTexto(value);
-        return text != null ? text.toUpperCase() : null;
-    }
-
-    private static String normalizarTexto(String value) {
-        if (value == null) return null;
-        String text = value.trim();
-        return text.isEmpty() ? null : text;
-    }
-
-    private static String fechaDe(String isoDateTime) {
-        if (isoDateTime == null || isoDateTime.isBlank()) return "";
-        int t = isoDateTime.indexOf('T');
-        return t > 0 ? isoDateTime.substring(0, t) : isoDateTime;
-    }
-
     // =========================================================
     // Helpers de respuesta
     // =========================================================
@@ -2818,7 +2089,7 @@ public class PlanificadorService {
                                                        int totalBloques,
                                                        LocalDate simulationDate) {
         SimulacionResponse res = new SimulacionResponse();
-        SimulacionResponse.Metricas m = new SimulacionResponse.Metricas();
+        Metricas m = new Metricas();
         m.setEnrutadas(enrutadas);
         m.setTiempoEjecucionMs(tiempoMs);
         res.setMetricas(m);
@@ -2827,11 +2098,11 @@ public class PlanificadorService {
         long dayShift = simulationDate != null
                 ? ChronoUnit.DAYS.between(FlightParser.FLIGHT_BASE_DATE, simulationDate) : 0L;
 
-        List<SimulacionResponse.VueloBackend> vuelosFront = new ArrayList<>();
-        Map<String, SimulacionResponse.AeropuertoDTO> infoAero = new HashMap<>();
+        List<VueloBackend> vuelosFront = new ArrayList<>();
+        Map<String, AeropuertoDTO> infoAero = new HashMap<>();
         for (Vuelo v : vuelosReales) {
-            SimulacionResponse.VueloBackend vb = new SimulacionResponse.VueloBackend();
-            vb.setId(vueloFrontId(v));
+            VueloBackend vb = new VueloBackend();
+            vb.setId(SimulacionFormat.vueloFrontId(v));
             vb.setOrigen(v.getOrigen());
             vb.setDestino(v.getDestino());
             vb.setFechaSalida(v.getFechaHoraSalida().plusDays(dayShift).toString());
@@ -2847,7 +2118,7 @@ public class PlanificadorService {
         return res;
     }
 
-    private static void llenarMetricas(SimulacionResponse.Metricas m,
+    private static void llenarMetricas(Metricas m,
                                        int envios, int enrutadas, int sinRuta,
                                        int cumpleSLA, int tardadas, long maletas,
                                        int vuelosCancelados,
@@ -2867,7 +2138,7 @@ public class PlanificadorService {
      * Llena las métricas Ta/Sa de la simulación. Marca {@code advertenciaCalibracion}
      * si Ta excedió el 90% de Sa en algún bloque (cliente debe bajar K).
      */
-    private static void llenarMetricasTa(SimulacionResponse.Metricas m, TaStats stats, long saMs) {
+    private static void llenarMetricasTa(Metricas m, TaStats stats, long saMs) {
         m.setTaMinMs(stats.min());
         m.setTaMaxMs(stats.max());
         m.setTaPromedioMs(stats.promedio());
@@ -2949,7 +2220,7 @@ public class PlanificadorService {
      * salir; excluye los ya entregados y los sinRuta (estos siguen vivos vía backlog y
      * aparecerán en los bloques visibles). Package-private para tests.
      */
-    List<SimulacionResponse.AsignacionMaleta> construirEstadoInicial(Map<String, LuggageBatch> auditWarmup) {
+    List<AsignacionMaleta> construirEstadoInicial(Map<String, LuggageBatch> auditWarmup) {
         if (auditWarmup == null || auditWarmup.isEmpty()) return List.of();
 
         long relojMin = Long.MIN_VALUE;
@@ -3011,7 +2282,7 @@ public class PlanificadorService {
     // horario y podía contar entregas aún no ocurridas. Con el reloj UTC la cuenta es física
     // y monótona; si no entran envíos nuevos el reloj se detiene en el último registro
     // (subcuenta conservadora, nunca cuenta una entrega futura).
-    static void llenarAcumuladosFisicos(SimulacionResponse.BloqueSimulacion bloque,
+    static void llenarAcumuladosFisicos(BloqueSimulacion bloque,
                                         Map<String, LuggageBatch> auditAcc) {
         if (bloque == null || auditAcc == null || auditAcc.isEmpty()) return;
 
@@ -3060,27 +2331,14 @@ public class PlanificadorService {
     private static String batchAuditKey(LuggageBatch b) {
         if (b == null) return "";
         return String.join("|",
-                safe(b.getId()),
-                safe(b.getOriginCode()),
-                safe(b.getDestCode()),
+                SimulacionFormat.safe(b.getId()),
+                SimulacionFormat.safe(b.getOriginCode()),
+                SimulacionFormat.safe(b.getDestCode()),
                 b.getReadyTime() != null ? b.getReadyTime().toString() : "",
                 String.valueOf(b.getQuantity()));
     }
 
-    private static String vueloFrontId(Vuelo v) {
-        if (v == null) return "";
-        if (v.getId() != null) return v.getId().toString();
-        String origen = v.getAeropuertoOrigen() != null ? v.getAeropuertoOrigen().getCodigo() : safe(v.getOrigen());
-        String destino = v.getAeropuertoDestino() != null ? v.getAeropuertoDestino().getCodigo() : safe(v.getDestino());
-        String salida = v.getFechaHoraSalida() != null ? v.getFechaHoraSalida().toLocalTime().toString() : "";
-        return origen + "-" + destino + "-" + salida;
-    }
-
-    private static String safe(String value) {
-        return value != null ? value : "";
-    }
-
-    private static void llenarMetricasBacklog(SimulacionResponse.Metricas m, BacklogManager backlog) {
+    private static void llenarMetricasBacklog(Metricas m, BacklogManager backlog) {
         m.setBacklogActual(backlog.size());
         m.setBacklogPico(backlog.picoHistorico());
         m.setSinRutaDefinitivo(backlog.sinRutaDefinitivo());
@@ -3092,9 +2350,9 @@ public class PlanificadorService {
      * son ISO sin offset y mismo formato ({@code yyyy-MM-ddTHH:mm}), así que el orden lexicográfico
      * coincide con el cronológico. Visible a nivel de paquete para pruebas.
      */
-    static String[] rangoUtcRegistros(List<SimulacionResponse.AsignacionMaleta> asignaciones) {
+    static String[] rangoUtcRegistros(List<AsignacionMaleta> asignaciones) {
         String min = null, max = null;
-        for (SimulacionResponse.AsignacionMaleta a : asignaciones) {
+        for (AsignacionMaleta a : asignaciones) {
             String r = a.getRegistroUtc();
             if (r == null) continue;
             if (min == null || r.compareTo(min) < 0) min = r;
@@ -3134,10 +2392,10 @@ public class PlanificadorService {
         return mapa.getOrDefault(codigo, 0);
     }
 
-    private void agregarInfoAeropuerto(Map<String, SimulacionResponse.AeropuertoDTO> map,
+    private void agregarInfoAeropuerto(Map<String, AeropuertoDTO> map,
                                        String cod, Aeropuerto a) {
         if (!map.containsKey(cod)) {
-            SimulacionResponse.AeropuertoDTO dto = new SimulacionResponse.AeropuertoDTO();
+            AeropuertoDTO dto = new AeropuertoDTO();
             dto.setCodigo(cod);
             dto.setLatitud(a.getLatitud());
             dto.setLongitud(a.getLongitud());
@@ -3163,173 +2421,15 @@ public class PlanificadorService {
     }
 
     private record ResultadoVentana(
-            SimulacionResponse.BloqueSimulacion bloque,
+            BloqueSimulacion bloque,
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
             boolean colapsoAlmacen, String detalleColapso,
             com.tasfb2b.planificador.dto.AlertaColapso alerta,
-            List<SimulacionResponse.OcupacionAlmacenSlot> serieAlmacenes) {
+            List<OcupacionAlmacenSlot> serieAlmacenes) {
     }
 
     private record TotalesUnicos(
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas) {
-    }
-
-    private List<TaStats.AuditRecord> sampleAudit(List<TaStats.AuditRecord> base, int sampleSize) {
-        if (sampleSize <= 0 || sampleSize >= base.size()) {
-            return base;
-        }
-
-        List<TaStats.AuditRecord> exitos = new ArrayList<>();
-        List<TaStats.AuditRecord> fallos = new ArrayList<>();
-        for (TaStats.AuditRecord r : base) {
-            if (r.exitoso) {
-                exitos.add(r);
-            } else {
-                fallos.add(r);
-            }
-        }
-
-        Collections.shuffle(exitos, new Random(42));
-        Collections.shuffle(fallos, new Random(42));
-
-        int takeExitos = Math.min(exitos.size(), sampleSize / 2);
-        int takeFallos = Math.min(fallos.size(), sampleSize - takeExitos);
-
-        List<TaStats.AuditRecord> out = new ArrayList<>();
-        out.addAll(exitos.subList(0, takeExitos));
-        out.addAll(fallos.subList(0, takeFallos));
-
-        int faltantes = sampleSize - out.size();
-        if (faltantes > 0) {
-            List<TaStats.AuditRecord> pool = new ArrayList<>(base);
-            Collections.shuffle(pool, new Random(43));
-            for (TaStats.AuditRecord r : pool) {
-                if (faltantes == 0) {
-                    break;
-                }
-                if (!out.contains(r)) {
-                    out.add(r);
-                    faltantes--;
-                }
-            }
-        }
-        return out;
-    }
-
-    private List<String> cargarVuelos() {
-
-        List<String> vuelos = new ArrayList<>();
-
-        try {
-            InputStream is = getClass()
-                    .getClassLoader()
-                    .getResourceAsStream("data/planes_vuelo.txt");
-
-            if (is == null) {
-                System.out.println("Archivo de vuelos no encontrado");
-                return List.of();
-            }
-
-            BufferedReader br = new BufferedReader(new InputStreamReader(is));
-            String linea;
-            while ((linea = br.readLine()) != null) {
-                if (!linea.trim().isEmpty()) {
-                    vuelos.add(linea.trim());
-                }
-            }
-            br.close();
-
-        } catch (Exception e) {
-            System.out.println("Error cargando vuelos: " + e.getMessage());
-        }
-
-        return vuelos;
-    }
-
-    private boolean cumpleEscalaMinima(List<Edge> edgesPath) {
-        for (int i = 0; i < edgesPath.size() - 1; i++) {
-            if (!CostFunction.tieneTiempoMinimoEscala(edgesPath.get(i), edgesPath.get(i + 1))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private int calcularTiempoVueloMin(List<Edge> edgesPath) {
-        int total = 0;
-        for (Edge edge : edgesPath) {
-            total += (int) Math.max(1, Math.round(
-                    CostFunction.calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString())
-            ));
-        }
-        return total;
-    }
-
-    private int calcularTiempoEsperaMin(List<Edge> edgesPath) {
-        int espera = 0;
-        for (int i = 0; i < edgesPath.size() - 1; i++) {
-            int llegada = parsearMinutos(edgesPath.get(i).arrivalTime.toString());
-            int salida = parsearMinutos(edgesPath.get(i + 1).departureTime.toString());
-            int diff = salida - llegada;
-            if (diff < 0) {
-                diff += 1440;
-            }
-            espera += diff;
-        }
-        return espera;
-    }
-
-    private int parsearMinutos(String hhmm) {
-        return CostFunction.hhmmAMinutos(hhmm);
-    }
-
-    private boolean sinCiclos(List<Node> path) {
-        Set<String> visited = new HashSet<>();
-        for (Node node : path) {
-            if (!visited.add(node.code)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private int calcularScore(boolean sinDirecto,
-                              boolean sinCiclos,
-                              boolean escalaMinOk,
-                              boolean capacidadVuelosOk,
-                              boolean almacenDestinoOk,
-                              boolean cumpleSLA,
-                              int escalas,
-                              int tiempoEsperaMin,
-                              int slackSlaMin) {
-        if (!sinDirecto || !sinCiclos || !escalaMinOk || !capacidadVuelosOk || !almacenDestinoOk || !cumpleSLA) {
-            return 0;
-        }
-        double score = 100.0;
-        int excesoEscalas = Math.max(0, escalas - 2);
-        score -= excesoEscalas * 15.0;
-        score -= tiempoEsperaMin * 0.05;
-        if (slackSlaMin < 60) {
-            score -= 20.0;
-        }
-        return (int) Math.max(0, Math.round(score));
-    }
-
-    private int estimarMinutosRuta(List<Edge> edgesPath) {
-        if (edgesPath == null || edgesPath.isEmpty()) {
-            return 0;
-        }
-        int total = 0;
-        for (int i = 0; i < edgesPath.size(); i++) {
-            Edge edge = edgesPath.get(i);
-            total += (int) Math.max(1, Math.round(
-                    CostFunction.calcularDuracionMinutos(edge.departureTime.toString(), edge.arrivalTime.toString())
-            ));
-            if (i < edgesPath.size() - 1) {
-                total += CostFunction.TIEMPO_MIN_ESCALA;
-            }
-        }
-        return total;
     }
 
     /**
@@ -3362,223 +2462,6 @@ public class PlanificadorService {
 
         long promedio() {
             return n == 0 ? 0 : suma / n;
-        }
-
-
-
-        private static class PlanRequest {
-            final List<String> origenes;
-            final int limitePorOrigen;
-            final int tickMinutosSimulacion;
-            final Set<String> destinosPermitidos;
-
-            private PlanRequest(List<String> origenes,
-                                int limitePorOrigen,
-                                int tickMinutosSimulacion,
-                                Set<String> destinosPermitidos) {
-                this.origenes = origenes;
-                this.limitePorOrigen = limitePorOrigen;
-                this.tickMinutosSimulacion = tickMinutosSimulacion;
-                this.destinosPermitidos = destinosPermitidos;
-            }
-
-            static PlanRequest todos(int limitePorOrigen, int tickMinutosSimulacion) {
-                return new PlanRequest(List.of(ORIGENES_DISPONIBLES), limitePorOrigen, tickMinutosSimulacion, null);
-            }
-
-            static PlanRequest unOrigen(String origen, int limitePorOrigen, int tickMinutosSimulacion) {
-                return new PlanRequest(List.of(origen), limitePorOrigen, tickMinutosSimulacion, null);
-            }
-
-            static PlanRequest unDestino(String destino, int limitePorOrigen, int tickMinutosSimulacion) {
-                return new PlanRequest(List.of(ORIGENES_DISPONIBLES), limitePorOrigen, tickMinutosSimulacion,
-                        new HashSet<>(Set.of(destino)));
-            }
-        }
-
-        private static class ScheduledEvent {
-            final int minute;
-            final Runnable action;
-
-            ScheduledEvent(int minute, Runnable action) {
-                this.minute = minute;
-                this.action = action;
-            }
-        }
-
-        private static class BaseRunResult {
-            final ResumenPlanificacionGlobal resumen;
-            final List<PlanificacionResultado> resultados;
-            final List<AuditRecord> auditoria;
-
-            BaseRunResult(ResumenPlanificacionGlobal resumen,
-                          List<PlanificacionResultado> resultados,
-                          List<AuditRecord> auditoria) {
-                this.resumen = resumen;
-                this.resultados = resultados;
-                this.auditoria = auditoria;
-            }
-        }
-
-        private static class AttemptResult {
-            final PlanificacionResultado resultado;
-            final AuditRecord auditRecord;
-
-            AttemptResult(PlanificacionResultado resultado, AuditRecord auditRecord) {
-                this.resultado = resultado;
-                this.auditRecord = auditRecord;
-            }
-        }
-
-        private static class AuditRecord {
-            final String idEnvio;
-            final String origen;
-            final String destino;
-            final String registroHHMM;
-            final int deadlineMin;
-            final boolean exitoso;
-            final String motivoFalla;
-            final String ruta;
-            final int numTramos;
-            final int numEscalas;
-            final int tiempoVueloMin;
-            final int tiempoEsperaMin;
-            final int tiempoTotalMin;
-            final int llegadaMin;
-            final int slackSlaMin;
-            final double costoTotal;
-            final boolean cumpleSla;
-            final boolean sinCiclos;
-            final boolean sinDirecto;
-            final boolean escalaMinOk;
-            final boolean capacidadVuelosOk;
-            final boolean almacenDestinoOk;
-            final int scoreCalidad;
-
-            private AuditRecord(String idEnvio,
-                                String origen,
-                                String destino,
-                                String registroHHMM,
-                                int deadlineMin,
-                                boolean exitoso,
-                                String motivoFalla,
-                                String ruta,
-                                int numTramos,
-                                int numEscalas,
-                                int tiempoVueloMin,
-                                int tiempoEsperaMin,
-                                int tiempoTotalMin,
-                                int llegadaMin,
-                                int slackSlaMin,
-                                double costoTotal,
-                                boolean cumpleSla,
-                                boolean sinCiclos,
-                                boolean sinDirecto,
-                                boolean escalaMinOk,
-                                boolean capacidadVuelosOk,
-                                boolean almacenDestinoOk,
-                                int scoreCalidad) {
-                this.idEnvio = idEnvio;
-                this.origen = origen;
-                this.destino = destino;
-                this.registroHHMM = registroHHMM;
-                this.deadlineMin = deadlineMin;
-                this.exitoso = exitoso;
-                this.motivoFalla = motivoFalla;
-                this.ruta = ruta;
-                this.numTramos = numTramos;
-                this.numEscalas = numEscalas;
-                this.tiempoVueloMin = tiempoVueloMin;
-                this.tiempoEsperaMin = tiempoEsperaMin;
-                this.tiempoTotalMin = tiempoTotalMin;
-                this.llegadaMin = llegadaMin;
-                this.slackSlaMin = slackSlaMin;
-                this.costoTotal = costoTotal;
-                this.cumpleSla = cumpleSla;
-                this.sinCiclos = sinCiclos;
-                this.sinDirecto = sinDirecto;
-                this.escalaMinOk = escalaMinOk;
-                this.capacidadVuelosOk = capacidadVuelosOk;
-                this.almacenDestinoOk = almacenDestinoOk;
-                this.scoreCalidad = scoreCalidad;
-            }
-
-            static AuditRecord exitoso(String origen,
-                                       EnvioDTO e,
-                                       int deadlineMin,
-                                       List<String> ruta,
-                                       double costoTotal,
-                                       int numTramos,
-                                       int tiempoVueloMin,
-                                       int tiempoEsperaMin,
-                                       int tiempoTotalMin,
-                                       int llegadaMin,
-                                       int slackSlaMin,
-                                       boolean cumpleSla,
-                                       boolean sinCiclos,
-                                       boolean sinDirecto,
-                                       boolean escalaMinOk,
-                                       boolean capacidadVuelosOk,
-                                       boolean almacenDestinoOk,
-                                       int scoreCalidad) {
-                return new AuditRecord(
-                        e.id,
-                        origen,
-                        e.destinoICAO,
-                        String.format("%02d:%02d", e.horaRegistro, e.minutoRegistro),
-                        deadlineMin,
-                        true,
-                        "",
-                        String.join("->", ruta),
-                        numTramos,
-                        Math.max(0, numTramos - 1),
-                        tiempoVueloMin,
-                        tiempoEsperaMin,
-                        tiempoTotalMin,
-                        llegadaMin,
-                        slackSlaMin,
-                        costoTotal,
-                        cumpleSla,
-                        sinCiclos,
-                        sinDirecto,
-                        escalaMinOk,
-                        capacidadVuelosOk,
-                        almacenDestinoOk,
-                        scoreCalidad
-                );
-            }
-
-            static AuditRecord fallido(String origen,
-                                       EnvioDTO e,
-                                       int deadlineMin,
-                                       String motivo,
-                                       int tiempoActual) {
-                return new AuditRecord(
-                        e.id,
-                        origen,
-                        e.destinoICAO,
-                        String.format("%02d:%02d", e.horaRegistro, e.minutoRegistro),
-                        deadlineMin,
-                        false,
-                        motivo,
-                        "",
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        tiempoActual,
-                        deadlineMin - tiempoActual,
-                        0.0,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        0
-                );
-            }
         }
     }
 }

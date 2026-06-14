@@ -4,7 +4,7 @@ import com.tasfb2b.planificador.dto.ComparativaRequest;
 import com.tasfb2b.planificador.dto.ComparativaResultado;
 import com.tasfb2b.planificador.dto.ComparativaRow;
 import com.tasfb2b.planificador.dto.EjecucionParams;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -208,7 +208,7 @@ public class ComparativaService {
     }
 
     private static void rellenarAlns(ComparativaRow row, SimulacionResponse r, long tiempoRealMs) {
-        SimulacionResponse.Metricas m = r.getMetricas();
+        Metricas m = r.getMetricas();
         row.setAlnsEnvios(m.getProcesadas());
         row.setAlnsEnrutadas(m.getEnrutadas());
         row.setAlnsSinRuta(m.getSinRuta());
@@ -235,7 +235,7 @@ public class ComparativaService {
     }
 
     private static void rellenarAco(ComparativaRow row, SimulacionResponse r, long tiempoRealMs) {
-        SimulacionResponse.Metricas m = r.getMetricas();
+        Metricas m = r.getMetricas();
         row.setAcoEnvios(m.getProcesadas());
         row.setAcoEnrutadas(m.getEnrutadas());
         row.setAcoSinRuta(m.getSinRuta());
