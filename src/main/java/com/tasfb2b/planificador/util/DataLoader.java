@@ -91,9 +91,19 @@ public class DataLoader {
             v.setAeropuertoDestino(destino);
             return v;
         });
-        vuelos = vuelosCargados.stream()
+        // Descartar nulos (aeropuerto inexistente) y luego los vuelos incoherentes
+        // (capacidad <= 0 u origen = destino), igual que se omiten los sin aeropuerto.
+        List<Vuelo> noNulos = vuelosCargados.stream()
                 .filter(v -> v != null)
                 .collect(Collectors.toList());
+        vuelos = noNulos.stream()
+                .filter(VueloValidator::esCoherente)
+                .collect(Collectors.toList());
+        int descartadosIncoherentes = noNulos.size() - vuelos.size();
+        if (descartadosIncoherentes > 0) {
+            log.warn("VueloValidator: {} vuelos descartados (capacidad<=0 u origen=destino)",
+                    descartadosIncoherentes);
+        }
 
         // 3. Resumen consultado directamente a PostgreSQL
         log.info("Aeropuertos en RAM : {}", aeropuertos.size());
