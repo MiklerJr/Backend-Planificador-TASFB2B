@@ -1,13 +1,11 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.controller.PlanificadorController;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.dto.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -20,14 +18,14 @@ class EstadoInicialEndpointTest {
 
     @Test
     void jobInexistenteDevuelve404() {
-        PlanificadorController controller = controllerCon(new JobsRegistry());
+        JobQueryController controller = controllerCon(new JobsRegistry());
         assertEquals(404, controller.estadoInicialJob("no-existe").getStatusCode().value());
     }
 
     @Test
     void mientrasNoHaySnapshotDevuelve204() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorController controller = controllerCon(jobs);
+        JobQueryController controller = controllerCon(jobs);
         JobState job = jobs.crear("1", 1);   // recién creado: estadoInicial aún null
 
         assertEquals(204, controller.estadoInicialJob(job.getJobId()).getStatusCode().value());
@@ -36,40 +34,39 @@ class EstadoInicialEndpointTest {
     @Test
     void conSnapshotDevuelveLasAsignacionesActivas() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorController controller = controllerCon(jobs);
+        JobQueryController controller = controllerCon(jobs);
         JobState job = jobs.crear("3", 75);
 
-        SimulacionResponse.AsignacionMaleta enElAire = new SimulacionResponse.AsignacionMaleta();
+        AsignacionMaleta enElAire = new AsignacionMaleta();
         enElAire.setBatchId("B1");
         enElAire.setEnrutada(true);
         job.estadoInicial = List.of(enElAire);
 
-        ResponseEntity<Map<String, Object>> respuesta = controller.estadoInicialJob(job.getJobId());
+        ResponseEntity<EstadoInicialResponse> respuesta = controller.estadoInicialJob(job.getJobId());
         assertEquals(200, respuesta.getStatusCode().value());
-        assertEquals(1, respuesta.getBody().get("total"));
-        @SuppressWarnings("unchecked")
-        List<SimulacionResponse.AsignacionMaleta> asignaciones =
-                (List<SimulacionResponse.AsignacionMaleta>) respuesta.getBody().get("asignaciones");
+        assertEquals(1, respuesta.getBody().getTotal());
+        List<AsignacionMaleta> asignaciones = respuesta.getBody().getAsignaciones();
         assertEquals("B1", asignaciones.get(0).getBatchId());
     }
 
     @Test
     void jobSinWarmupDevuelveListaVacia() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorController controller = controllerCon(jobs);
+        JobQueryController controller = controllerCon(jobs);
         JobState job = jobs.crear("2", 14);
         job.estadoInicial = List.of();   // E2 (o E1/E3 sin fechaInicio): sin warm-up
 
-        ResponseEntity<Map<String, Object>> respuesta = controller.estadoInicialJob(job.getJobId());
+        ResponseEntity<EstadoInicialResponse> respuesta = controller.estadoInicialJob(job.getJobId());
         assertEquals(200, respuesta.getStatusCode().value());
-        assertEquals(0, respuesta.getBody().get("total"));
+        assertEquals(0, respuesta.getBody().getTotal());
     }
 
     // ----------------------------------------------------------------------- helpers
 
-    private static PlanificadorController controllerCon(JobsRegistry jobs) {
+    private static JobQueryController controllerCon(JobsRegistry jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
-                null, null, null, null, null);
-        return new PlanificadorController(service, new PlanificadorProperties());
+                null, null, null);
+        JobQueryService jobQuery = new JobQueryService(jobs, null);
+        return new JobQueryController(service, jobQuery);
     }
 }

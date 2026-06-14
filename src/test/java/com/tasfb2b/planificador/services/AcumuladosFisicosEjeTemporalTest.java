@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
@@ -40,7 +40,7 @@ class AcumuladosFisicosEjeTemporalTest {
     void noCuentaUnaEntregaCuyoArriboAunNoOcurreSegunElRelojUtc() {
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
-        SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
+        BloqueSimulacion bloque = new BloqueSimulacion();
 
         PlanificadorService.llenarAcumuladosFisicos(bloque, auditAcc);
 
@@ -60,7 +60,7 @@ class AcumuladosFisicosEjeTemporalTest {
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         auditAcc.put("B2", batchSinRuta(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
-        SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
+        BloqueSimulacion bloque = new BloqueSimulacion();
 
         PlanificadorService.llenarAcumuladosFisicos(bloque, auditAcc);
 
@@ -79,7 +79,7 @@ class AcumuladosFisicosEjeTemporalTest {
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         auditAcc.put("B2", batchSinRuta(LocalDateTime.of(DIA, LocalTime.of(15, 59))));
-        SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
+        BloqueSimulacion bloque = new BloqueSimulacion();
 
         PlanificadorService.llenarAcumuladosFisicos(bloque, auditAcc);
 

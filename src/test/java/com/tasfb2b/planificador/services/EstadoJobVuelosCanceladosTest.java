@@ -1,14 +1,13 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.controller.PlanificadorController;
+import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.dto.EstadoJobResponse;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,8 +25,8 @@ class EstadoJobVuelosCanceladosTest {
     void estadoDelJobExponeLasCancelacionesAplicadasConSusEnviosAfectados() {
         JobsRegistry jobs = new JobsRegistry();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
-                null, null, null, null, null);
-        PlanificadorController controller = new PlanificadorController(service, new PlanificadorProperties());
+                null, null, null);
+        JobQueryController controller = new JobQueryController(service, new JobQueryService(jobs, null));
         JobState job = jobs.crear("2", 14);
 
         // El worker registra una cancelación aplicada (misma lista que recibe
@@ -35,12 +34,10 @@ class EstadoJobVuelosCanceladosTest {
         job.getVuelosCancelados().add(new VueloCancelado(
                 "SKBO", "SEQM", LocalDateTime.of(2026, 1, 3, 14, 30), 7));
 
-        ResponseEntity<Map<String, Object>> respuesta = controller.estadoJob(job.getJobId());
+        ResponseEntity<EstadoJobResponse> respuesta = controller.estadoJob(job.getJobId());
         assertEquals(200, respuesta.getStatusCode().value());
 
-        @SuppressWarnings("unchecked")
-        List<VueloCancelado> cancelados =
-                (List<VueloCancelado>) respuesta.getBody().get("vuelosCancelados");
+        List<VueloCancelado> cancelados = respuesta.getBody().getVuelosCancelados();
         assertEquals(1, cancelados.size());
         VueloCancelado vc = cancelados.get(0);
         assertEquals("SKBO", vc.getOrigen());
@@ -53,13 +50,13 @@ class EstadoJobVuelosCanceladosTest {
     void unJobSinCancelacionesExponeLaListaVacia() {
         JobsRegistry jobs = new JobsRegistry();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
-                null, null, null, null, null);
-        PlanificadorController controller = new PlanificadorController(service, new PlanificadorProperties());
+                null, null, null);
+        JobQueryController controller = new JobQueryController(service, new JobQueryService(jobs, null));
         JobState job = jobs.crear("3", 75);
 
-        Map<String, Object> body = controller.estadoJob(job.getJobId()).getBody();
+        EstadoJobResponse body = controller.estadoJob(job.getJobId()).getBody();
 
-        assertTrue(((List<?>) body.get("vuelosCancelados")).isEmpty(),
+        assertTrue(body.getVuelosCancelados().isEmpty(),
                 "el campo existe siempre, vacío si no hubo cancelaciones");
     }
 }

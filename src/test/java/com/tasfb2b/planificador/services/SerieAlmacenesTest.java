@@ -6,7 +6,7 @@ import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -50,7 +50,7 @@ class SerieAlmacenesTest {
         op.commitBlock(blockFlight, blockAirport);
 
         PlanificadorService service = serviceSinDataset();
-        List<SimulacionResponse.OcupacionAlmacenSlot> serie =
+        List<OcupacionAlmacenSlot> serie =
                 service.buildSerieAlmacenes(blockAirport, graph, op);
 
         assertEquals(12, serie.size(), "2 slots de origen + 9 de escala + 1 de destino");
@@ -62,7 +62,7 @@ class SerieAlmacenesTest {
                 "las horas son el inicio del slot en eje UTC");
 
         // Realismo: cada slot del DTO coincide EXACTAMENTE con la ocupación global del modelo.
-        for (SimulacionResponse.OcupacionAlmacenSlot s : serie) {
+        for (OcupacionAlmacenSlot s : serie) {
             assertEquals(20, s.getOcupacion(), "B1 ocupa 20 maletas en " + s.getAeropuerto() + "@" + s.getHora());
             long slotMin = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.parse(s.getHora()));
             long slotKey = GreedyRepairOperator.claveAlmacenDeSlot(
@@ -89,12 +89,12 @@ class SerieAlmacenesTest {
         op.reconstruirEsperaOrigenBacklog(List.of(b2), List.of(b3));
 
         PlanificadorService service = serviceSinDataset();
-        List<SimulacionResponse.OcupacionAlmacenSlot> serie =
+        List<OcupacionAlmacenSlot> serie =
                 service.buildSerieAlmacenes(blockAirport, graph, op);
 
         // El slot 08:00 de AAA fue tocado por B1; su ocupación acumulada debe incluir a B2
         // (espera [07:30, 10:00) del backlog): 20 + 5 = 25.
-        SimulacionResponse.OcupacionAlmacenSlot slot8 = serie.stream()
+        OcupacionAlmacenSlot slot8 = serie.stream()
                 .filter(s -> s.getAeropuerto().equals("AAA") && s.getHora().startsWith("2026-01-01T08:00"))
                 .findFirst().orElseThrow();
         assertEquals(25, slot8.getOcupacion(),
@@ -104,11 +104,11 @@ class SerieAlmacenesTest {
     // ----------------------------------------------------------------------- helpers
 
     private static PlanificadorService serviceSinDataset() {
-        return new PlanificadorService(null, null, null, null, null, null, null, null, null);
+        return new PlanificadorService(null, null, null, null, null, null, null);
     }
 
-    private static List<SimulacionResponse.OcupacionAlmacenSlot> slotsDe(
-            List<SimulacionResponse.OcupacionAlmacenSlot> serie, String aeropuerto) {
+    private static List<OcupacionAlmacenSlot> slotsDe(
+            List<OcupacionAlmacenSlot> serie, String aeropuerto) {
         return serie.stream().filter(s -> s.getAeropuerto().equals(aeropuerto)).toList();
     }
 

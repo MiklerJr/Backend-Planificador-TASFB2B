@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import org.junit.jupiter.api.Test;
 
@@ -15,7 +15,7 @@ class PlanificadorVuelosUsadosTest {
     @Test
     void agregaEnviosYMaletasDelMismoVuelo() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorService service = serviceConJobs(jobs);
+        JobQueryService jobQuery = jobQueryConJobs(jobs);
         JobState job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
@@ -24,7 +24,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-002", 105, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
 
-        VuelosUsadosResponse response = service.getVuelosUsadosJob(job.getJobId(), 0);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 0);
 
         assertEquals(job.getJobId(), response.getJobId());
         assertEquals(1, response.getTotal());
@@ -38,7 +38,7 @@ class PlanificadorVuelosUsadosTest {
     @Test
     void distingueMismoVueloEnHorariosDistintos() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorService service = serviceConJobs(jobs);
+        JobQueryService jobQuery = jobQueryConJobs(jobs);
         JobState job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
@@ -47,7 +47,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-002", 30, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-20T10:00:00", "2026-05-20T13:00:00"))));
 
-        VuelosUsadosResponse response = service.getVuelosUsadosJob(job.getJobId(), 0);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 0);
 
         assertEquals(2, response.getTotal());
         List<String> flightKeys = response.getVuelos().stream()
@@ -61,14 +61,14 @@ class PlanificadorVuelosUsadosTest {
     @Test
     void desdeMayorABloquesPublicadosDevuelveListaVacia() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorService service = serviceConJobs(jobs);
+        JobQueryService jobQuery = jobQueryConJobs(jobs);
         JobState job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
 
-        VuelosUsadosResponse response = service.getVuelosUsadosJob(job.getJobId(), 99);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 99);
 
         assertEquals(99, response.getDesde());
         assertEquals(1, response.getBloquesPublicados());
@@ -84,15 +84,15 @@ class PlanificadorVuelosUsadosTest {
     @Test
     void flightKeyYFechasUsanElEjeUtcNoElLocal() {
         JobsRegistry jobs = new JobsRegistry();
-        PlanificadorService service = serviceConJobs(jobs);
+        JobQueryService jobQuery = jobQueryConJobs(jobs);
         JobState job = jobs.crear("2", 14);
 
-        SimulacionResponse.TramoRuta tramo = tramo("LA2450", "SPIM", "SKBO",
+        TramoRuta tramo = tramo("LA2450", "SPIM", "SKBO",
                 "2026-05-19T10:00:00", "2026-05-19T13:00:00");
         job.publicarBloque(bloque(0, asignacion("BATCH-001", 40, tramo)));
 
         VuelosUsadosResponse.VueloUsado vuelo =
-                service.getVuelosUsadosJob(job.getJobId(), 0).getVuelos().get(0);
+                jobQuery.getVuelosUsadosJob(job.getJobId(), 0).getVuelos().get(0);
 
         assertEquals("2026-05-19T10:00:00", vuelo.getFechaSalida(), "fechaSalida = salidaUtc");
         assertEquals("2026-05-19T13:00:00", vuelo.getFechaLlegada(), "fechaLlegada = llegadaUtc");
@@ -101,15 +101,15 @@ class PlanificadorVuelosUsadosTest {
                 "sanidad: la hora local difiere de la UTC, así que el eje queda fijado");
     }
 
-    private static PlanificadorService serviceConJobs(JobsRegistry jobs) {
-        return new PlanificadorService(null, null, null, jobs,
-                null, null, null, null, null);
+    private static JobQueryService jobQueryConJobs(JobsRegistry jobs) {
+        // getVuelosUsadosJob solo usa el registry; DataLoader no interviene → null.
+        return new JobQueryService(jobs, null);
     }
 
-    private static SimulacionResponse.BloqueSimulacion bloque(
+    private static BloqueSimulacion bloque(
             int idx,
-            SimulacionResponse.AsignacionMaleta... asignaciones) {
-        SimulacionResponse.BloqueSimulacion bloque = new SimulacionResponse.BloqueSimulacion();
+            AsignacionMaleta... asignaciones) {
+        BloqueSimulacion bloque = new BloqueSimulacion();
         bloque.setBloqueIdx(idx);
         bloque.setHoraInicio("2026-05-19T08:00:00");
         bloque.setHoraFin("2026-05-19T09:00:00");
@@ -117,11 +117,11 @@ class PlanificadorVuelosUsadosTest {
         return bloque;
     }
 
-    private static SimulacionResponse.AsignacionMaleta asignacion(
+    private static AsignacionMaleta asignacion(
             String batchId,
             int cantidad,
-            SimulacionResponse.TramoRuta... tramos) {
-        SimulacionResponse.AsignacionMaleta asignacion = new SimulacionResponse.AsignacionMaleta();
+            TramoRuta... tramos) {
+        AsignacionMaleta asignacion = new AsignacionMaleta();
         asignacion.setBatchId(batchId);
         asignacion.setOrigen("SPIM");
         asignacion.setDestino("SKBO");
@@ -136,13 +136,13 @@ class PlanificadorVuelosUsadosTest {
      * DISTINTAS (+5h): si vuelos/usados volviera a leer los {@code *Local}, los flightKey y fechas
      * esperados por estos tests dejarían de coincidir (regresión del eje temporal).
      */
-    private static SimulacionResponse.TramoRuta tramo(
+    private static TramoRuta tramo(
             String vueloId,
             String origen,
             String destino,
             String salidaUtc,
             String llegadaUtc) {
-        SimulacionResponse.TramoRuta tramo = new SimulacionResponse.TramoRuta();
+        TramoRuta tramo = new TramoRuta();
         tramo.setVueloId(vueloId);
         tramo.setOrigen(origen);
         tramo.setDestino(destino);

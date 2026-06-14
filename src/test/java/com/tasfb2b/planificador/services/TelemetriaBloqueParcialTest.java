@@ -5,7 +5,7 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -60,8 +60,8 @@ class TelemetriaBloqueParcialTest {
         assertEquals(48, op.ocupacionGlobalVuelo(key), "tras el commit, global incluye el bloque");
 
         // El DTO del bloque 2 reporta el acumulado del vuelo-día: 48/50 = 96% ⇒ ROJO.
-        SimulacionResponse.CargaVuelo dto = soloUno(
-                new PlanificadorService(null, null, null, null, null, null, null, null, null)
+        CargaVuelo dto = soloUno(
+                new PlanificadorService(null, null, null, null, null, null, null)
                         .buildCargasVuelos(bloque2, graph, op));
         assertEquals(48, dto.getCargaAsignada(),
                 "cargaAsignada = acumulado global del vuelo-día, no el delta del bloque");
@@ -94,8 +94,8 @@ class TelemetriaBloqueParcialTest {
         assertEquals(490, op.ocupacionGlobalAlmacen(slotKey), "tras el commit, global incluye el bloque");
 
         // El DTO del bloque 2 reporta el pico concurrente acumulado: 490/500 = 98% ⇒ ROJO.
-        SimulacionResponse.OcupacionAlmacen dto = soloUno(
-                new PlanificadorService(null, null, null, null, null, null, null, null, null)
+        OcupacionAlmacen dto = soloUno(
+                new PlanificadorService(null, null, null, null, null, null, null)
                         .buildOcupacionAlmacenes(almacenBloque2, graph, op));
         assertEquals(490, dto.getOcupacionAsignada(),
                 "ocupacionAsignada = pico concurrente acumulado del día, no el delta del bloque");

@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
@@ -48,15 +48,15 @@ class EstadoInicialWarmupTest {
         auditWarmup.put("C", batchSinRuta("C", LocalDateTime.of(DIA, LocalTime.of(8, 0))));
 
         PlanificadorService service =
-                new PlanificadorService(null, null, null, null, null, null, null, null, null);
-        List<SimulacionResponse.AsignacionMaleta> snapshot = service.construirEstadoInicial(auditWarmup);
+                new PlanificadorService(null, null, null, null, null, null, null);
+        List<AsignacionMaleta> snapshot = service.construirEstadoInicial(auditWarmup);
 
         assertEquals(2, snapshot.size(), "solo B (en el aire) y E (tramo futuro) siguen activos");
-        List<String> ids = snapshot.stream().map(SimulacionResponse.AsignacionMaleta::getBatchId).toList();
+        List<String> ids = snapshot.stream().map(AsignacionMaleta::getBatchId).toList();
         assertTrue(ids.contains("B") && ids.contains("E"), "ids esperados: B y E, recibidos " + ids);
 
         // El snapshot trae los tramos UTC completos: el front interpola igual que con los bloques.
-        SimulacionResponse.AsignacionMaleta enElAire = snapshot.stream()
+        AsignacionMaleta enElAire = snapshot.stream()
                 .filter(a -> a.getBatchId().equals("B")).findFirst().orElseThrow();
         assertTrue(enElAire.isEnrutada());
         assertEquals(1, enElAire.getTramos().size());
@@ -67,7 +67,7 @@ class EstadoInicialWarmupTest {
     @Test
     void sinWarmupDevuelveListaVacia() {
         PlanificadorService service =
-                new PlanificadorService(null, null, null, null, null, null, null, null, null);
+                new PlanificadorService(null, null, null, null, null, null, null);
         assertTrue(service.construirEstadoInicial(new LinkedHashMap<>()).isEmpty());
         assertTrue(service.construirEstadoInicial(null).isEmpty());
     }

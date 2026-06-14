@@ -5,7 +5,7 @@ import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.SimulacionResponse;
+import com.tasfb2b.planificador.dto.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
@@ -404,11 +404,11 @@ class AcoBlockEngineTest {
     void contratoSimulacionResponseMantieneCamposPrincipales() {
         assertFields(SimulacionResponse.class,
                 "metricas", "totalBloques", "vuelosPlaneados", "aeropuertosInfo", "k", "saMinutos");
-        assertFields(SimulacionResponse.Metricas.class,
+        assertFields(Metricas.class,
                 "procesadas", "enrutadas", "sinRuta", "cumpleSLA", "tardadas", "maletasIndividuales");
-        assertFields(SimulacionResponse.BloqueSimulacion.class,
+        assertFields(BloqueSimulacion.class,
                 "horaInicio", "horaFin", "asignaciones", "cargasVuelos", "ocupacionAlmacenes", "taMs");
-        assertFields(SimulacionResponse.AsignacionMaleta.class,
+        assertFields(AsignacionMaleta.class,
                 "batchId", "origen", "destino", "cantidad", "enrutada", "cumpleSLA", "rutaVuelos", "tramos");
     }
 
