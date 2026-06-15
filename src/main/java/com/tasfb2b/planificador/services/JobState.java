@@ -184,10 +184,18 @@ public class JobState {
      * Cancelaciones de vuelo YA APLICADAS por el worker (con sus envíos afectados), en orden de
      * aplicación. La expone {@code GET /jobs/{id}/estado} para que el front sepa qué vuelo-días
      * dejaron de existir y deje de animarlos — antes solo eran visibles en el CSV de auditoría
-     * final. {@code fechaHoraSalida} está en la hora local del vuelo (el mismo eje que el request
-     * de cancelación). El worker escribe y el front lee concurrentemente: CopyOnWriteArrayList.
+     * final. {@code fechaHoraSalida} está en <b>UTC</b> (el mismo eje que el request de
+     * cancelación). El worker escribe y el front lee concurrentemente: CopyOnWriteArrayList.
      */
     private final List<VueloCancelado> vuelosCancelados = new CopyOnWriteArrayList<>();
+
+    /**
+     * Órdenes de cancelación que el worker NO pudo aplicar porque no casó ningún vuelo-día (trayecto
+     * inexistente o {@code fechaHoraSalida} en el eje equivocado —recordar que debe ir en UTC—). Se
+     * expone en {@code GET /jobs/{id}/estado} para que la cancelación no falle en silencio: el front
+     * se entera de que su orden no surtió efecto. El worker escribe y el front lee concurrentemente.
+     */
+    private final List<CancelacionVueloRequest> cancelacionesNoAplicadas = new CopyOnWriteArrayList<>();
 
     /** Cola de cancelaciones de vuelo pendientes (la drena el worker del job). */
     public Queue<CancelacionVueloRequest> getCancelacionesVueloPendientes() {

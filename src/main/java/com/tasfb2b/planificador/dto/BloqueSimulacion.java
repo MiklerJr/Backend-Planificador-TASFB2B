@@ -5,18 +5,16 @@ import java.util.List;
 
 @Data
 public class BloqueSimulacion {
-    /** Inicio del rango de datos consumidos, en hora LOCAL del eje de registro (= scStart).
-     *  Ojo: mezcla husos (cada envío se registra en la hora local de su origen); no usar
-     *  como reloj global. Para el eje UTC usar {@link #horaInicioUtc}. */
+    /** Inicio de la ventana UTC del bloque (= scStart). El cursor de ventanas avanza en UTC, así
+     *  que es un instante UTC real y los bloques son CONTIGUOS: {@code horaFin[N] == horaInicio[N+1]}.
+     *  Sirve como reloj global para ubicar el bloque en la línea de tiempo. */
     private String horaInicio;
-    /** Fin del rango de datos consumidos, en hora LOCAL del eje de registro (= scEnd). */
+    /** Fin de la ventana UTC del bloque (= scEnd), en UTC. */
     private String horaFin;
-    /** Rango UTC real de los registros contenidos en el bloque: el {@code registroUtc} más
-     *  temprano entre sus asignaciones. Bien definido (a diferencia de convertir scStart, que
-     *  mezcla husos). Útil para ubicar el bloque en el eje de tiempo global. Null si el bloque
-     *  no tiene asignaciones con registro. */
+    /** Alias UTC explícito de {@link #horaInicio} (mismo valor): inicio de la ventana UTC del
+     *  bloque. Contiguo con el {@code horaFinUtc} del bloque anterior. */
     private String horaInicioUtc;
-    /** Rango UTC real de los registros del bloque: el {@code registroUtc} más tardío. */
+    /** Alias UTC explícito de {@link #horaFin} (mismo valor): fin de la ventana UTC del bloque. */
     private String horaFinUtc;
     /** Legacy: cantidad de envios/lotes procesados en este bloque (delta). */
     private int maletasProcesadas;

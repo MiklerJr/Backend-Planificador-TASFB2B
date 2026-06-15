@@ -21,6 +21,12 @@ import java.time.LocalDateTime;
  * de vida del envío extremo a extremo: desde el momento en que el batch queda listo
  * para ser despachado hasta que la maleta queda disponible en el almacén destino
  * (llegada + tiempo de procesamiento en destino, {@code DEST_STORAGE_MIN = 10 min}).
+ *
+ * <p><b>Eje UTC:</b> {@code registroHHMM}, {@code fechaHoraInicio} y {@code fechaHoraFin} están en
+ * <b>UTC</b> (el {@code readyTime} del batch ya viene normalizado a UTC, y la llegada también). Por
+ * eso un envío registrado el 2026-01-02 en hora local de un aeropuerto GMT+ aparece aquí con fecha
+ * del día anterior. No confundir con la hora local de pared del dataset (p. ej. {@code primeraVentana}
+ * de {@code /dataset/info}, que sí es local).
  */
 @Data
 @NoArgsConstructor
@@ -29,6 +35,7 @@ public class AuditoriaEnvio {
     private String  idEnvio;
     private String  origen;
     private String  destino;
+    /** HH:MM del registro del envío, en UTC (HH:MM de {@code fechaHoraInicio}). */
     private String  registroHHMM;
     private int     deadlineMin;
     private boolean exitoso;
@@ -49,9 +56,9 @@ public class AuditoriaEnvio {
     private boolean capacidadVuelosOK;
     private boolean almacenDestinoOK;
     private int     scoreCalidad;
-    /** Momento de registro del envío (readyTime del batch). */
+    /** Momento de registro del envío (readyTime del batch), en UTC. */
     private LocalDateTime fechaHoraInicio;
-    /** Momento en que la maleta queda disponible en el almacén destino
+    /** Momento en que la maleta queda disponible en el almacén destino, en UTC
      *  (llegada del último vuelo + 10 min de procesamiento). null si no enrutada. */
     private LocalDateTime fechaHoraFin;
 }

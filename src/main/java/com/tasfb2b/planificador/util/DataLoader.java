@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -27,9 +28,18 @@ public class DataLoader {
 
     private List<Aeropuerto> aeropuertos = new ArrayList<>();
     private List<Vuelo> vuelos = new ArrayList<>();
-    
+
     // Caché para mapear rápido los códigos ICAO a objetos Aeropuerto desde la BD
-    private Map<String, Aeropuerto> aeropuertoMapCache; 
+    private Map<String, Aeropuerto> aeropuertoMapCache;
+
+    // Eje de tiempo UTC del cursor de ventanas. La columna ENVIO.fecha_hora_registro guarda la
+    // hora LOCAL del origen; el cursor del motor avanza en UTC, así que primera/última ventana y
+    // el filtrado de demanda se expresan en registroUtc = fecha_hora_registro − offset(origen).
+    // El offset de husos está acotado a ±maxOffsetAbsHoras: permite ensanchar el filtro local sin
+    // tocar la BD. Ambos campos se calculan una sola vez en load().
+    private int maxOffsetAbsHoras = 0;
+    private LocalDateTime primeraVentanaUtc;
+    private LocalDateTime ultimaVentanaUtc;
 
     // Limpiamos los Parsers y las variables @Value, solo inyectamos la BD
     public DataLoader(JdbcTemplate jdbcTemplate) {
@@ -105,10 +115,20 @@ public class DataLoader {
                     descartadosIncoherentes);
         }
 
-        // 3. Resumen consultado directamente a PostgreSQL
+        // 3. Eje UTC del cursor: máximo offset absoluto de husos (cota del ensanchamiento del
+        //    filtro local) y rango [primera, última] ventana ya en UTC. Se calcula una sola vez.
+        maxOffsetAbsHoras = aeropuertos.stream()
+                .map(Aeropuerto::getOffsetHorario)
+                .filter(Objects::nonNull)
+                .mapToInt(Math::abs)
+                .max()
+                .orElse(0);
+        calcularRangoUtcDataset();
+
+        // 4. Resumen consultado directamente a PostgreSQL
         log.info("Aeropuertos en RAM : {}", aeropuertos.size());
         log.info("Vuelos en RAM      : {}", vuelos.size());
-        
+
         try {
             Long totalEnvios = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM ENVIO", Long.class);
             Long totalMaletas = jdbcTemplate.queryForObject("SELECT SUM(cantidad_maletas) FROM ENVIO", Long.class);
@@ -118,7 +138,7 @@ public class DataLoader {
             log.info("Envios en BD: {}", totalEnvios != null ? totalEnvios : 0);
             log.info("Maletas fisicas en BD: {}", totalMaletas != null ? totalMaletas : 0);
             if (primera != null && ultima != null) {
-                log.info("Rango en BD : {} → {}", primera, ultima);
+                log.info("Rango UTC dataset : {} → {} (offset máx ±{}h)", primera, ultima, maxOffsetAbsHoras);
             }
         } catch (Exception e) {
             log.warn("No se pudo obtener el resumen de envíos. {}", e.getMessage());
@@ -126,20 +146,70 @@ public class DataLoader {
         log.info("=================================================");
     }
 
+    /** Primera ventana del dataset en UTC = mínimo registroUtc (cacheado en {@link #load()}). */
     public LocalDateTime getPrimeraVentana() {
-        Timestamp ts = jdbcTemplate.queryForObject("SELECT MIN(fecha_hora_registro) FROM ENVIO", Timestamp.class);
-        return ts != null ? ts.toLocalDateTime() : null;
+        return primeraVentanaUtc;
     }
 
+    /** Última ventana del dataset en UTC = máximo registroUtc (cacheado en {@link #load()}). */
     public LocalDateTime getUltimaVentana() {
-        Timestamp ts = jdbcTemplate.queryForObject("SELECT MAX(fecha_hora_registro) FROM ENVIO", Timestamp.class);
-        return ts != null ? ts.toLocalDateTime() : null;
+        return ultimaVentanaUtc;
     }
 
-    public List<Maleta> getMaletasEnRango(LocalDateTime desde, LocalDateTime hasta) {
-        if (desde == null || hasta == null || !desde.isBefore(hasta)) {
+    /**
+     * Calcula el rango UTC del dataset (mín/máx de {@code registroUtc = fecha_hora_registro −
+     * offset(origen)}) sin escanear por ventana ni materializar columnas: agrega por origen
+     * (≈30 filas) y aplica el offset en RAM. Una sola pasada al arranque.
+     */
+    private void calcularRangoUtcDataset() {
+        String sql = "SELECT icao_origen, MIN(fecha_hora_registro) AS min_l, MAX(fecha_hora_registro) AS max_l " +
+                     "FROM ENVIO GROUP BY icao_origen";
+        LocalDateTime min = null;
+        LocalDateTime max = null;
+        try {
+            List<Object[]> filas = jdbcTemplate.query(sql, (rs, rowNum) -> new Object[]{
+                    rs.getString("icao_origen"),
+                    rs.getTimestamp("min_l"),
+                    rs.getTimestamp("max_l")
+            });
+            for (Object[] fila : filas) {
+                Aeropuerto a = aeropuertoMapCache.get((String) fila[0]);
+                int off = (a != null && a.getOffsetHorario() != null) ? a.getOffsetHorario() : 0;
+                Timestamp minTs = (Timestamp) fila[1];
+                Timestamp maxTs = (Timestamp) fila[2];
+                if (minTs != null) {
+                    LocalDateTime minUtc = minTs.toLocalDateTime().minusHours(off);
+                    if (min == null || minUtc.isBefore(min)) min = minUtc;
+                }
+                if (maxTs != null) {
+                    LocalDateTime maxUtc = maxTs.toLocalDateTime().minusHours(off);
+                    if (max == null || maxUtc.isAfter(max)) max = maxUtc;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("No se pudo calcular el rango UTC del dataset. {}", e.getMessage());
+        }
+        primeraVentanaUtc = min;
+        ultimaVentanaUtc = max;
+    }
+
+    /**
+     * Demanda de la ventana UTC {@code [desdeUtc, hastaUtc)}. El cursor del motor avanza en UTC,
+     * pero {@code ENVIO.fecha_hora_registro} es hora LOCAL del origen. Como el offset de husos está
+     * acotado a ±{@link #maxOffsetAbsHoras}, todo envío con {@code registroUtc} en la ventana tiene
+     * su hora local en {@code [desdeUtc − off, hastaUtc + off)}: se consulta ese rango ensanchado
+     * (índice local existente, sin tocar la BD) y se descarta en RAM lo que, tras restar el offset
+     * real del origen, cae fuera de la ventana UTC. Así los bloques resultan UTC contiguos.
+     */
+    public List<Maleta> getMaletasEnRango(LocalDateTime desdeUtc, LocalDateTime hastaUtc) {
+        if (desdeUtc == null || hastaUtc == null || !desdeUtc.isBefore(hastaUtc)) {
             return Collections.emptyList();
         }
+
+        // Ensanchamiento del filtro local por la cota de husos (no toca el esquema: usa el índice
+        // existente sobre fecha_hora_registro).
+        LocalDateTime desdeLocal = desdeUtc.minusHours(maxOffsetAbsHoras);
+        LocalDateTime hastaLocal = hastaUtc.plusHours(maxOffsetAbsHoras);
 
         // RF02: se excluyen los envíos cuyo aeropuerto de origen y destino son el mismo.
         String sql = "SELECT id_envio, icao_origen, icao_destino, cantidad_maletas, fecha_hora_registro " +
@@ -148,12 +218,13 @@ public class DataLoader {
                      "AND icao_origen <> icao_destino " +
                      "ORDER BY fecha_hora_registro ASC";
 
-        return jdbcTemplate.query(sql, (rs, rowNum) -> {
+        List<Maleta> maletas = jdbcTemplate.query(sql, (rs, rowNum) -> {
             Maleta m = new Maleta();
             String dbId = rs.getString("id_envio");
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
-            m.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
+            Aeropuerto origen = aeropuertoMapCache.get(rs.getString("icao_origen"));
+            m.setAeropuertoOrigen(origen);
             m.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
 
             // Extraemos como Int en lugar de Long
@@ -162,10 +233,33 @@ public class DataLoader {
             m.setTipoEnvio(TipoEnvio.derivar(m.getAeropuertoOrigen(), m.getAeropuertoDestino()));
             m.setPlazo(m.getTipoEnvio() == TipoEnvio.INTRACONTINENTAL ? 24 : 48);
 
+            // Se conserva el registro LOCAL: mapToBatches recalcula readyTimeUtc = registro − offset
+            // y el DTO reconstruye registroLocal/registroUtc a partir de ahí.
             m.setFechaHoraRegistro(rs.getTimestamp("fecha_hora_registro").toLocalDateTime());
 
+            // Filtro fino por registroUtc real: descarta lo traído por el ensanchamiento que no
+            // pertenece a la ventana UTC (se limpian los null tras la consulta).
+            int off = (origen != null && origen.getOffsetHorario() != null) ? origen.getOffsetHorario() : 0;
+            if (!registroEnVentanaUtc(m.getFechaHoraRegistro(), off, desdeUtc, hastaUtc)) {
+                return null;
+            }
             return m;
-        }, Timestamp.valueOf(desde), Timestamp.valueOf(hasta));
+        }, Timestamp.valueOf(desdeLocal), Timestamp.valueOf(hastaLocal));
+
+        maletas.removeIf(Objects::isNull);
+        return maletas;
+    }
+
+    /**
+     * ¿El envío pertenece a la ventana UTC {@code [desdeUtc, hastaUtc)} según su instante UTC real
+     * ({@code registroLocal − offsetHoras})? Frontera inferior inclusiva y superior exclusiva, de
+     * modo que ventanas UTC adyacentes particionan la demanda sin solapes ni huecos — la base de
+     * que los bloques publicados sean UTC contiguos. Visible a nivel de paquete para pruebas.
+     */
+    static boolean registroEnVentanaUtc(LocalDateTime registroLocal, int offsetHoras,
+                                        LocalDateTime desdeUtc, LocalDateTime hastaUtc) {
+        LocalDateTime registroUtc = registroLocal.minusHours(offsetHoras);
+        return !registroUtc.isBefore(desdeUtc) && registroUtc.isBefore(hastaUtc);
     }
 
     public List<Maleta> getMaletasMuestra(int limite) {

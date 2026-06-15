@@ -337,7 +337,8 @@ public class PlanificadorService {
     private int aplicarCancelacionesVuelo(java.util.Queue<CancelacionVueloRequest> cola, Graph graph,
                                           GreedyRepairOperator enrutador, BacklogManager backlog,
                                           Map<String, LuggageBatch> auditAcc,
-                                          List<VueloCancelado> registro) {
+                                          List<VueloCancelado> registro,
+                                          List<CancelacionVueloRequest> noAplicadas) {
         if (cola == null || cola.isEmpty() || graph == null || enrutador == null) return 0;
         int cancelados = 0;
         CancelacionVueloRequest orden;
@@ -349,6 +350,9 @@ public class PlanificadorService {
             }
             String origen = orden.getOrigen().trim();
             String destino = orden.getDestino().trim();
+            // dep se interpreta en UTC: el front reenvía el fechaSalida UTC de /vuelos/usados. Se
+            // compara contra Edge.depMinuteOfDay (que AlgorithmMapper dejó en UTC) y el día sale del
+            // mismo valor. Si el front mandara la hora local de pared, no casaría (salvo offset 0).
             LocalDateTime dep = orden.getFechaHoraSalida();
             int depMinDia = dep.getHour() * 60 + dep.getMinute();
             long epochDay = dep.toLocalDate().toEpochDay();
@@ -367,6 +371,8 @@ public class PlanificadorService {
             if (matches.isEmpty()) {
                 log.warn("Cancelación: no se encontró vuelo {}->{} con salida {} (min-del-día {})",
                         origen, destino, dep, depMinDia);
+                // No falla en silencio: se registra para exponerlo en GET /jobs/{id}/estado.
+                if (noAplicadas != null) noAplicadas.add(orden);
                 continue;
             }
 
@@ -564,6 +570,8 @@ public class PlanificadorService {
         if (job.alertaColapso != null) body.setAlertaColapso(job.alertaColapso);
         // Cancelaciones de vuelo YA aplicadas (con envíos afectados), en orden de aplicación.
         body.setVuelosCancelados(job.getVuelosCancelados());
+        // Cancelaciones que no casaron ningún vuelo-día (p. ej. eje equivocado): no fallar en silencio.
+        body.setCancelacionesNoAplicadas(job.getCancelacionesNoAplicadas());
         return body;
     }
 
@@ -660,6 +668,9 @@ public class PlanificadorService {
         // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
         int totalVuelosCancelados = 0;
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
+        // Cancelaciones que no casaron ningún vuelo-día: se exponen en /estado (no fallar en silencio).
+        List<CancelacionVueloRequest> cancelacionesNoAplicadas =
+                job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
 
         List<BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
         Map<String, int[]> odStats = new HashMap<>();
@@ -704,7 +715,7 @@ public class PlanificadorService {
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, auditAcc, vuelosCancelados);
+                    graph, enrutador, backlog, auditAcc, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
@@ -881,6 +892,9 @@ public class PlanificadorService {
         // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
         int totalVuelosCancelados = 0;
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
+        // Cancelaciones que no casaron ningún vuelo-día: se exponen en /estado (no fallar en silencio).
+        List<CancelacionVueloRequest> cancelacionesNoAplicadas =
+                job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
 
         List<BloqueSimulacion> bloques = new ArrayList<>(plan.size());
         Map<String, int[]> odStats = new HashMap<>();
@@ -910,7 +924,7 @@ public class PlanificadorService {
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, auditAcc, vuelosCancelados);
+                    graph, enrutador, backlog, auditAcc, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
 
@@ -1088,6 +1102,9 @@ public class PlanificadorService {
         // Cancelaciones de vuelo: solo por orden del usuario en vivo (ver aplicarCancelacionesVuelo).
         // Con job, el registro vive en el JobState para que GET /jobs/{id}/estado lo exponga en vivo.
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
+        // Cancelaciones que no casaron ningún vuelo-día: se exponen en /estado (no fallar en silencio).
+        List<CancelacionVueloRequest> cancelacionesNoAplicadas =
+                job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
 
         List<BloqueSimulacion> bloques = new ArrayList<>();
         Map<String, int[]> odStats = new HashMap<>();
@@ -1121,7 +1138,7 @@ public class PlanificadorService {
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             aplicarCancelacionesVuelo(
                     job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, auditAcc, vuelosCancelados);
+                    graph, enrutador, backlog, auditAcc, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque);
 
@@ -1563,13 +1580,15 @@ public class PlanificadorService {
         ctx.marcarFin(taFijoMs);
 
         BloqueSimulacion bloque = new BloqueSimulacion();
+        // El cursor de ventanas avanza en UTC (DataLoader filtra la demanda por registroUtc), así
+        // que scStart/scEnd ya son los LÍMITES UTC de la ventana. horaInicio/horaFin y su alias
+        // horaInicioUtc/horaFinUtc se derivan directamente de ellos: bloques UTC contiguos
+        // (horaFinUtc[N] == horaInicioUtc[N+1]), estables aun con reintentos del backlog cuyos
+        // registroUtc son anteriores a la ventana.
         bloque.setHoraInicio(ctx.scStart.toString());
         bloque.setHoraFin(ctx.scEnd.toString());
-        // Rango UTC real del bloque = min/max de los registroUtc de sus asignaciones. No se deriva
-        // de scStart/scEnd porque esos están en el eje de registro local (mezcla husos).
-        String[] rangoUtc = rangoUtcRegistros(asignaciones);
-        bloque.setHoraInicioUtc(rangoUtc[0]);
-        bloque.setHoraFinUtc(rangoUtc[1]);
+        bloque.setHoraInicioUtc(ctx.scStart.toString());
+        bloque.setHoraFinUtc(ctx.scEnd.toString());
         bloque.setMaletasProcesadas(finalBatches.size());
         bloque.setMaletasEnrutadas(enrutadas);
         bloque.setAsignaciones(asignaciones);
@@ -2342,23 +2361,6 @@ public class PlanificadorService {
         m.setBacklogActual(backlog.size());
         m.setBacklogPico(backlog.picoHistorico());
         m.setSinRutaDefinitivo(backlog.sinRutaDefinitivo());
-    }
-
-    /**
-     * Rango UTC real de un bloque = [min, max] de los {@code registroUtc} de sus asignaciones.
-     * Devuelve {@code String[2]} (ambos null si ninguna asignación tiene registro). Los registroUtc
-     * son ISO sin offset y mismo formato ({@code yyyy-MM-ddTHH:mm}), así que el orden lexicográfico
-     * coincide con el cronológico. Visible a nivel de paquete para pruebas.
-     */
-    static String[] rangoUtcRegistros(List<AsignacionMaleta> asignaciones) {
-        String min = null, max = null;
-        for (AsignacionMaleta a : asignaciones) {
-            String r = a.getRegistroUtc();
-            if (r == null) continue;
-            if (min == null || r.compareTo(min) < 0) min = r;
-            if (max == null || r.compareTo(max) > 0) max = r;
-        }
-        return new String[]{min, max};
     }
 
     /** Convierte un epoch-min (minutos desde epoch) a un ISO datetime sin offset. */
