@@ -20,7 +20,6 @@ public class PlanificadorProperties {
     private Alns         alns         = new Alns();
     private Objetivo     objetivo     = new Objetivo();
     private Backlog      backlog      = new Backlog();
-    private Benchmark    benchmark    = new Benchmark();
     private StorageAware storageAware = new StorageAware();
     private AlertaColapso alertaColapso = new AlertaColapso();
 
@@ -187,14 +186,4 @@ public class PlanificadorProperties {
         private int reSeedSlice = 256;
     }
 
-    /** Configuración del endpoint de calibración (fase 6). */
-    @Data
-    public static class Benchmark {
-        /** Valores de K a probar en el grid. */
-        private List<Integer> kGrid = List.of(1, 7, 14, 28, 50, 75, 100);
-        /** Repeticiones por combinación (para promediar Ta). */
-        private int repeticiones = 3;
-        /** Timeout máximo del benchmark completo en minutos. */
-        private int timeoutMinutos = 90;
-    }
 }

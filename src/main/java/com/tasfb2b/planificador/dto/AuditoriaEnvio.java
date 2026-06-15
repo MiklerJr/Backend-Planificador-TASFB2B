@@ -10,9 +10,8 @@ import java.time.LocalDateTime;
  * Registro de auditoría por envío para validación formal de restricciones del cliente.
  *
  * <p>Cada fila corresponde a un {@code LuggageBatch} procesado por el planificador.
- * Las columnas booleanas (cumpleSLA, sinCiclos, sinDirecto, escalaMinOK,
- * capacidadVuelosOK, almacenDestinoOK) permiten verificar de forma independiente
- * que el algoritmo respeta cada restricción del problema TASF.B2B.
+ * Las columnas booleanas (cumpleSLA, sinCiclos, escalaMinOK) permiten verificar de
+ * forma independiente que el algoritmo respeta cada restricción del problema TASF.B2B.
  *
  * <p>El {@code scoreCalidad} es un puntaje compuesto 0-100 que combina cumplimiento
  * de SLA, cantidad de escalas y holgura para reportar calidad de la ruta de un vistazo.
@@ -35,6 +34,12 @@ public class AuditoriaEnvio {
     private String  idEnvio;
     private String  origen;
     private String  destino;
+    /** Identificador del cliente del envío. {@code null} si no está disponible. */
+    private Integer clienteId;
+    /** Número de maletas físicas del lote (el envío es un lote, no una maleta). */
+    private int     cantidad;
+    /** Tipo de envío (INTRACONTINENTAL / INTERCONTINENTAL); explica el SLA (24/48 h). */
+    private String  tipoEnvio;
     /** HH:MM del registro del envío, en UTC (HH:MM de {@code fechaHoraInicio}). */
     private String  registroHHMM;
     private int     deadlineMin;
@@ -48,13 +53,11 @@ public class AuditoriaEnvio {
     private int     tiempoTotalMin;
     private int     llegadaMin;
     private int     slackSlaMin;
-    private double  costoTotal;
+    /** Holgura de SLA en horas ({@code slackSlaMin / 60}), más legible que en minutos. */
+    private double  slackSlaHoras;
     private boolean cumpleSLA;
     private boolean sinCiclos;
-    private boolean sinDirecto;
     private boolean escalaMinOK;
-    private boolean capacidadVuelosOK;
-    private boolean almacenDestinoOK;
     private int     scoreCalidad;
     /** Momento de registro del envío (readyTime del batch), en UTC. */
     private LocalDateTime fechaHoraInicio;

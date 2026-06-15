@@ -33,12 +33,12 @@ import java.util.zip.ZipOutputStream;
  * Construye registros de auditoría {@link AuditoriaEnvio} a partir de los
  * {@link LuggageBatch} que produjo el planificador ALNS y los serializa a CSV.
  *
- * <p>El CSV resultante (23 columnas) permite al cliente validar de forma
+ * <p>El CSV resultante (25 columnas) permite al cliente validar de forma
  * independiente que cada restricción del problema TASF.B2B se cumple por envío:
- * SLA, sin ciclos, tiempo mínimo de escala, capacidad de vuelos, almacén destino.
+ * SLA, sin ciclos y tiempo mínimo de escala.
  *
  * <p>Compartido por los escenarios 1, 2 y 3: cada job genera su propia auditoría
- * accesible vía {@code GET /api/planificador/jobs/{jobId}/auditoria.csv}.
+ * (un ZIP de CSV) accesible vía {@code GET /api/planificador/jobs/{jobId}/auditoria.zip}.
  */
 @Service
 public class AuditoriaService {
@@ -47,9 +47,9 @@ public class AuditoriaService {
     /** Minutos de procesamiento en el almacén destino antes de quedar disponible. */
     private static final long DEST_STORAGE_MIN = 10L;
     private static final String CSV_HEADER =
-            "idEnvio,origen,destino,registroHHMM,deadlineMin,exitoso,motivoFalla,ruta,numTramos,numEscalas,"
-                    + "tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,slackSlaMin,costoTotal,"
-                    + "cumpleSLA,sinCiclos,sinDirecto,escalaMinOK,capacidadVuelosOK,almacenDestinoOK,scoreCalidad,"
+            "idEnvio,origen,destino,clienteId,cantidad,tipoEnvio,registroHHMM,deadlineMin,exitoso,motivoFalla,"
+                    + "ruta,numTramos,numEscalas,tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,"
+                    + "slackSlaMin,slackSlaHoras,cumpleSLA,sinCiclos,escalaMinOK,scoreCalidad,"
                     + "fechaHoraInicio,fechaHoraFin\n";
 
     /** Máximo de filas de datos por CSV dentro del ZIP de auditoría. */
@@ -68,6 +68,11 @@ public class AuditoriaService {
         audit.setIdEnvio(batch.getId());
         audit.setOrigen(batch.getOriginCode());
         audit.setDestino(batch.getDestCode());
+        audit.setClienteId(batch.getClienteId());
+        audit.setCantidad(batch.getQuantity());
+        // El plazo (24 h intra / 48 h inter) es función directa del tipo de envío, así que
+        // lo derivamos del SLA sin necesitar el cache de aeropuertos (continentes).
+        audit.setTipoEnvio(batch.getSlaLimitHours() <= 24 ? "INTRACONTINENTAL" : "INTERCONTINENTAL");
         audit.setRegistroHHMM(String.format("%02d:%02d",
                 batch.getReadyTime().getHour(), batch.getReadyTime().getMinute()));
         // Inicio del envío: momento de registro del batch. Disponible siempre,
@@ -86,6 +91,7 @@ public class AuditoriaService {
             audit.setMotivoFalla("No se encontró ruta válida");
             audit.setRuta("");
             audit.setSlackSlaMin(slaMin);
+            audit.setSlackSlaHoras(slaMin / 60.0);
             // Sin ruta → no hay fin de envío.
             return audit;
         }
@@ -131,31 +137,24 @@ public class AuditoriaService {
 
         int slack = slaMin - llegadaDesdeReady;
         audit.setSlackSlaMin(slack);
+        audit.setSlackSlaHoras(slack / 60.0);
 
-        // Restricciones (validación a posteriori)
+        // Restricciones (validación a posteriori). Capacidad de vuelo y almacén las garantiza
+        // el ALNS al comprometer la ruta (no son verificables aquí sin el estado del grafo en
+        // el momento del commit), por eso ya no se reportan como columnas.
         boolean cumpleSLA  = batch.isCumpleSLA() && slack >= 0;
         boolean sinCiclos  = sinCiclos(ruta);
-        boolean sinDirecto = numTramos > 1;
         boolean escalaOK   = cumpleEscalaMinima(ruta, deps);
-        // Estas dos no se pueden verificar sin estado del grafo en el momento
-        // del commit; el ALNS las garantiza al asignar la ruta. Marcamos true
-        // si la ruta fue efectivamente comprometida.
-        boolean capacidadOK = true;
-        boolean almacenOK   = true;
 
         audit.setCumpleSLA(cumpleSLA);
         audit.setSinCiclos(sinCiclos);
-        audit.setSinDirecto(sinDirecto);
         audit.setEscalaMinOK(escalaOK);
-        audit.setCapacidadVuelosOK(capacidadOK);
-        audit.setAlmacenDestinoOK(almacenOK);
 
-        boolean exitoso = cumpleSLA && sinCiclos && escalaOK && capacidadOK && almacenOK;
+        boolean exitoso = cumpleSLA && sinCiclos && escalaOK;
         audit.setExitoso(exitoso);
-        audit.setMotivoFalla(exitoso ? "" : motivoFalla(cumpleSLA, sinCiclos, sinDirecto, escalaOK));
-        audit.setCostoTotal(batch.getTotalTransitTimeMins() * batch.getQuantity());
-        audit.setScoreCalidad(calcularScore(sinDirecto, sinCiclos, escalaOK, capacidadOK,
-                almacenOK, cumpleSLA, numEscalas, tiempoEsperaMin, slack));
+        audit.setMotivoFalla(exitoso ? "" : motivoFalla(cumpleSLA, sinCiclos, escalaOK));
+        audit.setScoreCalidad(calcularScore(sinCiclos, escalaOK, cumpleSLA,
+                numEscalas, tiempoEsperaMin, slack));
         return audit;
     }
 
@@ -342,19 +341,17 @@ public class AuditoriaService {
     }
 
     private static String motivoFalla(boolean cumpleSLA, boolean sinCiclos,
-                                       boolean sinDirecto, boolean escalaOK) {
+                                       boolean escalaOK) {
         if (!cumpleSLA)  return "SLA incumplido";
         if (!sinCiclos)  return "Ruta con ciclos";
         if (!escalaOK)   return "Tiempo mínimo de escala violado";
-        if (!sinDirecto) return "Ruta directa (sin escalas)";
         return "Restricción no identificada";
     }
 
-    private static int calcularScore(boolean sinDirecto, boolean sinCiclos,
-                                      boolean escalaMinOk, boolean capacidadVuelosOk,
-                                      boolean almacenDestinoOk, boolean cumpleSLA,
-                                      int escalas, int tiempoEsperaMin, int slackSlaMin) {
-        if (!sinCiclos || !escalaMinOk || !capacidadVuelosOk || !almacenDestinoOk || !cumpleSLA) {
+    private static int calcularScore(boolean sinCiclos, boolean escalaMinOk,
+                                      boolean cumpleSLA, int escalas,
+                                      int tiempoEsperaMin, int slackSlaMin) {
+        if (!sinCiclos || !escalaMinOk || !cumpleSLA) {
             return 0;
         }
         double score = 100.0;
@@ -369,6 +366,9 @@ public class AuditoriaService {
         return csv(r.getIdEnvio()) + ','
                 + csv(r.getOrigen()) + ','
                 + csv(r.getDestino()) + ','
+                + (r.getClienteId() == null ? "" : r.getClienteId()) + ','
+                + r.getCantidad() + ','
+                + csv(r.getTipoEnvio()) + ','
                 + csv(r.getRegistroHHMM()) + ','
                 + r.getDeadlineMin() + ','
                 + r.isExitoso() + ','
@@ -381,13 +381,10 @@ public class AuditoriaService {
                 + r.getTiempoTotalMin() + ','
                 + r.getLlegadaMin() + ','
                 + r.getSlackSlaMin() + ','
-                + r.getCostoTotal() + ','
+                + String.format(java.util.Locale.US, "%.2f", r.getSlackSlaHoras()) + ','
                 + r.isCumpleSLA() + ','
                 + r.isSinCiclos() + ','
-                + r.isSinDirecto() + ','
                 + r.isEscalaMinOK() + ','
-                + r.isCapacidadVuelosOK() + ','
-                + r.isAlmacenDestinoOK() + ','
                 + r.getScoreCalidad() + ','
                 + formatoFecha(r.getFechaHoraInicio()) + ','
                 + formatoFecha(r.getFechaHoraFin()) + '\n';

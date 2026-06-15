@@ -88,8 +88,7 @@ public class PlanificadorService {
      * Cualquier campo null se completa con el default del yaml.
      *
      * <p><b>K es FIJO en el escenario 2 (regla de negocio: 144)</b>: se ignora cualquier
-     * {@code params.k} entrante y se usa siempre el del yaml. Las herramientas internas
-     * (Benchmark/Comparativa) conservan K libre porque llaman a {@code ejecutarALNS} directo.
+     * {@code params.k} entrante y se usa siempre el del yaml.
      */
     public JobState iniciarEscenario2Async(EjecucionParams params) {
         if (params == null) params = new EjecucionParams();

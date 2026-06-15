@@ -34,9 +34,10 @@ public class AuditoriaController {
      * (hasta 50000 filas por archivo; un único CSV para millones de envíos no es
      * práctico). Cada CSV interno se llama {@code <jobId>-<inicio>-<fin>.csv} con
      * el rango de fechaHoraInicio (registro) de su contenido, y trae 25 columnas
-     * con la validación formal por envío de las restricciones del cliente
-     * (cumpleSLA, sinCiclos, escalaMinOK, capacidad, almacén, score 0-100) y los
-     * timestamps ISO de inicio (readyTime) y fin del envío (llegada + DEST_STORAGE_MIN).
+     * con los datos del envío (clienteId, cantidad, tipoEnvio) y la validación formal
+     * por envío de las restricciones del cliente (cumpleSLA, sinCiclos, escalaMinOK,
+     * score 0-100) y los timestamps ISO de inicio (readyTime) y fin del envío
+     * (llegada + DEST_STORAGE_MIN).
      *
      * <p>Devuelve 204 si el job aún ejecuta (ZIP no disponible), 404 si no existe.
      */

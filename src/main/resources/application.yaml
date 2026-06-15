@@ -31,8 +31,7 @@ planificador:
     max-ventanas: 720
 
     # K FIJO por escenario (regla de negocio): E1=1, E2=144, E3=144. NO configurable por
-    # request — los endpoints devuelven 400 si llega un k distinto. El k-grid del benchmark
-    # (herramienta interna de calibración) es independiente de esta regla.
+    # request — los endpoints devuelven 400 si llega un k distinto.
     k-default-1: 1
     k-default-2: 144
     k-default-3: 144
@@ -92,9 +91,3 @@ planificador:
     # urgentes por deadline; el resto se difiere sin perderse). 0 = sin tope. Acota que el
     # backlog le robe Ta a la demanda nueva y dispare violaciones de Ta. Tunear con la medición.
     max-reproceso-por-bloque: 3000
-
-  benchmark:
-    # Configuramos el grid para que no sea infinito
-    k-grid: [7, 14, 28, 40]
-    repeticiones: 1
-    timeout-minutos: 90
