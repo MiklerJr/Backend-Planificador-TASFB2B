@@ -11,7 +11,7 @@ import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.Envio;
 import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
@@ -698,7 +698,7 @@ public class PlanificadorService {
         // capacidad por bloque). Reversible con planificador.scenario.prewarm-skeletons=false.
         if (props.getScenario().isPrewarmSkeletons() && !plan.isEmpty()) {
             long t0Prewarm = System.currentTimeMillis();
-            List<Maleta> demandaVentana = dataLoader.getMaletasEnRango(
+            List<Envio> demandaVentana = dataLoader.getMaletasEnRango(
                     plan.get(0).scStart, plan.get(plan.size() - 1).scEnd);
             int clavesCalentadas = enrutador.precalentarEsqueletos(
                     mapper.mapToBatches(demandaVentana), PREWARM_ROUTE_CANDIDATES);
@@ -1385,7 +1385,7 @@ public class PlanificadorService {
         ctx.marcarInicio();
 
         // 1. Eje de datos: consumir [scStart, scEnd) → todo lo registrado en ese rango.
-        List<Maleta> maletasVentana = dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
+        List<Envio> maletasVentana = dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
         List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
         // 2. Backlog: traer pendientes de bloques anteriores sin descarte definitivo.

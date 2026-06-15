@@ -7,7 +7,7 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.Envio;
 import com.tasfb2b.planificador.model.Vuelo;
 import org.springframework.stereotype.Component;
 
@@ -95,7 +95,7 @@ public class AlgorithmMapper {
     /**
      * Convierte la lista masiva de maletas en lotes (Batches) para el algoritmo.
      */
-    public List<LuggageBatch> mapToBatches(List<Maleta> maletas) {
+    public List<LuggageBatch> mapToBatches(List<Envio> maletas) {
         return maletas.stream().map(m -> {
             // Normalizar readyTime a UTC restando el offset del aeropuerto origen.
             // Los archivos de envíos usan hora local; el Dijkstra opera en UTC.

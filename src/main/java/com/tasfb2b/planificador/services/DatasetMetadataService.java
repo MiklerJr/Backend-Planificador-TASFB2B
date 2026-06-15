@@ -2,7 +2,7 @@ package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.Envio;
 import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.util.DataLoader;
 import org.springframework.stereotype.Service;
@@ -131,7 +131,7 @@ public class DatasetMetadataService {
         long totalMaletas = 0L;
         int totalEnvios = 0;
 
-        for (Maleta maleta : dataLoader.getMaletasEnRango(inicio, fin)) {
+        for (Envio maleta : dataLoader.getMaletasEnRango(inicio, fin)) {
             String origen = maleta.getAeropuertoOrigen() != null ? maleta.getAeropuertoOrigen().getCodigo() : "";
             String destino = maleta.getAeropuertoDestino() != null ? maleta.getAeropuertoDestino().getCodigo() : "";
             long cantidad = maleta.getCantidad() != null ? maleta.getCantidad() : 0L;

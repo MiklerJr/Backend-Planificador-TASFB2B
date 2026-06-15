@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.Envio;
 import com.tasfb2b.planificador.model.TipoEnvio;
 import com.tasfb2b.planificador.model.Vuelo;
 import jakarta.annotation.PostConstruct;
@@ -201,7 +201,7 @@ public class DataLoader {
      * (índice local existente, sin tocar la BD) y se descarta en RAM lo que, tras restar el offset
      * real del origen, cae fuera de la ventana UTC. Así los bloques resultan UTC contiguos.
      */
-    public List<Maleta> getMaletasEnRango(LocalDateTime desdeUtc, LocalDateTime hastaUtc) {
+    public List<Envio> getMaletasEnRango(LocalDateTime desdeUtc, LocalDateTime hastaUtc) {
         if (desdeUtc == null || hastaUtc == null || !desdeUtc.isBefore(hastaUtc)) {
             return Collections.emptyList();
         }
@@ -218,8 +218,8 @@ public class DataLoader {
                      "AND icao_origen <> icao_destino " +
                      "ORDER BY fecha_hora_registro ASC";
 
-        List<Maleta> maletas = jdbcTemplate.query(sql, (rs, rowNum) -> {
-            Maleta m = new Maleta();
+        List<Envio> maletas = jdbcTemplate.query(sql, (rs, rowNum) -> {
+            Envio m = new Envio();
             String dbId = rs.getString("id_envio");
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
@@ -262,7 +262,7 @@ public class DataLoader {
         return !registroUtc.isBefore(desdeUtc) && registroUtc.isBefore(hastaUtc);
     }
 
-    public List<Maleta> getMaletasMuestra(int limite) {
+    public List<Envio> getMaletasMuestra(int limite) {
         if (limite <= 0) return Collections.emptyList();
         // RF02: se excluyen los envíos cuyo aeropuerto de origen y destino son el mismo.
         String sql = "SELECT id_envio, icao_origen, icao_destino, cantidad_maletas, fecha_hora_registro " +
@@ -270,7 +270,7 @@ public class DataLoader {
                      "ORDER BY fecha_hora_registro ASC LIMIT ?";
                      
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
-            Maleta m = new Maleta();
+            Envio m = new Envio();
             String dbId = rs.getString("id_envio");
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
