@@ -4,6 +4,12 @@ spring:
     username: ${DB_USER:postgres}
     password: ${DB_PASSWORD:Furiousandfast.8}
     driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      # Fase 1 (alineación model↔BD): red de seguridad. validate SOLO comprueba que las
+      # @Entity casan con el esquema real; NUNCA modifica la BD (no usar update/create en RDS).
+      ddl-auto: validate
+    open-in-view: false
       
 data:
   airports:
