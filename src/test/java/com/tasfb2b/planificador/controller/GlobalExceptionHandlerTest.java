@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.controller;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.ErrorResponse;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
+import com.tasfb2b.planificador.services.IngestaService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
@@ -62,7 +63,8 @@ class GlobalExceptionHandlerTest {
     void endToEndExcepcionDeDominioSeTraduceA400ConCuerpoUniforme() throws Exception {
         // El controller no necesita servicio para esta ruta: la verificación de k-fijo lanza antes
         // de tocar el servicio, así que basta con props (defaults) + el advice registrado.
-        EscenarioController controller = new EscenarioController(null, new PlanificadorProperties());
+        EscenarioController controller = new EscenarioController(null, new PlanificadorProperties(),
+                new IngestaService(null, null, null, null, null));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

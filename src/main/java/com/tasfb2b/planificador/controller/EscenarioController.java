@@ -5,10 +5,13 @@ import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
+import com.tasfb2b.planificador.services.IngestaService;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,10 +37,24 @@ public class EscenarioController {
 
     private final PlanificadorService service;
     private final PlanificadorProperties props;
+    private final IngestaService ingesta;
 
-    public EscenarioController(PlanificadorService service, PlanificadorProperties props) {
+    public EscenarioController(PlanificadorService service, PlanificadorProperties props,
+                               IngestaService ingesta) {
         this.service = service;
         this.props = props;
+        this.ingesta = ingesta;
+    }
+
+    /**
+     * Fase 6B: rechaza arrancar una simulación mientras una ingesta está reemplazando el dataset
+     * (la ingesta hace TRUNCATE + recarga el DataLoader que el motor usa). 409.
+     */
+    private void rechazarSiIngestaEnCurso() {
+        if (ingesta.estaEnCurso()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Hay una ingesta de dataset en curso; espera a que termine.");
+        }
     }
 
     // ── Legacy síncronos ─────────────────────────────────────────────────────
@@ -53,6 +70,7 @@ public class EscenarioController {
             @RequestParam(defaultValue = "alns") String algoritmo,
             @RequestParam(defaultValue = "14")   int    k) {
 
+        rechazarSiIngestaEnCurso();
         return switch (algoritmo.toLowerCase()) {
             case "alns" -> ResponseEntity.ok(service.ejecutarALNS(k));
             default     -> throw new ParametroInvalidoException(
@@ -74,6 +92,7 @@ public class EscenarioController {
             @RequestParam(defaultValue = "75")   int    k,
             @RequestParam(defaultValue = "0.20") double umbralColapso) {
 
+        rechazarSiIngestaEnCurso();
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
         return ResponseEntity.ok(service.ejecutarHastaColapso(k, umbralColapso));
     }
@@ -97,6 +116,7 @@ public class EscenarioController {
             @RequestParam(required = false)      Long   seed,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
+        rechazarSiIngestaEnCurso();
         String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
         if (error != null) throw new ParametroInvalidoException(error);
 
@@ -139,6 +159,7 @@ public class EscenarioController {
             @RequestParam(required = false)        Integer dias,
             @RequestParam(defaultValue = "false")  boolean procesamientoPrevio) {
 
+        rechazarSiIngestaEnCurso();
         int kFijo = props.getScenario().getKDefault2();
         if (k != null && k != kFijo) {
             throw new ParametroInvalidoException(
@@ -194,6 +215,7 @@ public class EscenarioController {
             @RequestParam(required = false)        Long  seed,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
+        rechazarSiIngestaEnCurso();
         int kFijo = props.getScenario().getKDefault3();
         if (k != null && k != kFijo) {
             throw new ParametroInvalidoException(

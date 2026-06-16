@@ -10,6 +10,13 @@ spring:
       # @Entity casan con el esquema real; NUNCA modifica la BD (no usar update/create en RDS).
       ddl-auto: validate
     open-in-view: false
+  servlet:
+    multipart:
+      # Fase 6B: la ingesta sube los TXT de envíos (pueden ser cientos de MB). Volcado a disco
+      # temprano (file-size-threshold) para no cargarlos en heap.
+      max-file-size: 512MB
+      max-request-size: 2GB
+      file-size-threshold: 2MB
       
 data:
   airports:
