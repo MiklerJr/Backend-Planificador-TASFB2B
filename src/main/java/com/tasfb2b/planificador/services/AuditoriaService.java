@@ -268,6 +268,113 @@ public class AuditoriaService {
         return totalFilas;
     }
 
+    /**
+     * Fase 5b — Variante en STREAMING del ZIP, para no retener O(envíos) en RAM. Los envíos
+     * enrutados los emite {@code fuenteEnrutados} (típicamente {@code SolucionBdReader.forEachEnrutado},
+     * que los lee de BD con cursor y ya vienen ordenados por {@code readyTime}); los {@code sinRuta}
+     * (fracción pequeña que no llegó a BD) se añaden al final ordenados por {@code readyTime}. Las
+     * filas se bufferizan como texto hasta {@code maxFilas} y se vuelcan a un CSV interno por rango,
+     * igual que {@link #escribirZip}. Reusa {@link #construir}/{@link #lineaCsv}.
+     *
+     * @return total de filas de datos (de envíos) escritas (sin contar cabeceras)
+     */
+    public int escribirZipStreaming(Path zipPath, int maxFilas, String jobId,
+                                    java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados,
+                                    Collection<LuggageBatch> sinRuta,
+                                    Collection<VueloCancelado> vuelosCancelados) throws IOException {
+        int limite = maxFilas > 0 ? maxFilas : FILAS_POR_ARCHIVO;
+        Set<String> nombresUsados = new LinkedHashSet<>();
+        int[] total = { 0 };
+        try (ZipOutputStream zos = new ZipOutputStream(
+                new BufferedOutputStream(Files.newOutputStream(zipPath)), StandardCharsets.UTF_8)) {
+
+            EscritorParticionado esc = new EscritorParticionado(zos, limite, jobId, nombresUsados);
+            java.util.function.Consumer<LuggageBatch> sink = b -> {
+                if (b == null) return;
+                esc.escribir(construir(b));
+                total[0]++;
+            };
+
+            if (fuenteEnrutados != null) fuenteEnrutados.accept(sink);
+            if (sinRuta != null && !sinRuta.isEmpty()) {
+                List<LuggageBatch> orden = new ArrayList<>(sinRuta);
+                orden.sort(Comparator.comparing(LuggageBatch::getReadyTime));
+                for (LuggageBatch b : orden) sink.accept(b);
+            }
+            esc.cerrar();   // vuelca lo pendiente; si no hubo filas, deja un CSV solo-cabecera
+
+            // CSV de vuelos cancelados (siempre presente, aunque solo lleve la cabecera).
+            escribirCsvVuelosCancelados(zos, jobId, vuelosCancelados);
+        }
+        return total[0];
+    }
+
+    /**
+     * Acumula líneas CSV y las vuelca a CSV internos del ZIP de a lo sumo {@code limite} filas,
+     * nombrando cada uno por el rango {@code readyTime} de sus filas (igual que {@link #escribirZip}).
+     */
+    private static final class EscritorParticionado {
+        private final ZipOutputStream zos;
+        private final int limite;
+        private final String jobId;
+        private final Set<String> nombresUsados;
+        private final List<String> buffer = new ArrayList<>();
+        private LocalDateTime min;
+        private LocalDateTime max;
+        private boolean algoEscrito = false;
+
+        EscritorParticionado(ZipOutputStream zos, int limite, String jobId, Set<String> nombresUsados) {
+            this.zos = zos;
+            this.limite = limite;
+            this.jobId = jobId;
+            this.nombresUsados = nombresUsados;
+        }
+
+        void escribir(AuditoriaEnvio audit) {
+            buffer.add(lineaCsv(audit));
+            LocalDateTime ready = audit.getFechaHoraInicio();
+            if (ready != null) {
+                if (min == null || ready.isBefore(min)) min = ready;
+                if (max == null || ready.isAfter(max)) max = ready;
+            }
+            if (buffer.size() >= limite) volcar();
+        }
+
+        private void volcar() {
+            if (buffer.isEmpty()) return;
+            try {
+                zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, min, max, nombresUsados)));
+                Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                w.write(CSV_HEADER);
+                for (String l : buffer) w.write(l);
+                w.flush();
+                zos.closeEntry();
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            buffer.clear();
+            min = null;
+            max = null;
+            algoEscrito = true;
+        }
+
+        void cerrar() {
+            volcar();
+            if (!algoEscrito) {
+                // Ningún envío: CSV vacío (solo cabecera) para no devolver un ZIP corrupto.
+                try {
+                    zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, null, null, nombresUsados)));
+                    Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
+                    w.write(CSV_HEADER);
+                    w.flush();
+                    zos.closeEntry();
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            }
+        }
+    }
+
     private static final String CSV_HEADER_CANCELADOS =
             "origen,destino,fechaHoraSalida,enviosAfectados\n";
 

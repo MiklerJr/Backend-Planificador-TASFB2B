@@ -42,7 +42,7 @@ class AcumuladosFisicosEjeTemporalTest {
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         BloqueSimulacion bloque = new BloqueSimulacion();
 
-        PlanificadorService.llenarAcumuladosFisicos(bloque, auditAcc);
+        llenar(bloque, auditAcc);
 
         assertEquals(7, bloque.getMaletasProcesadasAcum());
         assertEquals(7, bloque.getMaletasEnrutadasAcum());
@@ -62,7 +62,7 @@ class AcumuladosFisicosEjeTemporalTest {
         auditAcc.put("B2", batchSinRuta(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         BloqueSimulacion bloque = new BloqueSimulacion();
 
-        PlanificadorService.llenarAcumuladosFisicos(bloque, auditAcc);
+        llenar(bloque, auditAcc);
 
         assertEquals(12, bloque.getMaletasProcesadasAcum(), "7 enrutadas + 5 sin ruta");
         assertEquals(7, bloque.getMaletasEnrutadasAcum());
@@ -81,7 +81,7 @@ class AcumuladosFisicosEjeTemporalTest {
         auditAcc.put("B2", batchSinRuta(LocalDateTime.of(DIA, LocalTime.of(15, 59))));
         BloqueSimulacion bloque = new BloqueSimulacion();
 
-        PlanificadorService.llenarAcumuladosFisicos(bloque, auditAcc);
+        llenar(bloque, auditAcc);
 
         assertEquals(7, bloque.getMaletasEnrutadasAcum());
         assertEquals(0, bloque.getMaletasEntregadasAcum(),
@@ -89,6 +89,13 @@ class AcumuladosFisicosEjeTemporalTest {
     }
 
     // ----------------------------------------------------------------------- helpers
+
+    /** Registra los batches en el AcumuladorAuditoria (Fase 5b) y llena los acumulados físicos del bloque. */
+    private static void llenar(BloqueSimulacion bloque, Map<String, LuggageBatch> auditAcc) {
+        PlanificadorService.AcumuladorAuditoria acc = new PlanificadorService.AcumuladorAuditoria(false);
+        for (LuggageBatch b : auditAcc.values()) acc.registrar(b);
+        acc.llenarAcumuladosFisicos(bloque);
+    }
 
     /** Batch de 7 maletas (ready 07:00 UTC) con un único tramo de 60 min que aterriza en {@code arriboUtc}. */
     private static LuggageBatch batchConArribo(LocalDateTime arriboUtc) {

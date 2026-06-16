@@ -313,6 +313,11 @@ public class DataLoader {
     public List<Aeropuerto> getAeropuertos() { return aeropuertos; }
     public List<Vuelo>      getVuelos()      { return vuelos; }
 
+    /** Aeropuerto por ICAO desde el cache cargado al arranque (offset, continente, etc.). Null si no existe. */
+    public Aeropuerto getAeropuerto(String icao) {
+        return icao == null ? null : aeropuertoMapCache.get(icao);
+    }
+
     private static LocalDateTime fechaLlegadaLocal(LocalDateTime fechaSalida,
                                                    LocalTime horaLlegada,
                                                    Aeropuerto origen,

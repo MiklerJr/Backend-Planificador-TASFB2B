@@ -49,7 +49,7 @@ class EstadoInicialWarmupTest {
 
         PlanificadorService service =
                 new PlanificadorService(null, null, null, null, null, null, null);
-        List<AsignacionMaleta> snapshot = service.construirEstadoInicial(auditWarmup);
+        List<AsignacionMaleta> snapshot = service.construirEstadoInicial(auditWarmup.values());
 
         assertEquals(2, snapshot.size(), "solo B (en el aire) y E (tramo futuro) siguen activos");
         List<String> ids = snapshot.stream().map(AsignacionMaleta::getBatchId).toList();
@@ -68,8 +68,8 @@ class EstadoInicialWarmupTest {
     void sinWarmupDevuelveListaVacia() {
         PlanificadorService service =
                 new PlanificadorService(null, null, null, null, null, null, null);
-        assertTrue(service.construirEstadoInicial(new LinkedHashMap<>()).isEmpty());
-        assertTrue(service.construirEstadoInicial(null).isEmpty());
+        assertTrue(service.construirEstadoInicial(List.of()).isEmpty());
+        assertTrue(service.construirEstadoInicial((java.util.Collection<LuggageBatch>) null).isEmpty());
     }
 
     // ----------------------------------------------------------------------- helpers

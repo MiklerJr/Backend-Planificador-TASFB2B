@@ -50,9 +50,12 @@ public class JobQueryService {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
+        // Fase 5b-2: con el job en curso usa el snapshot de métricas (las asignaciones de bloques
+        // viejos se purgan, así que no se pueden recontar desde bloquesDesde(0)).
         Metricas metricas = job.resultado != null
                 ? job.resultado.getMetricas()
-                : metricasDesdeBloques(job.bloquesDesde(0));
+                : (job.metricasSnapshot != null ? job.metricasSnapshot
+                                                : metricasDesdeBloques(job.bloquesDesde(0)));
 
         DashboardResponse body = new DashboardResponse();
         body.setJobId(job.getJobId());
@@ -120,64 +123,9 @@ public class JobQueryService {
         if (job == null) return null;
 
         int desdeNormalizado = Math.max(0, desde);
-        Map<String, VueloUsadoAccumulator> acc = new LinkedHashMap<>();
-
-        for (BloqueSimulacion bloque : job.bloquesDesde(desdeNormalizado)) {
-            if (bloque.getAsignaciones() == null) continue;
-
-            for (int asignacionIdx = 0; asignacionIdx < bloque.getAsignaciones().size(); asignacionIdx++) {
-                AsignacionMaleta asignacion = bloque.getAsignaciones().get(asignacionIdx);
-                if (asignacion == null
-                        || !asignacion.isEnrutada()
-                        || asignacion.getTramos() == null
-                        || asignacion.getTramos().isEmpty()) continue;
-
-                String envioId = safe(asignacion.getBatchId());
-                String envioKey = !envioId.isEmpty()
-                        ? envioId
-                        : "sin-id:" + bloque.getBloqueIdx() + ":" + asignacionIdx;
-
-                for (TramoRuta tramo : asignacion.getTramos()) {
-                    if (tramo == null) continue;
-
-                    String vueloId = safe(tramo.getVueloId());
-                    // Eje UTC: flightKey y fechas del vuelo-día en el MISMO eje que TramoRuta.salidaUtc
-                    // y CargaVuelo.fechaSalida. Las horas locales mezclan husos (salida local del
-                    // origen vs llegada local del destino) y no sirven como eje del mapa.
-                    String salida = safe(tramo.getSalidaUtc());
-                    String llegada = safe(tramo.getLlegadaUtc());
-                    String key = bloque.getBloqueIdx() + "|" + vueloId + "|" + salida;
-
-                    VueloUsadoAccumulator vuelo = acc.computeIfAbsent(key, k -> {
-                        VueloUsadoAccumulator nuevo = new VueloUsadoAccumulator();
-                        nuevo.row.setFlightKey(vueloId + "|" + salida);
-                        nuevo.row.setBloqueIdx(bloque.getBloqueIdx());
-                        nuevo.row.setHoraInicio(bloque.getHoraInicio());
-                        nuevo.row.setHoraFin(bloque.getHoraFin());
-                        nuevo.row.setVueloId(vueloId);
-                        nuevo.row.setOrigen(safe(tramo.getOrigen()));
-                        nuevo.row.setDestino(safe(tramo.getDestino()));
-                        nuevo.row.setFechaSalida(salida);
-                        nuevo.row.setFechaLlegada(llegada);
-                        return nuevo;
-                    });
-
-                    if (vuelo.envioKeys.add(envioKey)) {
-                        vuelo.row.setCantidadMaletas(vuelo.row.getCantidadMaletas() + asignacion.getCantidad());
-                        if (!envioId.isEmpty()) {
-                            vuelo.envioIds.add(envioId);
-                        }
-                    }
-                }
-            }
-        }
-
-        List<VuelosUsadosResponse.VueloUsado> vuelos = acc.values().stream()
-                .map(VueloUsadoAccumulator::toDto)
-                .sorted(Comparator.comparingInt(VuelosUsadosResponse.VueloUsado::getBloqueIdx)
-                        .thenComparing(VuelosUsadosResponse.VueloUsado::getFechaSalida)
-                        .thenComparing(VuelosUsadosResponse.VueloUsado::getVueloId))
-                .collect(Collectors.toList());
+        // Fase 5b-2: el agregado vive en el JobState (acumulado por bloque), no se reconstruye desde
+        // las asignaciones (que se purgan de los bloques viejos).
+        List<VuelosUsadosResponse.VueloUsado> vuelos = job.vuelosUsadosDesde(desdeNormalizado);
 
         VuelosUsadosResponse response = new VuelosUsadosResponse();
         response.setJobId(jobId);
@@ -487,15 +435,4 @@ public class JobQueryService {
         return t > 0 ? isoDateTime.substring(0, t) : isoDateTime;
     }
 
-    private static class VueloUsadoAccumulator {
-        private final VuelosUsadosResponse.VueloUsado row = new VuelosUsadosResponse.VueloUsado();
-        private final Set<String> envioKeys = new LinkedHashSet<>();
-        private final List<String> envioIds = new ArrayList<>();
-
-        private VuelosUsadosResponse.VueloUsado toDto() {
-            row.setCantidadEnvios(envioKeys.size());
-            row.setEnvioIds(List.copyOf(envioIds));
-            return row;
-        }
-    }
 }

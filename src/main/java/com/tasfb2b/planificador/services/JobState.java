@@ -8,10 +8,19 @@ import lombok.Data;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
+
+import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
 
 /**
  * Estado de una ejecución asíncrona del planificador.
@@ -151,6 +160,30 @@ public class JobState {
     private final List<BloqueSimulacion> bloquesParciales =
             new CopyOnWriteArrayList<>();
 
+    /**
+     * Fase 5b-2: nº de bloques RECIENTES cuyas {@code asignaciones} se mantienen en RAM. Las de
+     * bloques más viejos se purgan (el peso O(envíos)); sus agregados ya viven en
+     * {@link #vuelosUsadosAcum} y en los campos {@code cargasVuelos}/{@code ocupacionAlmacenes} del
+     * propio bloque. El front consume {@code /bloques} y {@code /asignaciones} incrementalmente.
+     */
+    private volatile int maxBloquesConAsignaciones = 500;
+
+    /**
+     * Fase 5b-2: acumulador incremental de vuelos usados (clave {@code bloqueIdx|vueloId|salidaUtc}),
+     * actualizado al publicar cada bloque ANTES de purgar sus asignaciones. Preserva el histórico de
+     * {@code /vuelos/usados?desde=N} sin retener las asignaciones. Acotado a O(vuelos-día).
+     */
+    private final Map<String, VueloUsadoAcc> vuelosUsadosAcum = new LinkedHashMap<>();
+
+    /**
+     * Fase 5b-2: métricas vigentes (snapshot por bloque) para {@code /dashboard} mientras el job
+     * corre, sin recalcular desde las asignaciones (que se purgan). Null hasta el primer bloque.
+     */
+    public volatile Metricas metricasSnapshot;
+
+    /** Ajusta la ventana de retención de asignaciones (desde el yaml). */
+    public void setMaxBloquesConAsignaciones(int n) { if (n > 0) this.maxBloquesConAsignaciones = n; }
+
     public JobState(String jobId, String escenario, int k) {
         this.jobId     = jobId;
         this.escenario = escenario;
@@ -208,29 +241,50 @@ public class JobState {
      * {@code GET /jobs/{id}/almacenes/serie?desde=N} para actualizar EN VIVO las maletas de cada
      * almacén mientras su reloj de animación recorre el bloque.
      */
-    private final List<List<OcupacionAlmacenSlot>> seriesAlmacenes =
-            new CopyOnWriteArrayList<>();
+    private final List<List<OcupacionAlmacenSlot>> seriesAlmacenes = new ArrayList<>();
+    /** Fase 5b-2: nº de series ya purgadas del frente (offset base para preservar índices absolutos). */
+    private int baseSeriesPurgadas = 0;
+    private final Object seriesLock = new Object();
 
     /** Publica un bloque procesado para que el front lo consuma incrementalmente. */
     public void publicarBloque(BloqueSimulacion bloque) {
-        if (bloque != null) bloquesParciales.add(bloque);
+        if (bloque == null) return;
+        acumularVuelosUsados(bloque);          // extraer el agregado ANTES de cualquier purga
+        bloquesParciales.add(bloque);
+        // Purga el peso O(envíos): suelta las asignaciones del bloque que sale de la ventana de
+        // retención (sus cargas/ocupaciones/métricas se conservan en el propio bloque).
+        int idx = bloquesParciales.size() - maxBloquesConAsignaciones - 1;
+        if (idx >= 0) {
+            BloqueSimulacion viejo = bloquesParciales.get(idx);
+            if (viejo.getAsignaciones() != null) viejo.setAsignaciones(null);
+        }
     }
 
-    /** Publica la serie por slots del bloque recién publicado (mantener 1:1 con publicarBloque). */
+    /** Publica la serie por slots del bloque recién publicado (buffer deslizante; 1:1 con bloques). */
     public void publicarSerieAlmacenes(List<OcupacionAlmacenSlot> serie) {
-        seriesAlmacenes.add(serie != null ? serie : List.of());
+        synchronized (seriesLock) {
+            seriesAlmacenes.add(serie != null ? serie : List.of());
+            while (seriesAlmacenes.size() > maxBloquesConAsignaciones) {
+                seriesAlmacenes.remove(0);
+                baseSeriesPurgadas++;
+            }
+        }
     }
 
-    /** Series publicadas desde {@code desde} (inclusive), alineadas con los índices de bloque. */
+    /** Series publicadas desde {@code desde} (índice ABSOLUTO de bloque, inclusive). */
     public List<List<OcupacionAlmacenSlot>> seriesDesde(int desde) {
-        int n = seriesAlmacenes.size();
-        if (desde < 0) desde = 0;
-        if (desde >= n) return List.of();
-        return List.copyOf(seriesAlmacenes.subList(desde, n));
+        synchronized (seriesLock) {
+            if (desde < baseSeriesPurgadas) desde = baseSeriesPurgadas;  // ya purgadas: arranca en la base
+            int rel = desde - baseSeriesPurgadas;
+            if (rel < 0 || rel >= seriesAlmacenes.size()) return List.of();
+            return List.copyOf(seriesAlmacenes.subList(rel, seriesAlmacenes.size()));
+        }
     }
 
     public int seriesPublicadas() {
-        return seriesAlmacenes.size();
+        synchronized (seriesLock) {
+            return baseSeriesPurgadas + seriesAlmacenes.size();
+        }
     }
 
     /** Devuelve los bloques publicados desde {@code desde} (inclusive). */
@@ -243,5 +297,80 @@ public class JobState {
 
     public int bloquesPublicados() {
         return bloquesParciales.size();
+    }
+
+    // ── Fase 5b-2: acumulador incremental de vuelos usados (reemplaza la reconstrucción desde
+    //    bloquesDesde(0) de JobQueryService, que dependía de las asignaciones ya purgadas) ──────────
+
+    /** Acumula los vuelos usados del bloque (debe llamarse con las asignaciones aún presentes). */
+    private void acumularVuelosUsados(BloqueSimulacion bloque) {
+        if (bloque.getAsignaciones() == null) return;
+        synchronized (vuelosUsadosAcum) {
+            List<AsignacionMaleta> asigs = bloque.getAsignaciones();
+            for (int idx = 0; idx < asigs.size(); idx++) {
+                AsignacionMaleta a = asigs.get(idx);
+                if (a == null || !a.isEnrutada() || a.getTramos() == null || a.getTramos().isEmpty()) continue;
+
+                String envioId = safe(a.getBatchId());
+                String envioKey = !envioId.isEmpty()
+                        ? envioId
+                        : "sin-id:" + bloque.getBloqueIdx() + ":" + idx;
+
+                for (TramoRuta tramo : a.getTramos()) {
+                    if (tramo == null) continue;
+                    String vueloId = safe(tramo.getVueloId());
+                    String salida = safe(tramo.getSalidaUtc());
+                    String llegada = safe(tramo.getLlegadaUtc());
+                    String key = bloque.getBloqueIdx() + "|" + vueloId + "|" + salida;
+
+                    VueloUsadoAcc vuelo = vuelosUsadosAcum.computeIfAbsent(key, k -> {
+                        VueloUsadoAcc nuevo = new VueloUsadoAcc(bloque.getBloqueIdx());
+                        nuevo.row.setFlightKey(vueloId + "|" + salida);
+                        nuevo.row.setBloqueIdx(bloque.getBloqueIdx());
+                        nuevo.row.setHoraInicio(bloque.getHoraInicio());
+                        nuevo.row.setHoraFin(bloque.getHoraFin());
+                        nuevo.row.setVueloId(vueloId);
+                        nuevo.row.setOrigen(safe(tramo.getOrigen()));
+                        nuevo.row.setDestino(safe(tramo.getDestino()));
+                        nuevo.row.setFechaSalida(salida);
+                        nuevo.row.setFechaLlegada(llegada);
+                        return nuevo;
+                    });
+                    if (vuelo.envioKeys.add(envioKey)) {
+                        vuelo.row.setCantidadMaletas(vuelo.row.getCantidadMaletas() + a.getCantidad());
+                        if (!envioId.isEmpty()) vuelo.envioIds.add(envioId);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Vuelos usados acumulados desde el bloque {@code desde} (índice absoluto), ordenados. */
+    public List<VuelosUsadosResponse.VueloUsado> vuelosUsadosDesde(int desde) {
+        synchronized (vuelosUsadosAcum) {
+            return vuelosUsadosAcum.values().stream()
+                    .filter(v -> v.bloqueIdx >= desde)
+                    .map(VueloUsadoAcc::toDto)
+                    .sorted(Comparator.comparingInt(VuelosUsadosResponse.VueloUsado::getBloqueIdx)
+                            .thenComparing(VuelosUsadosResponse.VueloUsado::getFechaSalida)
+                            .thenComparing(VuelosUsadosResponse.VueloUsado::getVueloId))
+                    .collect(Collectors.toList());
+        }
+    }
+
+    /** Estado de acumulación de un vuelo-día (réplica de la lógica que tenía JobQueryService). */
+    static final class VueloUsadoAcc {
+        final int bloqueIdx;
+        final VuelosUsadosResponse.VueloUsado row = new VuelosUsadosResponse.VueloUsado();
+        final Set<String> envioKeys = new LinkedHashSet<>();
+        final List<String> envioIds = new ArrayList<>();
+
+        VueloUsadoAcc(int bloqueIdx) { this.bloqueIdx = bloqueIdx; }
+
+        VuelosUsadosResponse.VueloUsado toDto() {
+            row.setCantidadEnvios(envioKeys.size());
+            row.setEnvioIds(List.copyOf(envioIds));
+            return row;
+        }
     }
 }

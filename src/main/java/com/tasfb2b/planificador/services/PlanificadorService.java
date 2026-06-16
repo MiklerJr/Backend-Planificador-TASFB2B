@@ -44,6 +44,8 @@ public class PlanificadorService {
     private final AcoBlockEngine acoEngine;
     /** Fase 5a: persistencia de soluciones por bloque (ruta_asignada/tramo_ruta), serializada. */
     private final PersistenciaSolucionService persistencia;
+    /** Fase 5b: lee la solución de BD (ZIP de auditoría y cancelación) para no retenerla en RAM. */
+    private final SolucionBdReader solucionBdReader;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -72,7 +74,8 @@ public class PlanificadorService {
                                EnvioLoader envioLoader,
                                AuditoriaService auditoria,
                                AcoBlockEngine acoEngine,
-                               PersistenciaSolucionService persistencia) {
+                               PersistenciaSolucionService persistencia,
+                               SolucionBdReader solucionBdReader) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -81,18 +84,20 @@ public class PlanificadorService {
         this.auditoria = auditoria;
         this.acoEngine = acoEngine;
         this.persistencia = persistencia;
+        this.solucionBdReader = solucionBdReader;
     }
 
     /**
-     * Constructor de conveniencia para tests (mismo paquete): omite la persistencia real usando una
-     * instancia no-op (JdbcTemplate y txManager null ⇒ nunca llega a persistir; sus métodos quedan
-     * en no-op por sus try/catch). Evita tocar los tests que construyen el servicio con 7 argumentos.
+     * Constructor de conveniencia para tests (mismo paquete): omite la persistencia/lectura reales
+     * usando instancias no-op (JdbcTemplate y txManager null ⇒ nunca llega a persistir; sus métodos
+     * quedan en no-op por sus try/catch). Evita tocar los tests que construyen el servicio con 7
+     * argumentos.
      */
     PlanificadorService(DataLoader dataLoader, AlgorithmMapper mapper, PlanificadorProperties props,
                         JobsRegistry jobs, EnvioLoader envioLoader, AuditoriaService auditoria,
                         AcoBlockEngine acoEngine) {
         this(dataLoader, mapper, props, jobs, envioLoader, auditoria, acoEngine,
-                new PersistenciaSolucionService(null, null));
+                new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null));
     }
 
 
@@ -352,10 +357,12 @@ public class PlanificadorService {
      */
     private int aplicarCancelacionesVuelo(java.util.Queue<CancelacionVueloRequest> cola, Graph graph,
                                           GreedyRepairOperator enrutador, BacklogManager backlog,
-                                          Map<String, LuggageBatch> auditAcc,
                                           List<VueloCancelado> registro,
                                           List<CancelacionVueloRequest> noAplicadas) {
         if (cola == null || cola.isEmpty() || graph == null || enrutador == null) return 0;
+        // Fase 5b: índice id_vuelo→Edge para reconstruir desde BD los envíos afectados (solo se
+        // construye cuando hay cancelaciones reales que aplicar, evento raro).
+        Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         int cancelados = 0;
         CancelacionVueloRequest orden;
         while ((orden = cola.poll()) != null) {
@@ -397,7 +404,7 @@ public class PlanificadorService {
                     cancelados++;
                 }
             }
-            int afectados = reencolarAfectadosPorCancelacion(matches, epochDay, backlog, auditAcc);
+            int afectados = reencolarAfectadosPorCancelacion(matches, epochDay, backlog, indiceVuelo);
             if (registro != null) {
                 registro.add(new VueloCancelado(origen, destino, dep, afectados));
             }
@@ -408,39 +415,25 @@ public class PlanificadorService {
     }
 
     /**
-     * Devuelve al backlog (como replanificables) los envíos ya comprometidos cuya ruta usa alguno de
-     * los {@code edgesCancelados} en el día {@code epochDay}. No libera capacidad aquí:
-     * {@code procesarBloque} llama {@code releaseFromGlobal} + {@code clearRoute} al sacarlos del
-     * backlog, reutilizando el mecanismo de re-enrutamiento existente. Si el envío VENCE antes de
-     * ser reprocesado, la liberación corre por el hook de descarte del backlog (ver
-     * {@code crearBacklogConPurga}) — sin él, la ruta rota quedaría cobrada para siempre.
+     * Devuelve al backlog (como replanificables) los envíos ya comprometidos cuya ruta ACTIVA usa
+     * alguno de los {@code edgesCancelados} en el día {@code epochDay}. Fase 5b: los afectados se
+     * leen de BD ({@code ruta_asignada}/{@code tramo_ruta}) y se reconstruyen CON su ruta vieja, en
+     * vez de iterar un acumulador en RAM. No libera capacidad aquí: {@code procesarBloque} llama
+     * {@code releaseFromGlobal} + {@code clearRoute} al sacarlos del backlog (necesita la ruta vieja,
+     * por eso se reconstruye). Si el envío VENCE antes de ser reprocesado, la liberación corre por el
+     * hook de descarte del backlog (ver {@code crearBacklogConPurga}).
      */
     private int reencolarAfectadosPorCancelacion(List<Edge> edgesCancelados, long epochDay,
                                                  BacklogManager backlog,
-                                                 Map<String, LuggageBatch> auditAcc) {
-        if (backlog == null || auditAcc == null) return 0;
-        java.util.Set<Integer> idxCancelados = new java.util.HashSet<>();
-        for (Edge e : edgesCancelados) idxCancelados.add(e.idx);
+                                                 Map<String, Edge> indiceVuelo) {
+        if (backlog == null || edgesCancelados == null || edgesCancelados.isEmpty()) return 0;
+        List<String> idsVuelo = new ArrayList<>(edgesCancelados.size());
+        for (Edge e : edgesCancelados) idsVuelo.add(PersistenciaSolucionService.normalizarIdVuelo(e.id));
 
-        int afectados = 0;
-        for (LuggageBatch b : auditAcc.values()) {
-            List<Edge> ruta = b.getAssignedRoute();
-            List<Long> deps = b.getAssignedDepartures();
-            if (ruta == null || ruta.isEmpty() || deps == null || deps.size() != ruta.size()) continue;
-            boolean usa = false;
-            for (int i = 0; i < ruta.size(); i++) {
-                if (idxCancelados.contains(ruta.get(i).idx)
-                        && (deps.get(i) / FlightKeyEncoder.DAY_MIN) == epochDay) {
-                    usa = true;
-                    break;
-                }
-            }
-            if (usa) {
-                backlog.addReplanificable(b);
-                afectados++;
-            }
-        }
-        return afectados;
+        List<LuggageBatch> afectados = solucionBdReader.afectadosPorVuelo(
+                idsVuelo, java.time.LocalDate.ofEpochDay(epochDay), indiceVuelo);
+        for (LuggageBatch b : afectados) backlog.addReplanificable(b);
+        return afectados.size();
     }
 
     /**
@@ -698,16 +691,16 @@ public class PlanificadorService {
         long saMs = saMin * 60_000L;
         // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
         BacklogManager backlog = crearBacklogConPurga(enrutador);
-        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
 
         // ── Fase warm-up ────────────────────────────────────────────────────
         // Se ejecuta el plan [primera-ventana, fechaInicio) compartiendo
         // graph/enrutador/backlog/odStats con la fase visible. Auditoría y
         // métricas del warm-up van a un acumulador descartable; del acumulador
         // se deriva el estado inicial para el front (aviones aún en el aire).
-        Map<String, LuggageBatch> auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
+        AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
                 solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
-        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
+        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
         // Fase T (N3) — pre-calienta la caché de esqueletos con la demanda de toda la ventana antes
         // del bucle de bloques: mueve el costo del Dijkstra FUERA del presupuesto Ta (sube throughput
@@ -734,14 +727,14 @@ public class PlanificadorService {
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, auditAcc, vuelosCancelados, cancelacionesNoAplicadas);
+                    graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
             persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
-            TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
+            TotalesUnicos totales = auditAcc.totalesUnicos();
             totalEnvios = totales.envios();
             totalEnrutadas = totales.enrutadas();
             totalSinRuta = totales.sinRuta();
@@ -758,6 +751,7 @@ public class PlanificadorService {
                 // GET /jobs/{jobId}/bloques?desde=N para dibujar en tiempo real.
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
+                job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
                 job.alertaColapso = rv.alerta();
                 // Parada por orden del front: el usuario llamó a /cancelar. Igual que E1/E3,
                 // así E2 termina de inmediato (aunque simularTiempoReal2=false) y llega a
@@ -853,7 +847,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc, vuelosCancelados);
+        publicarAuditoria(job, auditAcc, vuelosCancelados, graph);
         return res;
     }
 
@@ -927,7 +921,7 @@ public class PlanificadorService {
         int totalBloques = plan.size();
         // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
         BacklogManager backlog = crearBacklogConPurga(enrutador);
-        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
         int intervaloReporte = Math.max(1, totalBloques / 10);
         // Fase 5a: toma la persistencia (una corrida a la vez) y limpia las tablas de solución.
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
@@ -938,16 +932,16 @@ public class PlanificadorService {
 
         // Warm-up (fechaInicio posterior al inicio de datos): pre-calcula el período previo
         // respetando Ta pero SIN el sleep de Sa; deja el estado inicial para el front.
-        Map<String, LuggageBatch> auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
+        AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
                 solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
-        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
+        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, auditAcc, vuelosCancelados, cancelacionesNoAplicadas);
+                    graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
 
@@ -957,7 +951,7 @@ public class PlanificadorService {
             persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
-            TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
+            TotalesUnicos totales = auditAcc.totalesUnicos();
             totalEnvios = totales.envios();
             totalEnrutadas = totales.enrutadas();
             totalSinRuta = totales.sinRuta();
@@ -971,6 +965,7 @@ public class PlanificadorService {
                 job.taPromedioMs = taStats.promedio();
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
+                job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
                 job.alertaColapso = rv.alerta();
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
                     log.info("E1 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
@@ -1049,7 +1044,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc, vuelosCancelados);
+        publicarAuditoria(job, auditAcc, vuelosCancelados, graph);
         return res;
     }
 
@@ -1148,14 +1143,14 @@ public class PlanificadorService {
         // E3 con purga activa: los envios cuyo SLA vence (readyTime+SLA) sin entrega
         // on-time pasan a sinRutaDefinitivo y disparan el colapso (Politica 1).
         BacklogManager backlog = crearBacklogConPurga(enrutador);
-        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
 
         // Warm-up (fechaInicio posterior al inicio de datos): pre-calcula el período previo
         // respetando Ta pero SIN el sleep de Sa. El colapso solo se vigila en la fase visible.
-        Map<String, LuggageBatch> auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
+        AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
                 solucionDummy, odStats, backlog, motorRes, seed,
                 props.getScenario().getTaSegundos() * 1000L, fechaInicio);
-        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
+        if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
         // Fase 5a: toma la persistencia (una corrida a la vez) y limpia las tablas de solución.
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
@@ -1165,7 +1160,7 @@ public class PlanificadorService {
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             aplicarCancelacionesVuelo(
                     job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, auditAcc, vuelosCancelados, cancelacionesNoAplicadas);
+                    graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque);
 
@@ -1175,7 +1170,7 @@ public class PlanificadorService {
             persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
-            TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
+            TotalesUnicos totales = auditAcc.totalesUnicos();
             totalEnvios = totales.envios();
             totalEnrutadas = totales.enrutadas();
             totalSinRuta = totales.sinRuta();
@@ -1191,6 +1186,7 @@ public class PlanificadorService {
                 // Publicación incremental para dibujo en tiempo real desde el front.
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
+                job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
                 job.alertaColapso = rv.alerta();
                 // Parada por orden del front: el usuario llamó a /cancelar.
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
@@ -1279,7 +1275,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc, vuelosCancelados);
+        publicarAuditoria(job, auditAcc, vuelosCancelados, graph);
         return res;
     }
 
@@ -1292,37 +1288,53 @@ public class PlanificadorService {
      * <p>La auditoría solo se publica para ejecuciones asíncronas (con {@code job});
      * las corridas síncronas (benchmark/comparativa) no la generan.
      */
-    private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc,
-                                   List<VueloCancelado> vuelosCancelados) {
-        // Fase 5a: libera la persistencia al cerrar la corrida (los 3 escenarios pasan por aquí).
-        persistencia.finalizarCorrida(job != null ? job.getJobId() : null);
-        if (auditoria == null || job == null) return;
-        boolean hayEnvios = auditAcc != null && !auditAcc.isEmpty();
-        boolean hayCancelados = vuelosCancelados != null && !vuelosCancelados.isEmpty();
-        // Generar el ZIP si hay envíos auditables o, al menos, vuelos cancelados que registrar.
-        if (!hayEnvios && !hayCancelados) return;
-        // Si el job fue cancelado vía Future.cancel(true), el thread llega aquí con el flag
-        // interrupted activo. La escritura del ZIP usa canales NIO interrumpibles
-        // (Files.newOutputStream) que lanzarían ClosedByInterruptException y perderían la
-        // auditoría. Limpiamos el flag para poder persistir lo simulado hasta la cancelación.
-        // Es seguro: publicarAuditoria es la última operación del job (E1/E2/E3).
-        Thread.interrupted(); // limpia (y descarta) el estado de interrupción del thread actual
-        int envios = hayEnvios ? auditAcc.size() : 0;
-        log.info("Generando auditoria ZIP: {} envios, {} vuelos cancelados (job {})",
-                envios, hayCancelados ? vuelosCancelados.size() : 0, job.getJobId());
+    private void publicarAuditoria(JobState job, AcumuladorAuditoria auditAcc,
+                                   List<VueloCancelado> vuelosCancelados, Graph graph) {
+        String jobId = job != null ? job.getJobId() : null;
+        // Fase 5b: ¿ESTE job tiene su solución en BD? (consultar ANTES de soltar el lock).
+        final boolean persistio = persistencia.persiste(jobId);
+        if (auditoria == null || job == null) {
+            persistencia.finalizarCorrida(jobId);
+            return;
+        }
         try {
-            Path path = Files.createTempFile("planificador-auditoria-" + job.getJobId() + "-", ".zip");
+            // Sin-ruta: no llegaron a BD (Fase 5a solo persiste enrutados) ⇒ se auditan desde RAM
+            // (son ligeros, sin Edges).
+            List<LuggageBatch> sinRuta = auditAcc != null
+                    ? new ArrayList<>(auditAcc.sinRuta()) : new ArrayList<>();
+            boolean hayCancelados = vuelosCancelados != null && !vuelosCancelados.isEmpty();
+            // Generar el ZIP si hay enrutados en BD, sin-ruta en RAM o vuelos cancelados.
+            if (!persistio && sinRuta.isEmpty() && !hayCancelados) return;
+
+            // Si el job fue cancelado vía Future.cancel(true), el thread llega aquí con el flag
+            // interrupted activo. La escritura del ZIP usa canales NIO interrumpibles que lanzarían
+            // ClosedByInterruptException; limpiamos el flag (es la última operación del job).
+            Thread.interrupted();
+
+            // Enrutados: desde BD si este job persistió. Si no (caso raro de multi-job sin lock), la
+            // Fase 5b ya no los retiene en RAM ⇒ ZIP degradado (solo sin-ruta + cancelados).
+            Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+            java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados =
+                    persistio ? sink -> solucionBdReader.forEachEnrutado(indiceVuelo, sink)
+                              : sink -> { };
+
+            log.info("Generando auditoria ZIP desde {} (job {})",
+                    persistio ? "BD" : "memoria(degradado, solo sin-ruta)", jobId);
+            Path path = Files.createTempFile("planificador-auditoria-" + jobId + "-", ".zip");
             path.toFile().deleteOnExit();
-            int filas = auditoria.escribirZip(
-                    hayEnvios ? auditAcc.values() : java.util.List.of(), path,
-                    AuditoriaService.FILAS_POR_ARCHIVO, job.getJobId(), vuelosCancelados);
+            int filas = auditoria.escribirZipStreaming(path, AuditoriaService.FILAS_POR_ARCHIVO, jobId,
+                    fuenteEnrutados, sinRuta, vuelosCancelados);
             job.auditoriaZipPath = path;
             job.auditoriaCsvPath = null;
             job.auditoriaCsv = null;
             job.auditoriaFilas = filas;
-            log.info("Auditoria ZIP generada: {} filas (job {}) en {}", filas, job.getJobId(), path);
+            log.info("Auditoria ZIP generada: {} filas (job {}) en {}", filas, jobId, path);
         } catch (IOException e) {
             throw new IllegalStateException("No se pudo generar auditoria ZIP", e);
+        } finally {
+            // Libera el lock SOLO tras leer el ZIP desde BD: si lo soltáramos antes, otro job podría
+            // TRUNCAR las tablas de solución mientras las leemos.
+            persistencia.finalizarCorrida(jobId);
         }
     }
 
@@ -1347,7 +1359,7 @@ public class PlanificadorService {
                                             AlnsSolution solucionDummy,
                                             Map<String, int[]> odStats,
                                             BacklogManager backlog,
-                                            Map<String, LuggageBatch> auditAcc) {
+                                            AcumuladorAuditoria auditAcc) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, MOTOR_ALNS, null);
     }
 
@@ -1357,7 +1369,7 @@ public class PlanificadorService {
                                             AlnsSolution solucionDummy,
                                             Map<String, int[]> odStats,
                                             BacklogManager backlog,
-                                            Map<String, LuggageBatch> auditAcc,
+                                            AcumuladorAuditoria auditAcc,
                                             String motor) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, null, 0L);
     }
@@ -1368,7 +1380,7 @@ public class PlanificadorService {
                                             AlnsSolution solucionDummy,
                                             Map<String, int[]> odStats,
                                             BacklogManager backlog,
-                                            Map<String, LuggageBatch> auditAcc,
+                                            AcumuladorAuditoria auditAcc,
                                             String motor,
                                             Random rngSim) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, rngSim, 0L);
@@ -1386,7 +1398,7 @@ public class PlanificadorService {
                                             AlnsSolution solucionDummy,
                                             Map<String, int[]> odStats,
                                             BacklogManager backlog,
-                                            Map<String, LuggageBatch> auditAcc,
+                                            AcumuladorAuditoria auditAcc,
                                             String motor,
                                             Random rngSim,
                                             long taFijoMsOverride) {
@@ -1408,7 +1420,7 @@ public class PlanificadorService {
                                             AlnsSolution solucionDummy,
                                             Map<String, int[]> odStats,
                                             BacklogManager backlog,
-                                            Map<String, LuggageBatch> auditAcc,
+                                            AcumuladorAuditoria auditAcc,
                                             String motor,
                                             Random rngSim,
                                             long taFijoMsOverride,
@@ -1602,7 +1614,7 @@ public class PlanificadorService {
         // 5. Acumular para auditoría: cada batch queda con su última asignación
         //    (sobreescribe entradas anteriores si volvió por el backlog).
         if (auditAcc != null) {
-            for (LuggageBatch b : finalBatches) auditAcc.put(batchAuditKey(b), b);
+            for (LuggageBatch b : finalBatches) auditAcc.registrar(b);
         }
 
         // Reportar Ta como variable fija del modelo (taMs = ta-segundos * 1000).
@@ -1632,7 +1644,7 @@ public class PlanificadorService {
         bloque.setBloqueIdx(ctx.bloqueIdx);
         bloque.setTaMs(ctx.taMs);
         bloque.setScMinutos(ctx.scMinutos);
-        llenarAcumuladosFisicos(bloque, auditAcc);
+        if (auditAcc != null) auditAcc.llenarAcumuladosFisicos(bloque);
 
         // Alerta de colapso INMINENTE (pre-colapso): precursores de los 2 criterios reales.
         var pre = enrutador.evaluarPreColapso(
@@ -2220,12 +2232,12 @@ public class PlanificadorService {
      * @return el acumulador de auditoría del warm-up (descartable para métricas; de él se
      *         deriva el estado inicial del front con {@link #construirEstadoInicial}).
      */
-    private Map<String, LuggageBatch> ejecutarWarmup(List<TemporalContext> warmupPlan, JobState job,
+    private AcumuladorAuditoria ejecutarWarmup(List<TemporalContext> warmupPlan, JobState job,
                                                      Graph graph, GreedyRepairOperator enrutador,
                                                      AlnsSolution solucionDummy, Map<String, int[]> odStats,
                                                      BacklogManager backlog, String motorRes, long seed,
                                                      long taFijoMs, LocalDateTime fechaInicio) {
-        Map<String, LuggageBatch> auditWarmup = new LinkedHashMap<>();
+        AcumuladorAuditoria auditWarmup = new AcumuladorAuditoria(true);
         if (warmupPlan == null || warmupPlan.isEmpty()) return auditWarmup;
 
         if (job != null) {
@@ -2269,17 +2281,17 @@ public class PlanificadorService {
      * salir; excluye los ya entregados y los sinRuta (estos siguen vivos vía backlog y
      * aparecerán en los bloques visibles). Package-private para tests.
      */
-    List<AsignacionMaleta> construirEstadoInicial(Map<String, LuggageBatch> auditWarmup) {
-        if (auditWarmup == null || auditWarmup.isEmpty()) return List.of();
+    List<AsignacionMaleta> construirEstadoInicial(Collection<LuggageBatch> batchesWarmup) {
+        if (batchesWarmup == null || batchesWarmup.isEmpty()) return List.of();
 
         long relojMin = Long.MIN_VALUE;
-        for (LuggageBatch b : auditWarmup.values()) {
+        for (LuggageBatch b : batchesWarmup) {
             long readyMin = toEpochMin(b.getReadyTime());
             if (readyMin > relojMin) relojMin = readyMin;
         }
 
         List<LuggageBatch> activos = new ArrayList<>();
-        for (LuggageBatch b : auditWarmup.values()) {
+        for (LuggageBatch b : batchesWarmup) {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
             if (enrutada && ultimoArriboMin(b) > relojMin) activos.add(b);
         }
@@ -2302,64 +2314,104 @@ public class PlanificadorService {
         return new Random(mixed);
     }
 
-    private static TotalesUnicos calcularTotalesUnicos(Map<String, LuggageBatch> auditAcc) {
-        if (auditAcc == null || auditAcc.isEmpty()) {
-            return new TotalesUnicos(0, 0, 0, 0, 0, 0L);
-        }
-        int envios = auditAcc.size();
-        int enrutadas = 0;
-        int cumpleSLA = 0;
-        long maletas = 0L;
-        for (LuggageBatch b : auditAcc.values()) {
-            maletas += b.getQuantity();
+    /**
+     * Fase 5b — Resumen ligero por envío único: lo justo para las métricas por bloque, SIN retener
+     * la ruta de {@link Edge} (el grueso del peso). Se captura como snapshot al registrar el batch.
+     */
+    private record ResumenEnvio(long quantity, boolean enrutada, boolean cumpleSLA,
+                                long readyMin, long ultimoArriboMin) {
+        static ResumenEnvio de(LuggageBatch b) {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
-            if (enrutada) {
-                enrutadas++;
-                if (b.isCumpleSLA()) cumpleSLA++;
-            }
+            return new ResumenEnvio(b.getQuantity(), enrutada, b.isCumpleSLA(),
+                    PlanificadorService.toEpochMin(b.getReadyTime()),
+                    PlanificadorService.ultimoArriboMin(b));
         }
-        int tardadas = enrutadas - cumpleSLA;
-        int sinRuta = envios - enrutadas;
-        return new TotalesUnicos(envios, enrutadas, sinRuta, cumpleSLA, tardadas, maletas);
     }
 
-    // Package-private para tests (eje temporal del corte de entregas).
-    // El corte de "entregadas" es el RELOJ UTC de la simulación: el máximo readyTime (UTC,
-    // normalizado por AlgorithmMapper) visto en el acumulador — el mismo concepto de reloj que
-    // usa reconstruirEsperaOrigenBacklog. Antes se usaba ctx.scEnd (eje de registro LOCAL,
-    // mezcla husos) comparado como si fuese UTC, lo que sesgaba la cuenta hasta ± el offset
-    // horario y podía contar entregas aún no ocurridas. Con el reloj UTC la cuenta es física
-    // y monótona; si no entran envíos nuevos el reloj se detiene en el último registro
-    // (subcuenta conservadora, nunca cuenta una entrega futura).
-    static void llenarAcumuladosFisicos(BloqueSimulacion bloque,
-                                        Map<String, LuggageBatch> auditAcc) {
-        if (bloque == null || auditAcc == null || auditAcc.isEmpty()) return;
+    /**
+     * Fase 5b — Acumulador de auditoría por corrida. En vez de retener cada {@link LuggageBatch}
+     * completo (con su ruta, decenas de GB en el dataset completo) guarda:
+     * <ul>
+     *   <li>un {@link ResumenEnvio} ligero por envío único → todas las métricas por bloque;</li>
+     *   <li>los batches SIN ruta (ya ligeros) para el ZIP — los enrutados se leen de BD (Fase 5a);</li>
+     *   <li>en modo warm-up, los batches COMPLETOS (que {@code construirEstadoInicial} necesita para
+     *       pintar los aviones en el aire); el período de warm-up es acotado.</li>
+     * </ul>
+     * Dedup por {@code batchAuditKey} con semántica "último estado procesado gana".
+     */
+    static final class AcumuladorAuditoria {
+        private final Map<String, ResumenEnvio> resumen = new LinkedHashMap<>();
+        private final Map<String, LuggageBatch> sinRuta = new LinkedHashMap<>();
+        /** != null solo en warm-up: retiene los batches completos para el estado inicial. */
+        private final Map<String, LuggageBatch> completos;
 
-        long corteMin = Long.MIN_VALUE;
-        for (LuggageBatch b : auditAcc.values()) {
-            long readyMin = toEpochMin(b.getReadyTime());
-            if (readyMin > corteMin) corteMin = readyMin;
+        AcumuladorAuditoria(boolean retenerBatches) {
+            this.completos = retenerBatches ? new LinkedHashMap<>() : null;
         }
 
-        long procesadas = 0L;
-        long enrutadas = 0L;
-        long entregadas = 0L;
-
-        for (LuggageBatch b : auditAcc.values()) {
-            long cantidad = b.getQuantity();
-            procesadas += cantidad;
+        /** Registra el estado del batch en el bloque actual (snapshot ligero; dedup por clave). */
+        void registrar(LuggageBatch b) {
+            String key = batchAuditKey(b);
+            if (completos != null) { completos.put(key, b); return; }   // warm-up: solo completos
+            resumen.put(key, ResumenEnvio.de(b));
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
-            if (!enrutada) continue;
-
-            enrutadas += cantidad;
-            if (ultimoArriboMin(b) <= corteMin) {
-                entregadas += cantidad;
-            }
+            if (enrutada) sinRuta.remove(key);              // pasó de sin-ruta a enrutado
+            else sinRuta.put(key, b.cloneBatch());          // snapshot ligero (sin ruta) para el ZIP
         }
 
-        bloque.setMaletasProcesadasAcum(procesadas);
-        bloque.setMaletasEnrutadasAcum(enrutadas);
-        bloque.setMaletasEntregadasAcum(entregadas);
+        boolean isEmpty()                    { return resumen.isEmpty(); }
+        Collection<LuggageBatch> sinRuta()   { return sinRuta.values(); }
+        Collection<LuggageBatch> completos() { return completos != null ? completos.values() : List.of(); }
+
+        TotalesUnicos totalesUnicos() {
+            if (resumen.isEmpty()) return new TotalesUnicos(0, 0, 0, 0, 0, 0L);
+            int envios = resumen.size();
+            int enrutadas = 0, cumpleSLA = 0;
+            long maletas = 0L;
+            for (ResumenEnvio r : resumen.values()) {
+                maletas += r.quantity();
+                if (r.enrutada()) { enrutadas++; if (r.cumpleSLA()) cumpleSLA++; }
+            }
+            int tardadas = enrutadas - cumpleSLA;
+            int sinRutaN = envios - enrutadas;
+            return new TotalesUnicos(envios, enrutadas, sinRutaN, cumpleSLA, tardadas, maletas);
+        }
+
+        // El corte de "entregadas" es el RELOJ UTC de la simulación: el máximo readyTime (UTC,
+        // normalizado por AlgorithmMapper) visto en el acumulador — el mismo concepto de reloj que
+        // usa reconstruirEsperaOrigenBacklog. Es físico y monótono; si no entran envíos nuevos el
+        // reloj se detiene en el último registro (subcuenta conservadora, nunca cuenta una entrega
+        // futura).
+        void llenarAcumuladosFisicos(BloqueSimulacion bloque) {
+            if (bloque == null || resumen.isEmpty()) return;
+            long corteMin = Long.MIN_VALUE;
+            for (ResumenEnvio r : resumen.values()) if (r.readyMin() > corteMin) corteMin = r.readyMin();
+
+            long procesadas = 0L, enrutadas = 0L, entregadas = 0L;
+            for (ResumenEnvio r : resumen.values()) {
+                procesadas += r.quantity();
+                if (!r.enrutada()) continue;
+                enrutadas += r.quantity();
+                if (r.ultimoArriboMin() <= corteMin) entregadas += r.quantity();
+            }
+            bloque.setMaletasProcesadasAcum(procesadas);
+            bloque.setMaletasEnrutadasAcum(enrutadas);
+            bloque.setMaletasEntregadasAcum(entregadas);
+        }
+    }
+
+    /** Fase 5b-2: snapshot de métricas por bloque para el /dashboard mientras el job corre (las
+     *  asignaciones de bloques viejos se purgan, así que no se pueden recontar). */
+    private static com.tasfb2b.planificador.dto.Metricas metricasSnapshotDe(TotalesUnicos t, long taPromedioMs) {
+        com.tasfb2b.planificador.dto.Metricas m = new com.tasfb2b.planificador.dto.Metricas();
+        m.setProcesadas(t.envios());
+        m.setEnrutadas(t.enrutadas());
+        m.setSinRuta(t.sinRuta());
+        m.setCumpleSLA(t.cumpleSLA());
+        m.setTardadas(t.tardadas());
+        m.setMaletasIndividuales(t.maletas());
+        m.setTaPromedioMs(taPromedioMs);
+        return m;
     }
 
     private static long ultimoArriboMin(LuggageBatch b) {
