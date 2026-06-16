@@ -42,6 +42,8 @@ public class PlanificadorService {
     private final JobsRegistry jobs;
     private final AuditoriaService auditoria;
     private final AcoBlockEngine acoEngine;
+    /** Fase 5a: persistencia de soluciones por bloque (ruta_asignada/tramo_ruta), serializada. */
+    private final PersistenciaSolucionService persistencia;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -62,13 +64,15 @@ public class PlanificadorService {
     private volatile List<BloqueSimulacion> bloquesCacheados = null;
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
+    @org.springframework.beans.factory.annotation.Autowired
     public PlanificadorService(DataLoader dataLoader,
                                AlgorithmMapper mapper,
                                PlanificadorProperties props,
                                JobsRegistry jobs,
                                EnvioLoader envioLoader,
                                AuditoriaService auditoria,
-                               AcoBlockEngine acoEngine) {
+                               AcoBlockEngine acoEngine,
+                               PersistenciaSolucionService persistencia) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -76,6 +80,19 @@ public class PlanificadorService {
         this.envioLoader = envioLoader;
         this.auditoria = auditoria;
         this.acoEngine = acoEngine;
+        this.persistencia = persistencia;
+    }
+
+    /**
+     * Constructor de conveniencia para tests (mismo paquete): omite la persistencia real usando una
+     * instancia no-op (JdbcTemplate y txManager null ⇒ nunca llega a persistir; sus métodos quedan
+     * en no-op por sus try/catch). Evita tocar los tests que construyen el servicio con 7 argumentos.
+     */
+    PlanificadorService(DataLoader dataLoader, AlgorithmMapper mapper, PlanificadorProperties props,
+                        JobsRegistry jobs, EnvioLoader envioLoader, AuditoriaService auditoria,
+                        AcoBlockEngine acoEngine) {
+        this(dataLoader, mapper, props, jobs, envioLoader, auditoria, acoEngine,
+                new PersistenciaSolucionService(null, null));
     }
 
 
@@ -706,6 +723,9 @@ public class PlanificadorService {
                     clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
         }
 
+        // Fase 5a: toma la persistencia (una corrida a la vez) y limpia las tablas de solución.
+        persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
+
         boolean colapsoAlmacenDetectado = false;   // E2 se detiene ante colapso de almacén.
         int bloqueColapsoAlmacen = -1;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
@@ -718,6 +738,7 @@ public class PlanificadorService {
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
+            persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
@@ -908,6 +929,9 @@ public class PlanificadorService {
         BacklogManager backlog = crearBacklogConPurga(enrutador);
         Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
         int intervaloReporte = Math.max(1, totalBloques / 10);
+        // Fase 5a: toma la persistencia (una corrida a la vez) y limpia las tablas de solución.
+        persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
+
         boolean colapsoAlmacenDetectado = false;   // E1 se detiene ante colapso de almacén.
         int bloqueColapsoAlmacen = -1;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
@@ -930,6 +954,7 @@ public class PlanificadorService {
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
+            persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
@@ -1132,6 +1157,9 @@ public class PlanificadorService {
                 props.getScenario().getTaSegundos() * 1000L, fechaInicio);
         if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup);
 
+        // Fase 5a: toma la persistencia (una corrida a la vez) y limpia las tablas de solución.
+        persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
+
         for (TemporalContext ctx : plan) {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
@@ -1144,6 +1172,7 @@ public class PlanificadorService {
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
+            persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = calcularTotalesUnicos(auditAcc);
@@ -1265,6 +1294,8 @@ public class PlanificadorService {
      */
     private void publicarAuditoria(JobState job, Map<String, LuggageBatch> auditAcc,
                                    List<VueloCancelado> vuelosCancelados) {
+        // Fase 5a: libera la persistencia al cerrar la corrida (los 3 escenarios pasan por aquí).
+        persistencia.finalizarCorrida(job != null ? job.getJobId() : null);
         if (auditoria == null || job == null) return;
         boolean hayEnvios = auditAcc != null && !auditAcc.isEmpty();
         boolean hayCancelados = vuelosCancelados != null && !vuelosCancelados.isEmpty();
@@ -1624,7 +1655,7 @@ public class PlanificadorService {
                 : buildSerieAlmacenes(telemetryAirport, graph, enrutador);
 
         return new ResultadoVentana(bloque, finalBatches.size(), enrutadas, sinRuta, cumpleSLA, tardadas, maletas,
-                colapsoAlmacen, detalleColapso, alerta, serieAlmacenes);
+                colapsoAlmacen, detalleColapso, alerta, serieAlmacenes, finalBatches);
     }
 
     /**
@@ -2426,7 +2457,8 @@ public class PlanificadorService {
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
             boolean colapsoAlmacen, String detalleColapso,
             com.tasfb2b.planificador.dto.AlertaColapso alerta,
-            List<OcupacionAlmacenSlot> serieAlmacenes) {
+            List<OcupacionAlmacenSlot> serieAlmacenes,
+            List<LuggageBatch> finalBatches) {
     }
 
     private record TotalesUnicos(
