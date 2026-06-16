@@ -21,7 +21,7 @@ class ReinicioJobTest {
     private static PlanificadorService serviceCon(JobsRegistry jobs) {
         // Solo props (para K fijo del escenario) y jobs son necesarios; el resto no se toca aquí.
         return new PlanificadorService(null, null, new PlanificadorProperties(), jobs,
-                null, null, null);
+                null, null);
     }
 
     @Test

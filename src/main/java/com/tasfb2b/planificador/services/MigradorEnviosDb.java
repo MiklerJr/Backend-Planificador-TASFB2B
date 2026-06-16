@@ -29,9 +29,10 @@ public class MigradorEnviosDb {
             return;
         }
 
-        // Ahora incluimos id_cliente y el TIMESTAMP real (fecha_hora_registro)
-        String sql = "INSERT INTO ENVIO (id_envio, icao_origen, icao_destino, cantidad_maletas, hora_registro, minuto_registro, id_cliente, fecha_hora_registro) " +
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id_envio) DO NOTHING";
+        // El TIMESTAMP real (fecha_hora_registro) es la fuente de verdad; hora_registro/minuto_registro
+        // eran columnas redundantes y se eliminaron (Fase 6A).
+        String sql = "INSERT INTO ENVIO (id_envio, icao_origen, icao_destino, cantidad_maletas, id_cliente, fecha_hora_registro) " +
+                     "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id_envio) DO NOTHING";
 
         int totalArchivos = archivos.length;
         int procesados = 0;
@@ -81,7 +82,7 @@ public class MigradorEnviosDb {
                         String timestampStr = String.format("%s-%s-%s %02d:%02d:00", anio, mes, dia, hh, mm);
                         Timestamp fechaHoraRegistro = Timestamp.valueOf(timestampStr);
 
-                        batchArgs.add(new Object[]{id, origenIcao, destino, maletas, hh, mm, idCliente, fechaHoraRegistro});
+                        batchArgs.add(new Object[]{id, origenIcao, destino, maletas, idCliente, fechaHoraRegistro});
                     } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
                         // RF03: línea con un campo obligatorio mal formado; se descarta sin abortar el archivo.
                         descartados++;

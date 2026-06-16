@@ -83,7 +83,7 @@ class AsignacionesEndpointTest {
 
     private static JobQueryController controllerCon(JobsRegistry jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
-                null, null, null);
+                null, null);
         JobQueryService jobQuery = new JobQueryService(jobs, null);
         return new JobQueryController(service, jobQuery);
     }

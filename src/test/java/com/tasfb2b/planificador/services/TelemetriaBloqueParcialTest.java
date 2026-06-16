@@ -61,7 +61,7 @@ class TelemetriaBloqueParcialTest {
 
         // El DTO del bloque 2 reporta el acumulado del vuelo-día: 48/50 = 96% ⇒ ROJO.
         CargaVuelo dto = soloUno(
-                new PlanificadorService(null, null, null, null, null, null, null)
+                new PlanificadorService(null, null, null, null, null, null)
                         .buildCargasVuelos(bloque2, graph, op));
         assertEquals(48, dto.getCargaAsignada(),
                 "cargaAsignada = acumulado global del vuelo-día, no el delta del bloque");
@@ -95,7 +95,7 @@ class TelemetriaBloqueParcialTest {
 
         // El DTO del bloque 2 reporta el pico concurrente acumulado: 490/500 = 98% ⇒ ROJO.
         OcupacionAlmacen dto = soloUno(
-                new PlanificadorService(null, null, null, null, null, null, null)
+                new PlanificadorService(null, null, null, null, null, null)
                         .buildOcupacionAlmacenes(almacenBloque2, graph, op));
         assertEquals(490, dto.getOcupacionAsignada(),
                 "ocupacionAsignada = pico concurrente acumulado del día, no el delta del bloque");

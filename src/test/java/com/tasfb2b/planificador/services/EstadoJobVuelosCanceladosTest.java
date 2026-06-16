@@ -25,7 +25,7 @@ class EstadoJobVuelosCanceladosTest {
     void estadoDelJobExponeLasCancelacionesAplicadasConSusEnviosAfectados() {
         JobsRegistry jobs = new JobsRegistry();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
-                null, null, null);
+                null, null);
         JobQueryController controller = new JobQueryController(service, new JobQueryService(jobs, null));
         JobState job = jobs.crear("2", 14);
 
@@ -50,7 +50,7 @@ class EstadoJobVuelosCanceladosTest {
     void unJobSinCancelacionesExponeLaListaVacia() {
         JobsRegistry jobs = new JobsRegistry();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
-                null, null, null);
+                null, null);
         JobQueryController controller = new JobQueryController(service, new JobQueryService(jobs, null));
         JobState job = jobs.crear("3", 75);
 

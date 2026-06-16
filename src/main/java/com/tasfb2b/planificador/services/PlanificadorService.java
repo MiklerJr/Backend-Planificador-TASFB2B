@@ -8,7 +8,6 @@ import com.tasfb2b.planificador.dto.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.*;
-import com.tasfb2b.planificador.dto.EnvioDTO;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Envio;
@@ -53,10 +52,6 @@ public class PlanificadorService {
     /** Fase T (N3): candidatos por clave al pre-calentar esqueletos (= GROUP_ROUTE_CANDIDATES del hot-path). */
     private static final int PREWARM_ROUTE_CANDIDATES = 5;
 
-    // ── DEPENDENCIAS ANTIGUAS (ACO) ─────────────────────────────────────
-    private final EnvioLoader envioLoader;
-
-
     // Cache perezosa código ICAO → offset horario (GMT), para reconstruir UTC real en el DTO.
     private volatile Map<String, Integer> offsetPorCodigo = null;
 
@@ -71,7 +66,6 @@ public class PlanificadorService {
                                AlgorithmMapper mapper,
                                PlanificadorProperties props,
                                JobsRegistry jobs,
-                               EnvioLoader envioLoader,
                                AuditoriaService auditoria,
                                AcoBlockEngine acoEngine,
                                PersistenciaSolucionService persistencia,
@@ -80,7 +74,6 @@ public class PlanificadorService {
         this.mapper = mapper;
         this.props = props;
         this.jobs = jobs;
-        this.envioLoader = envioLoader;
         this.auditoria = auditoria;
         this.acoEngine = acoEngine;
         this.persistencia = persistencia;
@@ -94,9 +87,9 @@ public class PlanificadorService {
      * argumentos.
      */
     PlanificadorService(DataLoader dataLoader, AlgorithmMapper mapper, PlanificadorProperties props,
-                        JobsRegistry jobs, EnvioLoader envioLoader, AuditoriaService auditoria,
+                        JobsRegistry jobs, AuditoriaService auditoria,
                         AcoBlockEngine acoEngine) {
-        this(dataLoader, mapper, props, jobs, envioLoader, auditoria, acoEngine,
+        this(dataLoader, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null));
     }
 

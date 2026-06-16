@@ -104,7 +104,7 @@ class SerieAlmacenesTest {
     // ----------------------------------------------------------------------- helpers
 
     private static PlanificadorService serviceSinDataset() {
-        return new PlanificadorService(null, null, null, null, null, null, null);
+        return new PlanificadorService(null, null, null, null, null, null);
     }
 
     private static List<OcupacionAlmacenSlot> slotsDe(

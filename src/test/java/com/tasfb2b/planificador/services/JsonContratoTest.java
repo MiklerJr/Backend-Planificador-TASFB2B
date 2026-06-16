@@ -56,7 +56,7 @@ class JsonContratoTest {
     // ----------------------------------------------------------------------- helpers
 
     private static PlanificadorService serviceCon(JobsRegistry jobs) {
-        return new PlanificadorService(null, null, null, jobs, null, null, null);
+        return new PlanificadorService(null, null, null, jobs, null, null);
     }
 
     private static JobQueryService jobQueryCon(JobsRegistry jobs) {

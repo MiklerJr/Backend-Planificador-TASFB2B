@@ -68,6 +68,6 @@ class ValidacionParametrosEscenarioTest {
 
     private static PlanificadorService serviceSinDataset() {
         return new PlanificadorService(null, null, null, new JobsRegistry(),
-                null, null, null);
+                null, null);
     }
 }
