@@ -64,7 +64,7 @@ class GlobalExceptionHandlerTest {
         // El controller no necesita servicio para esta ruta: la verificación de k-fijo lanza antes
         // de tocar el servicio, así que basta con props (defaults) + el advice registrado.
         EscenarioController controller = new EscenarioController(null, new PlanificadorProperties(),
-                new IngestaService(null, null, null, null, null));
+                new IngestaService(null, null, null, null, null, null));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

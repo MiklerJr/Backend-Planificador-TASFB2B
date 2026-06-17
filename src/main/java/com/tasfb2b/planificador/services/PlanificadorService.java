@@ -45,6 +45,8 @@ public class PlanificadorService {
     private final PersistenciaSolucionService persistencia;
     /** Fase 5b: lee la solución de BD (ZIP de auditoría y cancelación) para no retenerla en RAM. */
     private final SolucionBdReader solucionBdReader;
+    /** Grafo + caché de esqueletos reutilizables entre simulaciones (recorta la latencia de arranque). */
+    private final MotorGrafoCache motorCache;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -69,7 +71,8 @@ public class PlanificadorService {
                                AuditoriaService auditoria,
                                AcoBlockEngine acoEngine,
                                PersistenciaSolucionService persistencia,
-                               SolucionBdReader solucionBdReader) {
+                               SolucionBdReader solucionBdReader,
+                               MotorGrafoCache motorCache) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -78,6 +81,7 @@ public class PlanificadorService {
         this.acoEngine = acoEngine;
         this.persistencia = persistencia;
         this.solucionBdReader = solucionBdReader;
+        this.motorCache = motorCache;
     }
 
     /**
@@ -90,7 +94,8 @@ public class PlanificadorService {
                         JobsRegistry jobs, AuditoriaService auditoria,
                         AcoBlockEngine acoEngine) {
         this(dataLoader, mapper, props, jobs, auditoria, acoEngine,
-                new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null));
+                new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null),
+                new MotorGrafoCache());
     }
 
 
@@ -656,8 +661,9 @@ public class PlanificadorService {
                 ? construirPlanWarmup(k, fechaInicio, saOverride)
                 : Collections.emptyList();
 
-        Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Graph graph = motorCache.obtenerGrafo(
+                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph, motorCache.skeletonCache());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
@@ -724,7 +730,6 @@ public class PlanificadorService {
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
-            persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -746,6 +751,10 @@ public class PlanificadorService {
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
                 job.alertaColapso = rv.alerta();
+                // Reorden (latencia front): se publica al front ANTES de persistir a la BD; la
+                // persistencia va al final, tras notificar, y antes del break por cancelación
+                // (para no perder la persistencia del último bloque al cancelar).
+                persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
                 // Parada por orden del front: el usuario llamó a /cancelar. Igual que E1/E3,
                 // así E2 termina de inmediato (aunque simularTiempoReal2=false) y llega a
                 // publicarAuditoria para preservar el ZIP de lo procesado.
@@ -889,8 +898,9 @@ public class PlanificadorService {
             return r;
         }
 
-        Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Graph graph = motorCache.obtenerGrafo(
+                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph, motorCache.skeletonCache());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
@@ -941,7 +951,6 @@ public class PlanificadorService {
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
-            persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -960,6 +969,9 @@ public class PlanificadorService {
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
                 job.alertaColapso = rv.alerta();
+                // Reorden (latencia front): publicar al front ANTES de persistir; persistencia al
+                // final, antes del break por cancelación (no perder el último bloque al cancelar).
+                persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
                     log.info("E1 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
                     break;
@@ -1105,8 +1117,9 @@ public class PlanificadorService {
             return r;
         }
 
-        Graph graph = mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos());
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Graph graph = motorCache.obtenerGrafo(
+                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph, motorCache.skeletonCache());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
@@ -1160,7 +1173,6 @@ public class PlanificadorService {
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
-            persistencia.persistirBloque(job != null ? job.getJobId() : null, rv.finalBatches());
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -1181,6 +1193,9 @@ public class PlanificadorService {
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
                 job.alertaColapso = rv.alerta();
+                // Reorden (latencia front): publicar al front ANTES de persistir; persistencia al
+                // final, antes del break por cancelación (no perder el último bloque al cancelar).
+                persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
                 // Parada por orden del front: el usuario llamó a /cancelar.
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
                     motivoParada = "cancelado_front";

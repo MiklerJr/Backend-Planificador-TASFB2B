@@ -53,9 +53,15 @@ public class PersistenciaSolucionService {
 
     /**
      * Intenta tomar la persistencia para {@code jobId}. Si la toma (no hay otra corrida activa),
-     * vacía las tablas de solución ({@code TRUNCATE}) y resetea {@code envio.estado}, y devuelve
-     * {@code true}. Si ya hay otra corrida persistiendo, devuelve {@code false} (ese job corre solo
-     * en memoria).
+     * vacía las tablas de solución ({@code TRUNCATE ruta_asignada/tramo_ruta/cancelacion_vuelo}) y
+     * devuelve {@code true}. Si ya hay otra corrida persistiendo, devuelve {@code false} (ese job
+     * corre solo en memoria).
+     *
+     * <p>El TRUNCATE es lo único que hace falta para empezar una corrida limpia: el "enrutado activo"
+     * de un envío se modela con {@code ruta_asignada.activa=TRUE}, no con la columna
+     * {@code envio.estado} (columna huérfana: nadie la lee ni la escribe a otro valor en el código).
+     * Por eso ya NO se ejecuta {@code UPDATE envio SET estado='pendiente'} (reescribía ~9,5 M filas
+     * por nada, ~4 min de espera inicial).
      */
     public boolean iniciarCorrida(String jobId) {
         if (jobId == null) return false;
@@ -66,7 +72,6 @@ public class PersistenciaSolucionService {
         }
         try {
             jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo RESTART IDENTITY CASCADE");
-            jdbc.update("UPDATE envio SET estado = 'pendiente'");
             log.info("Persistencia iniciada para la corrida {} (tablas de solución limpias).", jobId);
             return true;
         } catch (Exception e) {

@@ -74,17 +74,27 @@ public class GreedyRepairOperator implements RepairOperator {
     // simulación). Permite que removerEsperaOrigenBacklog reste solo a los admitidos (sin negativos).
     private final Set<String> origenAdmitidos = new HashSet<>();
 
-    // H3: cache de esqueletos de ruta (secuencias de edge-idx) reutilizable ENTRE
-    // bloques de una misma simulación. La malla de vuelos se repite a diario, así que
-    // un esqueleto hallado para (origen,destino,hora-del-día,SLA) sirve los 200 días;
-    // solo se revalida capacidad/cancelaciones al materializar. Evita re-ejecutar
-    // Dijkstra para patrones recurrentes. Instancia por simulación (GreedyRepairOperator
-    // se crea una vez por escenario) y uso single-thread → HashMap normal es seguro.
-    final Map<Long, List<int[]>> rutaSkeletonCache = new HashMap<>();   // package-private para tests
+    // H3: cache de esqueletos de ruta (secuencias de edge-idx) reutilizable ENTRE bloques y —si se
+    // inyecta una caché compartida (ver MotorGrafoCache)— ENTRE simulaciones del mismo dataset. La
+    // malla de vuelos se repite a diario, así que un esqueleto hallado para
+    // (origen,destino,hora-del-día,SLA) sirve los 200 días; solo se revalida capacidad/cancelaciones
+    // al materializar. Evita re-ejecutar Dijkstra para patrones recurrentes. Las simulaciones corren
+    // una a la vez (single-thread executor); la caché compartida es ConcurrentHashMap por defensa.
+    final Map<Long, List<int[]>> rutaSkeletonCache;   // package-private para tests; se asigna en el constructor
     // Fase Q: claves de esqueleto ya intentadas por el re-seed hub-avoiding (una vez cada una).
     private final Set<Long> reSeeded = new HashSet<>();
 
     public GreedyRepairOperator(Graph graph) {
+        this(graph, new HashMap<>());
+    }
+
+    /**
+     * Constructor con caché de esqueletos COMPARTIDA entre simulaciones del mismo dataset (la malla de
+     * vuelos es estática). La caché la provee {@link com.tasfb2b.planificador.services.MotorGrafoCache}
+     * y se invalida al recargar el dataset; el constructor de un argumento usa una caché propia (tests).
+     */
+    public GreedyRepairOperator(Graph graph, Map<Long, List<int[]>> rutaSkeletonCache) {
+        this.rutaSkeletonCache = rutaSkeletonCache;
         this.graph = graph;
 
         // Asignar idx entero a cada nodo (una sola vez)

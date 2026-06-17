@@ -38,17 +38,19 @@ public class IngestaService {
     private final AeropuertoParser aeropuertoParser;
     private final DataLoader dataLoader;
     private final JobsRegistry jobs;
+    private final MotorGrafoCache motorCache;
 
     private final AtomicReference<IngestaEstado> estado = new AtomicReference<>();
     private final AtomicBoolean enCurso = new AtomicBoolean(false);
 
     public IngestaService(JdbcTemplate jdbc, MigradorEnviosDb migrador, AeropuertoParser aeropuertoParser,
-                          DataLoader dataLoader, JobsRegistry jobs) {
+                          DataLoader dataLoader, JobsRegistry jobs, MotorGrafoCache motorCache) {
         this.jdbc = jdbc;
         this.migrador = migrador;
         this.aeropuertoParser = aeropuertoParser;
         this.dataLoader = dataLoader;
         this.jobs = jobs;
+        this.motorCache = motorCache;
     }
 
     public boolean estaEnCurso() { return enCurso.get(); }
@@ -144,9 +146,11 @@ public class IngestaService {
                 e.setEnviosDescartados(desc);
             }
 
-            // 5. Recargar la cache del motor (aeropuertos, vuelos, ventanas).
+            // 5. Recargar la cache del motor (aeropuertos, vuelos, ventanas) e invalidar el grafo +
+            //    esqueletos compartidos: cambian los vuelos ⇒ los edge-idx cacheados ya no valen.
             e.setFase("recargando");
             dataLoader.load();
+            motorCache.invalidar();
 
             e.setFase("completada");
             log.info("Ingesta completada: {} aeropuertos, {} vuelos, {} envíos ({} descartados)",
