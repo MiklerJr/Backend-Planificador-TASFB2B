@@ -156,6 +156,39 @@ public class JobQueryController {
     }
 
     /**
+     * Estado de UN envío por su {@code idEnvio} (consulta puntual del front). Pensado para cuando el
+     * envío pertenece a un bloque anterior, ya purgado de la RAM del job: el detalle se reconstruye
+     * desde la solución persistida en BD y se le añade el estado "en ruta".
+     *
+     * <p>Devuelve un {@link EnvioEstadoResponse}: la {@link AsignacionMaleta} (inicio =
+     * {@code registroUtc}; aeropuertos = {@code tramos[].origen/destino}; vuelos = {@code rutaVuelos})
+     * con cada {@code tramos[].estado} clasificado (COMPLETADO/EN_CURSO/PENDIENTE), más el estado
+     * global del envío (PROGRAMADO/EN_VUELO/EN_ESCALA/ENTREGADO) y su ubicación.
+     *
+     * @param en instante UTC de referencia (ISO, p. ej. {@code 2026-01-03T14:30}). Si se omite, se
+     *           usa el {@code horaFin} del último bloque publicado del job (el "ahora" de la simulación).
+     *
+     * <p>Responde 400 si {@code en} tiene formato inválido; 404 si el job no existe o si el envío no
+     * tiene ruta activa persistida en este job (no existe, quedó en backlog/sin ruta, o la BD ya
+     * refleja otra corrida).
+     */
+    @GetMapping("/jobs/{jobId}/envios/{idEnvio}")
+    public ResponseEntity<EnvioEstadoResponse> envioJob(
+            @PathVariable String jobId, @PathVariable String idEnvio,
+            @RequestParam(required = false) String en) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();   // 404 job
+        java.time.LocalDateTime instante;
+        try {
+            instante = (en == null || en.isBlank()) ? null : java.time.LocalDateTime.parse(en);
+        } catch (java.time.format.DateTimeParseException e) {
+            return ResponseEntity.badRequest().build();                                // 400 'en' inválido
+        }
+        EnvioEstadoResponse estado = service.buscarEstadoEnvio(jobId, idEnvio, instante);
+        if (estado == null) return ResponseEntity.notFound().build();                  // 404 envío
+        return ResponseEntity.ok(estado);
+    }
+
+    /**
      * Bloques publicados de forma incremental por el job (escenarios 2 y 3).
      *
      * <p>El front pasa {@code desde} con el índice del próximo bloque que aún no

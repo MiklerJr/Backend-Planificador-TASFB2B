@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 
 @Data
@@ -24,4 +25,13 @@ public class TramoRuta {
      * duraciones falsas (negativas o infladas).
      */
     private int duracionMin;
+    /**
+     * Estado del tramo respecto al instante actual de la simulación: {@code COMPLETADO}
+     * ({@code llegadaUtc <= ahora}), {@code EN_CURSO} ({@code salidaUtc <= ahora < llegadaUtc})
+     * o {@code PENDIENTE} ({@code salidaUtc > ahora}). Solo lo rellena el endpoint de estado del
+     * envío ({@code GET /jobs/{id}/envios/{idEnvio}}); en {@code /bloques} y {@code /asignaciones}
+     * queda null y no aparece en el JSON.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String estado;
 }

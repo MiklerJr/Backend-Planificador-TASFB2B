@@ -15,6 +15,7 @@ import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
 import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.util.EnvioEstadoCalculator;
 import com.tasfb2b.planificador.util.FlightParser;
 import com.tasfb2b.planificador.util.SimulacionFormat;
 import lombok.extern.slf4j.Slf4j;
@@ -1891,6 +1892,54 @@ public class PlanificadorService {
         long minutosDesdeBase = java.time.Duration.between(base, t).toMinutes();
         long alineado = (minutosDesdeBase / saMin) * saMin;
         return base.plusMinutes(alineado);
+    }
+
+    /**
+     * Estado de un envío individual para la consulta puntual del front (un envío de un bloque ya
+     * purgado de la RAM del job, ver {@code JobState.publicarBloque}). Lee su ruta ACTIVA desde la
+     * BD —donde la Fase 5a la persistió—, la convierte al mismo {@link AsignacionMaleta} que sirven
+     * {@code /bloques} y {@code /asignaciones}, y le añade el estado "en ruta" (qué tramos completó y
+     * cuáles faltan) clasificando cada tramo contra un instante de referencia.
+     *
+     * <p>El instante es {@code instante} si viene; si es null, se usa el {@code horaFin} del último
+     * bloque publicado del job (el "ahora" de la simulación).
+     *
+     * <p>Devuelve {@code null} (⇒ 404 en el controller) si la solución en BD no corresponde a
+     * {@code jobId} (otra corrida la sobrescribió, o este job nunca tomó la persistencia —p. ej.
+     * perfil smoke—; ver {@link PersistenciaSolucionService#reflejaEnBd}), o si el envío no tiene
+     * ruta activa persistida (no existe, o quedó en backlog/sin ruta).
+     */
+    public EnvioEstadoResponse buscarEstadoEnvio(String jobId, String idEnvio, LocalDateTime instante) {
+        AsignacionMaleta asig = construirAsignacionDesdeBd(jobId, idEnvio);
+        if (asig == null) return null;
+        LocalDateTime ahora = (instante != null) ? instante : ahoraDelJob(jobId);
+        EnvioEstadoResponse resp = EnvioEstadoCalculator.calcular(asig, ahora);
+        resp.setInstanteDerivadoDelJob(instante == null && ahora != null);
+        return resp;
+    }
+
+    /** Reconstruye el {@link AsignacionMaleta} de la ruta activa del envío desde BD, o null. */
+    private AsignacionMaleta construirAsignacionDesdeBd(String jobId, String idEnvio) {
+        if (!persistencia.reflejaEnBd(jobId)) return null;
+        Graph graph = motorCache.obtenerGrafo(
+                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+        Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+        return solucionBdReader.buscarPorEnvio(idEnvio, indiceVuelo)
+                .map(b -> buildAsignaciones(List.of(b)).get(0))
+                .orElse(null);
+    }
+
+    /** "Ahora" de la simulación = {@code horaFin} UTC del último bloque publicado, o null si no hay. */
+    private LocalDateTime ahoraDelJob(String jobId) {
+        JobState job = getJob(jobId);
+        if (job == null) return null;
+        BloqueSimulacion ultimo = job.ultimoBloque();
+        if (ultimo == null || ultimo.getHoraFin() == null) return null;
+        try {
+            return LocalDateTime.parse(ultimo.getHoraFin());
+        } catch (java.time.format.DateTimeParseException e) {
+            return null;
+        }
     }
 
     /**

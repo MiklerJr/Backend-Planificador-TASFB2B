@@ -299,6 +299,16 @@ public class JobState {
         return bloquesParciales.size();
     }
 
+    /**
+     * Último bloque publicado (o null si aún no hay ninguno). Su {@code horaFin} (UTC) es el
+     * "ahora" de la simulación: lo usa la consulta de estado de un envío como instante de
+     * referencia por defecto cuando el front no pasa uno explícito.
+     */
+    public BloqueSimulacion ultimoBloque() {
+        int n = bloquesParciales.size();
+        return n == 0 ? null : bloquesParciales.get(n - 1);
+    }
+
     // ── Fase 5b-2: acumulador incremental de vuelos usados (reemplaza la reconstrucción desde
     //    bloquesDesde(0) de JobQueryService, que dependía de las asignaciones ya purgadas) ──────────
 

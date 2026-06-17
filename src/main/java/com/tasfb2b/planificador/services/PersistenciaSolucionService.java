@@ -43,6 +43,14 @@ public class PersistenciaSolucionService {
     /** jobId de la corrida que tiene tomada la persistencia. null = libre. */
     private final AtomicReference<String> corridaActiva = new AtomicReference<>();
 
+    /**
+     * jobId de la última corrida que TOMÓ la persistencia y dejó su solución en BD. A diferencia de
+     * {@link #corridaActiva}, NO se limpia en {@link #finalizarCorrida}: la solución sigue en BD tras
+     * terminar el job, hasta que otra corrida la sobrescriba con el TRUNCATE. Permite consultar un
+     * envío de un job ya finalizado (mientras nadie más haya arrancado otra corrida).
+     */
+    private volatile String corridaPersistidaEnBd;
+
     /** Tamaño de lote para los INSERT multi-fila de {@code ruta_asignada} (acota nº de parámetros). */
     private static final int LOTE_RUTAS = 500;
 
@@ -72,6 +80,7 @@ public class PersistenciaSolucionService {
         }
         try {
             jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo RESTART IDENTITY CASCADE");
+            corridaPersistidaEnBd = jobId;   // a partir de aquí la BD refleja la solución de este job
             log.info("Persistencia iniciada para la corrida {} (tablas de solución limpias).", jobId);
             return true;
         } catch (Exception e) {
@@ -91,6 +100,15 @@ public class PersistenciaSolucionService {
     /** ¿Es {@code jobId} la corrida que está persistiendo ahora mismo? */
     public boolean persiste(String jobId) {
         return jobId != null && jobId.equals(corridaActiva.get());
+    }
+
+    /**
+     * ¿La solución que está ahora mismo en BD corresponde a {@code jobId}? Sigue siendo {@code true}
+     * tras finalizar el job (a diferencia de {@link #persiste}), hasta que otra corrida haga TRUNCATE.
+     * Es la condición correcta para servir la consulta puntual de un envío desde BD.
+     */
+    public boolean reflejaEnBd(String jobId) {
+        return jobId != null && jobId.equals(corridaPersistidaEnBd);
     }
 
     /**

@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
@@ -165,6 +166,39 @@ public class SolucionBdReader {
         });
         emitir(acc, indiceVuelo, out::add);
         return out;
+    }
+
+    /**
+     * Reconstruye el envío {@code idEnvio} desde su ruta ACTIVA en BD, o {@link Optional#empty()} si
+     * no tiene ruta activa persistida (no existe, o quedó en backlog/sin ruta). Pensado para la
+     * consulta puntual del front del detalle de un envío de un bloque anterior (ya purgado de la RAM
+     * del job). Mismo patrón de reconstrucción que {@link #afectadosPorVuelo}, pero para un único
+     * {@code id_envio}: el índice parcial {@code ux_ruta_activa_por_envio} garantiza una sola ruta
+     * activa, así que todos los tramos pertenecen a la misma.
+     */
+    public Optional<LuggageBatch> buscarPorEnvio(String idEnvio, Map<String, Edge> indiceVuelo) {
+        if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
+        String sql =
+                "SELECT r.id_ruta, r.id_envio, r.cumple_sla, "
+              + "       e.icao_origen, e.icao_destino, e.cantidad_maletas, e.fecha_hora_registro, "
+              + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
+              + "FROM ruta_asignada r "
+              + "JOIN envio e ON e.id_envio = r.id_envio "
+              + "JOIN tramo_ruta t ON t.id_ruta = r.id_ruta "
+              + "WHERE r.id_envio = ? AND r.activa "
+              + "ORDER BY t.numero_orden";
+        final Acumulador acc = new Acumulador();
+        jdbc.query(con -> {
+            var ps = con.prepareStatement(sql);
+            ps.setString(1, idEnvio);
+            return ps;
+        }, rs -> {
+            if (acc.idEnvio == null) acc.reset(rs);   // datos del envío: del primer tramo
+            acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
+                    rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
+        });
+        if (acc.idEnvio == null || acc.tramos.isEmpty()) return Optional.empty();
+        return Optional.ofNullable(reconstruir(acc, indiceVuelo));
     }
 
     // ── Reconstrucción ──────────────────────────────────────────────────────
