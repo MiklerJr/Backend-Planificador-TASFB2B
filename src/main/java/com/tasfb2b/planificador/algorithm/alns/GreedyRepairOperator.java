@@ -475,8 +475,9 @@ public class GreedyRepairOperator implements RepairOperator {
             if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) continue; // con ruta ⇒ Fase A
             orden.add(b);
         }
-        // Orden de llegada: readyTime ascendente (los presentes primero conservan su espacio).
-        orden.sort(Comparator.comparingLong(b -> toEpochMin(b.getReadyTime())));
+        // Orden de llegada: readyTime EFECTIVO ascendente (los presentes primero conservan su
+        // espacio). Para un varado (Fase 2) el readyTime efectivo es su llegada a la escala.
+        orden.sort(Comparator.comparingLong(b -> toEpochMin(b.readyEfectivo())));
         LuggageBatch desbordado = null;
         for (LuggageBatch b : orden) {
             if (cabeEsperaOrigen(b)) {
@@ -503,20 +504,21 @@ public class GreedyRepairOperator implements RepairOperator {
         }
     }
 
-    /** Tope duro — ¿cabe la espera {@code [readyTime, relojUTC)} de este envío en su almacén de origen? */
+    /** Tope duro — ¿cabe la espera {@code [readyEfectivo, relojUTC)} de este envío en su almacén
+     *  actual (origen real, o la escala si está varado en Fase 2)? */
     private boolean cabeEsperaOrigen(LuggageBatch batch) {
-        Node origen = graph.nodes.get(batch.getOriginCode());
+        Node origen = graph.nodes.get(batch.origenEfectivo());
         if (origen == null || origen.idx < 0 || origen.capacity <= 0) return true;
-        long desde = toEpochMin(batch.getReadyTime());
+        long desde = toEpochMin(batch.readyEfectivo());
         if (relojUtcMin <= desde) return true;
         return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getQuantity(), Map.of());
     }
 
     private void acumularEsperaOrigen(LuggageBatch batch, int signo) {
-        if (batch == null || batch.getReadyTime() == null || relojUtcMin == Long.MIN_VALUE) return;
-        Node origen = graph.nodes.get(batch.getOriginCode());
+        if (batch == null || batch.readyEfectivo() == null || relojUtcMin == Long.MIN_VALUE) return;
+        Node origen = graph.nodes.get(batch.origenEfectivo());
         if (origen == null || origen.idx < 0 || origen.capacity <= 0) return;
-        long desde = toEpochMin(batch.getReadyTime());
+        long desde = toEpochMin(batch.readyEfectivo());
         if (relojUtcMin <= desde) return;
         cargarAlmacenPierna(backlogOrigenOcc, origen.idx, desde, relojUtcMin, signo * batch.getQuantity());
     }
@@ -569,6 +571,60 @@ public class GreedyRepairOperator implements RepairOperator {
         }
         // Fase Origen — libera la ocupación de origen en la ocupación global (espejo de applyToBlock).
         cargarOrigen(airportOccupancy, batch, route, deps, -1);
+    }
+
+    /**
+     * Fase 2 — libera de la ocupación GLOBAL solo el SUFIJO {@code [k..n-1]} de la ruta de un batch
+     * (vuelos + estadías de destino), preservando el prefijo {@code [0..k-1]} que el envío ya voló.
+     * También libera la estadía del <b>nodo de corte</b> ({@code route[k-1].to}) con su límite viejo
+     * {@code deps[k]}, porque ese vuelo se reemplaza por uno nuevo; la estadía nueva la recargará
+     * {@code applyToBlock}/{@code cargarOrigen} al asignar el sufijo. NO toca la espera en el origen
+     * (es del prefijo). Espejo de {@link #releaseFromGlobal} pero acotado al sufijo.
+     *
+     * <p>Requiere {@code 1 <= k < n} (hay prefijo y hay sufijo). Para {@code k==0} usar
+     * {@link #releaseFromGlobal} (re-enrutado completo).
+     */
+    public void releaseSuffixFromGlobal(LuggageBatch batch, int k) {
+        List<Edge> route = batch.getAssignedRoute();
+        List<Long> deps  = batch.getAssignedDepartures();
+        if (route == null || deps == null || deps.size() != route.size()) return;
+        int n = route.size();
+        if (k <= 0 || k >= n) return;
+
+        // Estadía vieja del nodo de corte k-1: [arr_{k-1}, deps[k]).
+        Edge corte = route.get(k - 1);
+        if (corte.to != null && corte.to.idx >= 0) {
+            long arrCorte = deps.get(k - 1) + corte.durationMinutes;
+            cargarAlmacenPierna(airportOccupancy, corte.to.idx, arrCorte, deps.get(k),
+                    -batch.getQuantity());
+        }
+        // Sufijo: vuelos y estadías de destino, desde k.
+        for (int i = k; i < n; i++) {
+            Edge e      = route.get(i);
+            long depMin = deps.get(i);
+            long arrMin = depMin + e.durationMinutes;
+            flightOccupancy.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
+            boolean esFinalLeg = (i == n - 1);
+            if (!esFinalLeg && e.to.idx >= 0) {
+                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, deps.get(i + 1),
+                        -batch.getQuantity());
+            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
+                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
+                        -batch.getQuantity());
+            }
+        }
+    }
+
+    /**
+     * Fase 2 — ¿un candidato de SUFIJO (enrutado desde una escala) entrega dentro del SLA medido
+     * desde el registro ORIGINAL del envío? El candidato mide su {@code cumpleSLA} desde la escala
+     * (sobreestima la holgura), así que el SLA real se recomputa contra el deadline absoluto
+     * {@code readyOriginal + sla}.
+     */
+    public boolean cumpleSlaDesdeOrigen(RouteCandidate sufijo, LuggageBatch original) {
+        if (sufijo == null || original == null) return false;
+        long deadlineMin = toEpochMin(original.getReadyTime()) + (long) original.getSlaLimitHours() * 60L;
+        return (sufijo.getArrivalMin() + DEST_STORAGE_MIN) <= deadlineMin;
     }
 
     // -----------------------------------------------------------------------

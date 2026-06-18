@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.algorithm.aco.Edge;
+import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -119,11 +120,14 @@ public class PersistenciaSolucionService {
     public void persistirBloque(String jobId, List<LuggageBatch> batches) {
         if (batches == null || batches.isEmpty() || !persiste(jobId)) return;
 
+        // Fase 2: persiste cualquier batch con ruta COMPLETA (prefijo+sufijo) no vacía. Incluye los
+        // varados (solo prefijo): su prefijo se guarda como ruta activa incompleta para que el
+        // endpoint de estado lo muestre EN_ESCALA esperando.
         List<LuggageBatch> enrutados = new ArrayList<>();
         for (LuggageBatch b : batches) {
             if (b == null || b.getId() == null) continue;
-            List<Edge> ruta = b.getAssignedRoute();
-            List<Long> deps = b.getAssignedDepartures();
+            List<Edge> ruta = b.getRutaCompleta();
+            List<Long> deps = b.getDeparturesCompletas();
             if (ruta != null && !ruta.isEmpty() && deps != null && deps.size() == ruta.size()) {
                 enrutados.add(b);
             }
@@ -161,8 +165,8 @@ public class PersistenciaSolucionService {
         for (LuggageBatch b : enrutados) {
             Long idRuta = idRutaPorEnvio.get(b.getId());
             if (idRuta == null) continue;
-            List<Edge> ruta = b.getAssignedRoute();
-            List<Long> deps = b.getAssignedDepartures();
+            List<Edge> ruta = b.getRutaCompleta();
+            List<Long> deps = b.getDeparturesCompletas();
             for (int ti = 0; ti < ruta.size(); ti++) {
                 Edge e = ruta.get(ti);
                 long depMin = deps.get(ti);
@@ -187,11 +191,14 @@ public class PersistenciaSolucionService {
             if (i > 0) sql.append(',');
             sql.append("(?, TRUE, ?, ?, ?, ?, ?)");
 
-            double transitMin = b.getTotalTransitTimeMins();
-            double slackMin = b.getSlaLimitHours() * 60.0 - transitMin;
-            List<Edge> ruta = b.getAssignedRoute();
-            List<Long> deps = b.getAssignedDepartures();
+            // Fase 2: la ruta REAL = prefijo (volado) + sufijo. Tránsito/slack se miden desde el
+            // registro ORIGINAL hasta la llegada del último tramo conocido (para un varado, la escala).
+            List<Edge> ruta = b.getRutaCompleta();
+            List<Long> deps = b.getDeparturesCompletas();
+            long readyMin = GreedyRepairOperator.toEpochMinPublic(b.getReadyTime());
             long llegadaMin = deps.get(deps.size() - 1) + ruta.get(ruta.size() - 1).durationMinutes;
+            double transitMin = llegadaMin - readyMin;
+            double slackMin = b.getSlaLimitHours() * 60.0 - transitMin;
 
             args.add(b.getId());
             args.add(transitMin);          // costo_total (proxy = tránsito total en min)

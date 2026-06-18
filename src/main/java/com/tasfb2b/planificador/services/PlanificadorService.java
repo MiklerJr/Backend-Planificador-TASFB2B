@@ -55,6 +55,9 @@ public class PlanificadorService {
     /** Fase T (N3): candidatos por clave al pre-calentar esqueletos (= GROUP_ROUTE_CANDIDATES del hot-path). */
     private static final int PREWARM_ROUTE_CANDIDATES = 5;
 
+    /** Fase 2: candidatos a generar para el sufijo de un envío re-enrutado desde una escala. */
+    private static final int SUFIJO_ROUTE_CANDIDATES = 5;
+
     // Cache perezosa código ICAO → offset horario (GMT), para reconstruir UTC real en el DTO.
     private volatile Map<String, Integer> offsetPorCodigo = null;
 
@@ -1441,23 +1444,31 @@ public class PlanificadorService {
         List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
         // 2. Backlog: traer pendientes de bloques anteriores sin descarte definitivo.
+        //    Fase 2: los afectados por cancelación (ruta usa vuelo cancelado) o varados con prefijo
+        //    van por un CARRIL aparte —se re-enrutan desde su posición física—; el resto se libera
+        //    y entra al motor como siempre.
+        List<LuggageBatch> afectadosCrudos = new ArrayList<>();
         if (backlog != null) {
             List<LuggageBatch> pendientes = backlog.pollPendientesUrgentes(
                     props.getBacklog().getMaxReprocesoPorBloque());
 
-            // Liberar capacidad global de los replanificables (ya commiteados).
+            List<LuggageBatch> normales = new ArrayList<>();
             for (LuggageBatch b : pendientes) {
-                // Fase Origen-B — deja de cobrar su espera en origen (se evaluará para despacho;
-                // evita que su propia espera bloquee su ruta). No-op si ya tiene ruta.
+                // Fase Origen-B — deja de cobrar su espera en origen/escala (se evaluará para despacho).
                 enrutador.removerEsperaOrigenBacklog(b);
-                if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) {
-                    enrutador.releaseFromGlobal(b);
-                    b.clearRoute();
+                if (b.tienePrefijo() || enrutador.rutaUsaVueloCancelado(b)) {
+                    afectadosCrudos.add(b);   // carril Fase 2 (NO entra al motor)
+                } else {
+                    if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) {
+                        enrutador.releaseFromGlobal(b);
+                        b.clearRoute();
+                    }
+                    normales.add(b);
                 }
             }
-            if (!pendientes.isEmpty()) {
-                bloqueBatches = new ArrayList<>(bloqueBatches.size() + pendientes.size());
-                bloqueBatches.addAll(pendientes);
+            if (!normales.isEmpty()) {
+                bloqueBatches = new ArrayList<>(bloqueBatches.size() + normales.size());
+                bloqueBatches.addAll(normales);
                 bloqueBatches.addAll(mapper.mapToBatches(maletasVentana));
             }
         }
@@ -1465,6 +1476,15 @@ public class PlanificadorService {
         // 3. Motor: ALNS (Greedy + Dijkstra + ALNS) o ACO (AcoBlockEngine por bloque).
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
+
+        // Fase 2 — carril de afectados por cancelación: re-enrutar desde la posición física sobre los
+        // mapas del bloque, ANTES del motor (no entran a bloqueBatches; el motor los re-enrutaría
+        // desde el origen y les borraría el prefijo).
+        List<LuggageBatch> afectadosResueltos = new ArrayList<>();
+        for (LuggageBatch b : afectadosCrudos) {
+            afectadosResueltos.add(
+                    reenrutarAfectadoDesdePosicion(b, ctx, graph, enrutador, blockFlight, blockAirport));
+        }
         Map<Long, Integer> telemetryFlight = blockFlight;
         Map<Long, Integer> telemetryAirport = blockAirport;
         List<LuggageBatch> finalBatches;
@@ -1530,6 +1550,13 @@ public class PlanificadorService {
                 finalBatches = bloqueBatches;
                 enrutador.commitBlock(blockFlight, blockAirport);
             }
+        }
+
+        // Fase 2 — los afectados re-enrutados por su carril (recompuestos o varados) NO pasaron por
+        // el motor; se incorporan ahora para telemetría/auditoría/persistencia/refill del backlog.
+        if (!afectadosResueltos.isEmpty()) {
+            finalBatches = new ArrayList<>(finalBatches);
+            finalBatches.addAll(afectadosResueltos);
         }
 
         // Si el motor terminó antes de Ta y Ta es fijo, completamos con sleep
@@ -1942,13 +1969,118 @@ public class PlanificadorService {
         }
     }
 
+    // =========================================================
+    // Fase 2 — re-enrutamiento desde la posición física
+    // =========================================================
+
+    /**
+     * Re-enruta un envío afectado por una cancelación DESDE SU POSICIÓN FÍSICA en el instante del
+     * bloque ({@code ctx.scEnd}), preservando los tramos ya volados (prefijo) y buscando un sufijo
+     * nuevo desde la escala. Devuelve el mismo batch, recompuesto (prefijo+sufijo) o varado (prefijo,
+     * sufijo vacío). NO debe pasar por el motor (lo re-enrutaría desde el origen).
+     */
+    private LuggageBatch reenrutarAfectadoDesdePosicion(LuggageBatch b, TemporalContext ctx,
+            Graph graph, GreedyRepairOperator enrutador,
+            Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
+        if (!b.tienePrefijo()) {
+            // Primer corte: la ruta vieja completa está en assignedRoute.
+            List<Edge> route = b.getAssignedRoute();
+            List<Long> deps  = b.getAssignedDepartures();
+            if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
+                enrutador.releaseFromGlobal(b);
+                b.clearRoute();
+                return enrutarSufijo(b, enrutador, blockFlight, blockAirport);   // desde el origen
+            }
+            long ahoraMin = GreedyRepairOperator.toEpochMinPublic(ctx.scEnd);
+            int n = route.size();
+            int k = n;
+            for (int i = 0; i < n; i++) {
+                if (deps.get(i) > ahoraMin) { k = i; break; }   // primer tramo PENDIENTE
+            }
+            if (k == n) {
+                return b;   // ya en el último vuelo / entregado: no tocar (el cancelado ya se voló)
+            }
+            if (k == 0) {
+                enrutador.releaseFromGlobal(b);   // aún no salió: re-enrutar completo desde el origen
+                b.clearRoute();
+                return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
+            }
+            // Corte k>=1: preservar prefijo [0..k-1], liberar solo el sufijo.
+            Edge cortEdge = route.get(k - 1);
+            long arrCorte = deps.get(k - 1) + cortEdge.durationMinutes;
+            enrutador.releaseSuffixFromGlobal(b, k);
+            b.setPrefijoFijo(new ArrayList<>(route.subList(0, k)));
+            b.setPrefijoFijoDepartures(new ArrayList<>(deps.subList(0, k)));
+            b.setCurrentOriginCode(cortEdge.to.code);
+            b.setCurrentReadyTime(epochMinToLdt(arrCorte));
+            b.setAssignedRoute(new ArrayList<>());
+            b.setAssignedDepartures(null);
+        }
+        // Recién cortado o varado en reintento: enrutar el sufijo desde la posición actual.
+        return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
+    }
+
+    /** Fase 2 — enruta el sufijo de {@code b} desde su posición efectiva; recompone o lo deja varado. */
+    private LuggageBatch enrutarSufijo(LuggageBatch b, GreedyRepairOperator enrutador,
+            Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
+        LuggageBatch sintetico = new LuggageBatch(b.getId(), b.getQuantity(), b.getSlaLimitHours(),
+                b.origenEfectivo(), b.getDestCode(), b.readyEfectivo());
+        List<GreedyRepairOperator.RouteCandidate> candidatos = enrutador.generarCandidatosRuta(
+                sintetico, blockFlight, blockAirport, SUFIJO_ROUTE_CANDIDATES);
+        GreedyRepairOperator.RouteCandidate elegido = elegirSufijo(candidatos, b, enrutador);
+        if (elegido == null) {
+            // Varado: sin sufijo factible. Conserva el prefijo; sufijo vacío. Reintenta desde el backlog.
+            b.setAssignedRoute(new ArrayList<>());
+            b.setAssignedDepartures(null);
+            b.setCumpleSLA(false);
+            return b;
+        }
+        // Confirma la ocupación del sufijo (su cargarOrigen recarga la estadía del nodo de corte).
+        enrutador.aplicarCandidatoBloque(sintetico, elegido, blockFlight, blockAirport);
+        b.setAssignedRoute(new ArrayList<>(elegido.getEdges()));
+        b.setAssignedDepartures(new ArrayList<>(elegido.getActualDepartures()));
+        b.setCumpleSLA(enrutador.cumpleSlaDesdeOrigen(elegido, b));   // SLA desde el origen ORIGINAL
+        return b;
+    }
+
+    /** Fase 2 — elige el sufijo on-time real más temprano; si no hay, el tardío más temprano
+     *  (se acepta tardío, marcándolo cumpleSLA=false al recomponer). */
+    private GreedyRepairOperator.RouteCandidate elegirSufijo(
+            List<GreedyRepairOperator.RouteCandidate> candidatos, LuggageBatch original,
+            GreedyRepairOperator enrutador) {
+        if (candidatos == null) return null;
+        GreedyRepairOperator.RouteCandidate mejorOnTime = null, mejorTardio = null;
+        for (GreedyRepairOperator.RouteCandidate c : candidatos) {
+            if (enrutador.cumpleSlaDesdeOrigen(c, original)) {
+                if (mejorOnTime == null || c.getArrivalMin() < mejorOnTime.getArrivalMin()) mejorOnTime = c;
+            } else {
+                if (mejorTardio == null || c.getArrivalMin() < mejorTardio.getArrivalMin()) mejorTardio = c;
+            }
+        }
+        return mejorOnTime != null ? mejorOnTime : mejorTardio;
+    }
+
+    /** epoch-min UTC → LocalDateTime (inversa de toEpochMin). */
+    private static LocalDateTime epochMinToLdt(long epochMin) {
+        long day = Math.floorDiv(epochMin, 1440L);
+        int minOfDay = (int) Math.floorMod(epochMin, 1440L);
+        return LocalDate.ofEpochDay(day).atTime(minOfDay / 60, minOfDay % 60);
+    }
+
     /**
      * Construye los DTOs de asignación para una lista de batches ya ruteados.
      * Visible a nivel de paquete para pruebas de la conversión a UTC (husos).
      */
     List<AsignacionMaleta> buildAsignaciones(List<LuggageBatch> batches) {
         return batches.stream().map(b -> {
+            // Fase 2: la ruta REAL puede tener prefijo (tramos ya volados) + sufijo. "enrutada" = el
+            // envío llegó al destino (tiene sufijo); los tramos muestran la ruta COMPLETA (incl. prefijo,
+            // p. ej. un envío varado en una escala muestra sus tramos volados pero enrutada=false).
+            List<Edge> rutaCompleta = b.getRutaCompleta();
+            List<Long> depsCompletas = b.getDeparturesCompletas();
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            boolean tieneTramos = rutaCompleta != null && !rutaCompleta.isEmpty()
+                    && depsCompletas != null && depsCompletas.size() == rutaCompleta.size();
             AsignacionMaleta asig = new AsignacionMaleta();
             asig.setBatchId(b.getId());
             asig.setOrigen(b.getOriginCode());
@@ -1956,8 +2088,8 @@ public class PlanificadorService {
             asig.setCantidad(b.getQuantity());
             asig.setEnrutada(enrutada);
             asig.setCumpleSLA(b.isCumpleSLA());
-            asig.setRutaVuelos(enrutada
-                    ? b.getAssignedRoute().stream().map(e -> e.id).collect(Collectors.toList())
+            asig.setRutaVuelos(tieneTramos
+                    ? rutaCompleta.stream().map(e -> e.id).collect(Collectors.toList())
                     : Collections.emptyList());
 
             // El motor ya opera en UTC (AlgorithmMapper normaliza vuelos y readyTime con el
@@ -1971,9 +2103,9 @@ public class PlanificadorService {
             }
 
             List<TramoRuta> tramos = Collections.emptyList();
-            if (enrutada && b.getAssignedDepartures() != null && !b.getAssignedDepartures().isEmpty()) {
-                var route = b.getAssignedRoute();
-                var deps = b.getAssignedDepartures();
+            if (tieneTramos) {
+                var route = rutaCompleta;
+                var deps = depsCompletas;
                 tramos = new ArrayList<>();
                 for (int ti = 0; ti < route.size(); ti++) {
                     var edge = route.get(ti);

@@ -83,7 +83,7 @@ public class AuditoriaService {
         int slaMin = batch.getSlaLimitHours() * 60;
         audit.setDeadlineMin(slaMin);
 
-        List<Edge> ruta = batch.getAssignedRoute();
+        List<Edge> ruta = batch.getRutaCompleta();   // Fase 2: prefijo volado + sufijo
         boolean enrutada = ruta != null && !ruta.isEmpty();
 
         if (!enrutada) {
@@ -111,7 +111,7 @@ public class AuditoriaService {
         for (Edge e : ruta) tiempoVueloMin += e.durationMinutes;
 
         int tiempoEsperaMin = 0;
-        List<Long> deps = batch.getAssignedDepartures();
+        List<Long> deps = batch.getDeparturesCompletas();
         if (deps != null && deps.size() == ruta.size()) {
             for (int i = 0; i < ruta.size() - 1; i++) {
                 long llegada = deps.get(i) + ruta.get(i).durationMinutes;

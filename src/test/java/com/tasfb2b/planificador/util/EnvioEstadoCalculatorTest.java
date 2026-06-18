@@ -118,4 +118,22 @@ class EnvioEstadoCalculatorTest {
         assertEquals("2026-01-03T16:00", r.getLlegadaFinalUtc());
         assertNull(a.getTramos().get(0).getEstado());   // sin clasificar
     }
+
+    @Test
+    void varadoNoEntregadoSiUltimoTramoNoLlegaAlDestino() {
+        // Fase 2: un envío varado voló su prefijo (llega a SPIM) pero su destino real es SEQM.
+        AsignacionMaleta a = new AsignacionMaleta();
+        a.setBatchId("V");
+        a.setOrigen("SKBO");
+        a.setDestino("SEQM");
+        a.setEnrutada(false);
+        a.setTramos(new ArrayList<>(List.of(
+                tramo("SKBO", "SPIM", "2026-01-03T10:00", "2026-01-03T12:00"))));
+
+        EnvioEstadoResponse r = EnvioEstadoCalculator.calcular(a, t("2026-01-03T13:00"));
+
+        assertEquals(EnvioEstadoCalculator.E_EN_ESCALA, r.getEstado(),
+                "varado en la escala, NO entregado (su último tramo no llega al destino real)");
+        assertEquals("SPIM", r.getUbicacionActual());
+    }
 }
