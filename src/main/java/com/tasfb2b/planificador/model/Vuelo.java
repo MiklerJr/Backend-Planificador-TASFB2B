@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.model;
 
+import jakarta.persistence.Convert;
 import jakarta.persistence.Id;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Transient;
 
 import java.time.LocalDateTime;
 
@@ -25,36 +25,34 @@ import lombok.NoArgsConstructor;
 public class Vuelo {
     
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Integer id;
+    @Column(name = "id_vuelo", nullable = false, unique = true)
+    private String id;
 
     @NotNull
-    @Column(nullable = false)
+    @Column(name = "capacidad_maxima", nullable = false)
     private Integer capacidad;
 
     @NotBlank
-    @Column(nullable = false)
+    @Column(name = "icao_origen", nullable = false)
     private String origen;
     
     @NotBlank
-    @Column(nullable = false)
+    @Column(name = "icao_destino", nullable = false)
     private String destino;
 
     @NotNull
-    @Column(nullable = false)
+    @Convert(converter = com.tasfb2b.planificador.util.LocalDateTimeToTimeStringConverter.class)
+    @Column(name = "hora_salida", nullable = false)
     private LocalDateTime fechaHoraSalida;
 
     @NotNull
-    @Column(nullable = false)
+    @Convert(converter = com.tasfb2b.planificador.util.LocalDateTimeToTimeStringConverter.class)
+    @Column(name = "hora_llegada", nullable = false)
     private LocalDateTime fechaHoraLlegada;
 
-    @NotNull
-    @ManyToOne
-    @JoinColumn(name = "aeropuerto_origen_id", nullable = false)
+    @Transient
     private Aeropuerto aeropuertoOrigen;
-    
-    @NotNull
-    @ManyToOne
-    @JoinColumn(name = "aeropuerto_destino_id", nullable = false)
+
+    @Transient
     private Aeropuerto aeropuertoDestino;
 }

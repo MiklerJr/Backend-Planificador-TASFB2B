@@ -39,7 +39,6 @@ public class AeropuertoParser {
                 a.setCodigo(codigo);
                 a.setCiudad(m.group(3).trim());
                 a.setPais(m.group(4).trim());
-                a.setAbreviatura(m.group(5).trim());
                 a.setOffsetHorario(Integer.parseInt(m.group(6)));
                 a.setCapacidad(Integer.parseInt(m.group(7)));
                 a.setContinente(continentePorIcao(codigo));

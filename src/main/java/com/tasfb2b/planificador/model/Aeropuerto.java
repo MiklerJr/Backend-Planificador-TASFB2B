@@ -1,20 +1,16 @@
 package com.tasfb2b.planificador.model;
 
-
-import java.util.ArrayList;
-import java.util.List;
-
+import com.tasfb2b.planificador.util.ContinenteUtil;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 @Entity
@@ -23,10 +19,6 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Table(name="aeropuerto")
 public class Aeropuerto {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Integer id;
 
     @NotBlank(message = "Al aeropuerto le corresponde una ciudad")
     @Column(nullable = false)
@@ -39,24 +31,21 @@ public class Aeropuerto {
     @Column(nullable = false)
     private boolean activo = true;
 
-    @NotBlank(message = "Al aeropuerto le corresponde un continente")
-    @Column(nullable = false)
+    @Transient
+    @EqualsAndHashCode.Exclude
     private String continente;
 
-    @NotBlank(message = "El aeropuerto debe tener una abreviatura")
-    @Column(nullable = false, unique = true)
-    private String abreviatura;
-
     @NotBlank(message = "El aeropuerto debe tener un codigo de identificación")
-    @Column(nullable = false, unique = true)
+    @Id
+    @Column(name = "icao", nullable = false, unique = true, length = 4)
     private String codigo;
 
     @NotNull(message = "El aeropuerto debe tener una offset de horario")
-    @Column(nullable = false)
+    @Column(name = "huso_horario", nullable = false)
     private Integer offsetHorario;
 
     @NotNull(message = "El aeropuerto debe tener registrado una capacidad de almacenaje")
-    @Column(nullable = false)
+    @Column(name = "capacidad_almacen", nullable = false)
     private Integer capacidad;
 
     @NotNull(message = "El aeropuerto debe indicar su latitud")
@@ -67,10 +56,10 @@ public class Aeropuerto {
     @Column(nullable = false)
     private Double longitud;
 
-    @OneToMany(mappedBy = "aeropuertoOrigen")
-    private List<Vuelo> vuelosComoOrigen = new ArrayList<>();
-
-    @OneToMany(mappedBy = "aeropuertoDestino")
-    private List<Vuelo> vuelosComoDestino = new ArrayList<>();
-
+    public String getContinente() {
+        if (continente == null && codigo != null) {
+            return ContinenteUtil.desdeIcao(codigo);
+        }
+        return continente == null ? "UNKNOWN" : continente;
+    }
 }

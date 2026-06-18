@@ -10,7 +10,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -27,7 +29,9 @@ public class DataLoader {
     private List<Vuelo> vuelos = new ArrayList<>();
     
     // Caché para mapear rápido los códigos ICAO a objetos Aeropuerto desde la BD
-    private Map<String, Aeropuerto> aeropuertoMapCache; 
+    private Map<String, Aeropuerto> aeropuertoMapCache;
+
+    private static final LocalDate FLIGHT_BASE_DATE = LocalDate.of(2026, 1, 1);
 
     // Limpiamos los Parsers y las variables @Value, solo inyectamos la BD
     public DataLoader(JdbcTemplate jdbcTemplate) {
@@ -43,13 +47,14 @@ public class DataLoader {
         String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, latitud, longitud FROM AEROPUERTO";
         aeropuertos = jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
             Aeropuerto a = new Aeropuerto();
-            a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
+            a.setCodigo(rs.getString("icao"));
+            a.setCiudad(rs.getString("ciudad"));
+            a.setContinente(ContinenteUtil.desdeIcao(rs.getString("icao")));
+            a.setOffsetHorario(rs.getObject("huso_horario", Integer.class));
+            a.setCapacidad(rs.getObject("capacidad_almacen", Integer.class));
             a.setLatitud(rs.getDouble("latitud"));
             a.setLongitud(rs.getDouble("longitud"));
-            // Si tienes estos atributos en tu clase, descoméntalos:
-            // a.setCiudad(rs.getString("ciudad"));
-            // a.setHusoHorario(rs.getInt("huso_horario"));
-            // a.setCapacidad(rs.getInt("capacidad_almacen"));
+            a.setActivo(true);
             return a;
         });
 
@@ -61,18 +66,27 @@ public class DataLoader {
         String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima FROM VUELO";
         vuelos = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
             Vuelo v = new Vuelo();
-            v.setId(rowNum + 1);
-            // Revisa si tu clase Vuelo guarda un String o el Objeto Aeropuerto entero:
-            // Si guarda Strings:
-            // v.setOrigen(rs.getString("icao_origen"));
-            // v.setDestino(rs.getString("icao_destino"));
-            // Si guarda Objetos:
-            // v.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
-            // v.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
-            
-            // v.setHoraSalida(rs.getString("hora_salida"));
-            // v.setHoraLlegada(rs.getString("hora_llegada"));
-            // v.setCapacidad(rs.getInt("capacidad_maxima"));
+            v.setId(rs.getString("id_vuelo"));
+            v.setOrigen(rs.getString("icao_origen"));
+            v.setDestino(rs.getString("icao_destino"));
+            v.setAeropuertoOrigen(aeropuertoMapCache.get(rs.getString("icao_origen")));
+            v.setAeropuertoDestino(aeropuertoMapCache.get(rs.getString("icao_destino")));
+            String horaSalidaStr = rs.getString("hora_salida");
+            String horaLlegadaStr = rs.getString("hora_llegada");
+
+            LocalTime horaSalida = LocalTime.parse(horaSalidaStr);
+            LocalTime horaLlegada = LocalTime.parse(horaLlegadaStr);
+
+            LocalDateTime fechaSalida = LocalDateTime.of(FLIGHT_BASE_DATE, horaSalida);
+            LocalDateTime fechaLlegada = LocalDateTime.of(FLIGHT_BASE_DATE, horaLlegada);
+
+            if (fechaLlegada.isBefore(fechaSalida)) {
+                fechaLlegada = fechaLlegada.plusDays(1);
+            }
+
+            v.setFechaHoraSalida(fechaSalida);
+            v.setFechaHoraLlegada(fechaLlegada);
+            v.setCapacidad(rs.getObject("capacidad_maxima", Integer.class));
             return v;
         });
 
@@ -181,4 +195,5 @@ public class DataLoader {
 
     public List<Aeropuerto> getAeropuertos() { return aeropuertos; }
     public List<Vuelo>      getVuelos()      { return vuelos; }
+
 }
