@@ -21,17 +21,6 @@ public class LuggageBatch {
     private List<Long> assignedDepartures; // epoch-minutes, paralelo a assignedRoute
     private boolean cumpleSLA;
 
-    // ── Fase 2: re-enrutamiento desde la posición física tras una cancelación ──
-    /** Tramos ya volados (o en vuelo) que se preservan al re-enrutar desde una escala. Null/vacío
-     *  en el caso normal. La ruta REAL del envío = prefijoFijo + assignedRoute (sufijo). */
-    private List<Edge> prefijoFijo;
-    /** Salidas (epoch-min UTC) paralelas a {@link #prefijoFijo}. */
-    private List<Long> prefijoFijoDepartures;
-    /** Aeropuerto desde el que se (re)enruta el sufijo (la escala actual). Default = originCode. */
-    private String currentOriginCode;
-    /** readyTime efectivo del sufijo (llegada a la escala). Default = readyTime original. */
-    private LocalDateTime currentReadyTime;
-
     public LuggageBatch(String id, int quantity, int slaLimitHours,
                         String originCode, String destCode, LocalDateTime readyTime) {
         this.id            = id;
@@ -42,8 +31,6 @@ public class LuggageBatch {
         this.readyTime     = readyTime;
         this.assignedRoute = new ArrayList<>();
         this.cumpleSLA     = false;
-        this.currentOriginCode = originCode;   // sin prefijo: posición = origen real
-        this.currentReadyTime  = readyTime;
     }
 
     public void setAssignedRoute(List<Edge> route) {
@@ -93,50 +80,6 @@ public class LuggageBatch {
         return (slaMin - transitMin) / slaMin;
     }
 
-    // ── Fase 2: prefijo fijo / posición actual ────────────────────────────────
-    public boolean tienePrefijo() {
-        return prefijoFijo != null && !prefijoFijo.isEmpty();
-    }
-
-    /** Ruta REAL del envío: prefijo volado + sufijo asignado. */
-    public List<Edge> getRutaCompleta() {
-        if (!tienePrefijo()) return assignedRoute;
-        List<Edge> full = new ArrayList<>(prefijoFijo.size()
-                + (assignedRoute != null ? assignedRoute.size() : 0));
-        full.addAll(prefijoFijo);
-        if (assignedRoute != null) full.addAll(assignedRoute);
-        return full;
-    }
-
-    /** Salidas (epoch-min UTC) paralelas a {@link #getRutaCompleta()}. */
-    public List<Long> getDeparturesCompletas() {
-        if (!tienePrefijo()) return assignedDepartures;
-        List<Long> full = new ArrayList<>(prefijoFijoDepartures.size()
-                + (assignedDepartures != null ? assignedDepartures.size() : 0));
-        full.addAll(prefijoFijoDepartures);
-        if (assignedDepartures != null) full.addAll(assignedDepartures);
-        return full;
-    }
-
-    /** Aeropuerto desde el que se (re)enruta: la escala actual si hay prefijo, si no el origen. */
-    public String origenEfectivo() {
-        return tienePrefijo() ? currentOriginCode : originCode;
-    }
-
-    /** readyTime efectivo: la llegada a la escala si hay prefijo, si no el readyTime original. */
-    public LocalDateTime readyEfectivo() {
-        return tienePrefijo() ? currentReadyTime : readyTime;
-    }
-
-    public List<Edge> getPrefijoFijo()                 { return prefijoFijo; }
-    public void setPrefijoFijo(List<Edge> p)           { this.prefijoFijo = p; }
-    public List<Long> getPrefijoFijoDepartures()       { return prefijoFijoDepartures; }
-    public void setPrefijoFijoDepartures(List<Long> d) { this.prefijoFijoDepartures = d; }
-    public String getCurrentOriginCode()               { return currentOriginCode; }
-    public void setCurrentOriginCode(String c)         { this.currentOriginCode = c; }
-    public LocalDateTime getCurrentReadyTime()         { return currentReadyTime; }
-    public void setCurrentReadyTime(LocalDateTime t)   { this.currentReadyTime = t; }
-
     public LuggageBatch cloneBatch() {
         LuggageBatch clone = new LuggageBatch(id, quantity, slaLimitHours,
                                                originCode, destCode, readyTime);
@@ -145,12 +88,6 @@ public class LuggageBatch {
         clone.setAssignedDepartures(
                 assignedDepartures != null ? new ArrayList<>(assignedDepartures) : null);
         clone.setCumpleSLA(this.cumpleSLA);
-        // Fase 2: preservar la posición actual y el prefijo (el ACO no clona, pero por robustez).
-        clone.setCurrentOriginCode(this.currentOriginCode);
-        clone.setCurrentReadyTime(this.currentReadyTime);
-        clone.setPrefijoFijo(this.prefijoFijo != null ? new ArrayList<>(this.prefijoFijo) : null);
-        clone.setPrefijoFijoDepartures(
-                this.prefijoFijoDepartures != null ? new ArrayList<>(this.prefijoFijoDepartures) : null);
         return clone;
     }
 

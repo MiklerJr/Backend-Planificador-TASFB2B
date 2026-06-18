@@ -2,7 +2,7 @@ package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Cliente;
-import com.tasfb2b.planificador.model.Envio;
+import com.tasfb2b.planificador.model.Maleta;
 import com.tasfb2b.planificador.model.TipoEnvio;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -22,10 +22,10 @@ import java.util.Map;
 @Component
 public class BaggageParser {
 
-    public List<Envio> parse(Path file, Aeropuerto origen,
+    public List<Maleta> parse(Path file, Aeropuerto origen,
                               Map<String, Aeropuerto> aeropuertoMap) throws IOException {
         List<String> lineas = FileUtils.leerLineasSeguro(file);
-        List<Envio> result = new ArrayList<>();
+        List<Maleta> result = new ArrayList<>();
         int descartadosMismoAeropuerto = 0;    // RF02: envíos con origen == destino
         int descartadosCamposIncompletos = 0;  // RF03: envíos con campos obligatorios faltantes o mal formados
 
@@ -82,7 +82,7 @@ public class BaggageParser {
             Cliente clienteRelacion = new Cliente();
             clienteRelacion.setId(clienteId);
 
-            Envio maleta = new Envio();
+            Maleta maleta = new Maleta();
             maleta.setIdEnvio(idEnvio);
             maleta.setCantidad(cantidad); // Asignamos el número de maletas de este lote
             maleta.setAeropuertoOrigen(origen);

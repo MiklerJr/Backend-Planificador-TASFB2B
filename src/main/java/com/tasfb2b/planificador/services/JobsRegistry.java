@@ -89,15 +89,6 @@ public class JobsRegistry {
         futures.put(job.getJobId(), f);
     }
 
-    /**
-     * Encola una tarea genérica (p. ej. la ingesta de dataset, Fase 6B) en el MISMO single-thread
-     * executor, de modo que NO corre a la par de una simulación (la ingesta reemplaza la BD y recarga
-     * el DataLoader que el motor usa en vivo).
-     */
-    public void ejecutarTarea(Runnable task) {
-        executor.submit(task);
-    }
-
     /** Devuelve el estado de un job o null si no existe. */
     public JobState get(String jobId) {
         return jobs.get(jobId);

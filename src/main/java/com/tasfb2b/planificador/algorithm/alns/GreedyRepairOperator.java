@@ -54,11 +54,8 @@ public class GreedyRepairOperator implements RepairOperator {
     private final ConcurrentHashMap<Long, Integer> flightOccupancy  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> airportOccupancy = new ConcurrentHashMap<>();
 
-    // Vuelos cancelados: flightKeys con capacidad efectiva = 0. Mutable y concurrente porque las
-    // cancelaciones las ordena el usuario EN VIVO durante la simulación (ver
-    // PlanificadorService.aplicarCancelacionesVuelo): el worker del job añade entre bloques y el
-    // Dijkstra solo lee.
-    private final Set<Long> cancelledFlightDays = ConcurrentHashMap.newKeySet();
+    // Vuelos cancelados: flightKeys con capacidad efectiva = 0.
+    private Set<Long> cancelledFlightDays = Collections.emptySet();
 
     // Fase Origen-B — ocupación del almacén de ORIGEN por los envíos en backlog (sinRuta) que
     // esperan ser enrutados. Mapa por SLOT (igual que airportOccupancy), en UTC. Se reconstruye al
@@ -74,27 +71,17 @@ public class GreedyRepairOperator implements RepairOperator {
     // simulación). Permite que removerEsperaOrigenBacklog reste solo a los admitidos (sin negativos).
     private final Set<String> origenAdmitidos = new HashSet<>();
 
-    // H3: cache de esqueletos de ruta (secuencias de edge-idx) reutilizable ENTRE bloques y —si se
-    // inyecta una caché compartida (ver MotorGrafoCache)— ENTRE simulaciones del mismo dataset. La
-    // malla de vuelos se repite a diario, así que un esqueleto hallado para
-    // (origen,destino,hora-del-día,SLA) sirve los 200 días; solo se revalida capacidad/cancelaciones
-    // al materializar. Evita re-ejecutar Dijkstra para patrones recurrentes. Las simulaciones corren
-    // una a la vez (single-thread executor); la caché compartida es ConcurrentHashMap por defensa.
-    final Map<Long, List<int[]>> rutaSkeletonCache;   // package-private para tests; se asigna en el constructor
+    // H3: cache de esqueletos de ruta (secuencias de edge-idx) reutilizable ENTRE
+    // bloques de una misma simulación. La malla de vuelos se repite a diario, así que
+    // un esqueleto hallado para (origen,destino,hora-del-día,SLA) sirve los 200 días;
+    // solo se revalida capacidad/cancelaciones al materializar. Evita re-ejecutar
+    // Dijkstra para patrones recurrentes. Instancia por simulación (GreedyRepairOperator
+    // se crea una vez por escenario) y uso single-thread → HashMap normal es seguro.
+    final Map<Long, List<int[]>> rutaSkeletonCache = new HashMap<>();   // package-private para tests
     // Fase Q: claves de esqueleto ya intentadas por el re-seed hub-avoiding (una vez cada una).
     private final Set<Long> reSeeded = new HashSet<>();
 
     public GreedyRepairOperator(Graph graph) {
-        this(graph, new HashMap<>());
-    }
-
-    /**
-     * Constructor con caché de esqueletos COMPARTIDA entre simulaciones del mismo dataset (la malla de
-     * vuelos es estática). La caché la provee {@link com.tasfb2b.planificador.services.MotorGrafoCache}
-     * y se invalida al recargar el dataset; el constructor de un argumento usa una caché propia (tests).
-     */
-    public GreedyRepairOperator(Graph graph, Map<Long, List<int[]>> rutaSkeletonCache) {
-        this.rutaSkeletonCache = rutaSkeletonCache;
         this.graph = graph;
 
         // Asignar idx entero a cada nodo (una sola vez)
@@ -376,41 +363,9 @@ public class GreedyRepairOperator implements RepairOperator {
         cargarOrigen(blockAirport, batch, route, deps, -1);
     }
 
-    /**
-     * Marca un vuelo-día como cancelado (capacidad efectiva = 0). Pensado para órdenes EN VIVO del
-     * usuario: a partir de la llamada, el Dijkstra deja de usar ese vuelo ese día y los envíos ya
-     * comprometidos se re-enrutan vía backlog. {@code flightKey} se construye con
-     * {@link FlightKeyEncoder#flightKey(int, long)}.
-     *
-     * @return true si el vuelo-día no estaba ya cancelado.
-     */
-    public boolean addCancelledFlight(long flightKey) {
-        return cancelledFlightDays.add(flightKey);
-    }
-
-    /** ¿Está cancelado este vuelo-día? */
-    public boolean isCancelledFlight(long flightKey) {
-        return cancelledFlightDays.contains(flightKey);
-    }
-
-    /**
-     * ¿La ruta asignada de este batch usa algún vuelo-día cancelado? Identifica rutas
-     * físicamente imposibles tras una cancelación en vivo, cuya ocupación global sigue
-     * commiteada hasta que el llamador la libere con {@link #releaseFromGlobal}.
-     */
-    public boolean rutaUsaVueloCancelado(LuggageBatch batch) {
-        if (batch == null || cancelledFlightDays.isEmpty()) return false;
-        List<Edge> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
-        if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
-            return false;
-        }
-        for (int i = 0; i < route.size(); i++) {
-            if (cancelledFlightDays.contains(flightKey(route.get(i).idx, deps.get(i)))) {
-                return true;
-            }
-        }
-        return false;
+    /** Registra qué vuelo-días están cancelados (capacidad efectiva = 0). */
+    public void setCancelledFlights(Set<Long> cancelled) {
+        this.cancelledFlightDays = cancelled == null ? Collections.emptySet() : cancelled;
     }
 
     /**
@@ -475,9 +430,8 @@ public class GreedyRepairOperator implements RepairOperator {
             if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) continue; // con ruta ⇒ Fase A
             orden.add(b);
         }
-        // Orden de llegada: readyTime EFECTIVO ascendente (los presentes primero conservan su
-        // espacio). Para un varado (Fase 2) el readyTime efectivo es su llegada a la escala.
-        orden.sort(Comparator.comparingLong(b -> toEpochMin(b.readyEfectivo())));
+        // Orden de llegada: readyTime ascendente (los presentes primero conservan su espacio).
+        orden.sort(Comparator.comparingLong(b -> toEpochMin(b.getReadyTime())));
         LuggageBatch desbordado = null;
         for (LuggageBatch b : orden) {
             if (cabeEsperaOrigen(b)) {
@@ -504,21 +458,20 @@ public class GreedyRepairOperator implements RepairOperator {
         }
     }
 
-    /** Tope duro — ¿cabe la espera {@code [readyEfectivo, relojUTC)} de este envío en su almacén
-     *  actual (origen real, o la escala si está varado en Fase 2)? */
+    /** Tope duro — ¿cabe la espera {@code [readyTime, relojUTC)} de este envío en su almacén de origen? */
     private boolean cabeEsperaOrigen(LuggageBatch batch) {
-        Node origen = graph.nodes.get(batch.origenEfectivo());
+        Node origen = graph.nodes.get(batch.getOriginCode());
         if (origen == null || origen.idx < 0 || origen.capacity <= 0) return true;
-        long desde = toEpochMin(batch.readyEfectivo());
+        long desde = toEpochMin(batch.getReadyTime());
         if (relojUtcMin <= desde) return true;
         return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getQuantity(), Map.of());
     }
 
     private void acumularEsperaOrigen(LuggageBatch batch, int signo) {
-        if (batch == null || batch.readyEfectivo() == null || relojUtcMin == Long.MIN_VALUE) return;
-        Node origen = graph.nodes.get(batch.origenEfectivo());
+        if (batch == null || batch.getReadyTime() == null || relojUtcMin == Long.MIN_VALUE) return;
+        Node origen = graph.nodes.get(batch.getOriginCode());
         if (origen == null || origen.idx < 0 || origen.capacity <= 0) return;
-        long desde = toEpochMin(batch.readyEfectivo());
+        long desde = toEpochMin(batch.getReadyTime());
         if (relojUtcMin <= desde) return;
         cargarAlmacenPierna(backlogOrigenOcc, origen.idx, desde, relojUtcMin, signo * batch.getQuantity());
     }
@@ -571,60 +524,6 @@ public class GreedyRepairOperator implements RepairOperator {
         }
         // Fase Origen — libera la ocupación de origen en la ocupación global (espejo de applyToBlock).
         cargarOrigen(airportOccupancy, batch, route, deps, -1);
-    }
-
-    /**
-     * Fase 2 — libera de la ocupación GLOBAL solo el SUFIJO {@code [k..n-1]} de la ruta de un batch
-     * (vuelos + estadías de destino), preservando el prefijo {@code [0..k-1]} que el envío ya voló.
-     * También libera la estadía del <b>nodo de corte</b> ({@code route[k-1].to}) con su límite viejo
-     * {@code deps[k]}, porque ese vuelo se reemplaza por uno nuevo; la estadía nueva la recargará
-     * {@code applyToBlock}/{@code cargarOrigen} al asignar el sufijo. NO toca la espera en el origen
-     * (es del prefijo). Espejo de {@link #releaseFromGlobal} pero acotado al sufijo.
-     *
-     * <p>Requiere {@code 1 <= k < n} (hay prefijo y hay sufijo). Para {@code k==0} usar
-     * {@link #releaseFromGlobal} (re-enrutado completo).
-     */
-    public void releaseSuffixFromGlobal(LuggageBatch batch, int k) {
-        List<Edge> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
-        if (route == null || deps == null || deps.size() != route.size()) return;
-        int n = route.size();
-        if (k <= 0 || k >= n) return;
-
-        // Estadía vieja del nodo de corte k-1: [arr_{k-1}, deps[k]).
-        Edge corte = route.get(k - 1);
-        if (corte.to != null && corte.to.idx >= 0) {
-            long arrCorte = deps.get(k - 1) + corte.durationMinutes;
-            cargarAlmacenPierna(airportOccupancy, corte.to.idx, arrCorte, deps.get(k),
-                    -batch.getQuantity());
-        }
-        // Sufijo: vuelos y estadías de destino, desde k.
-        for (int i = k; i < n; i++) {
-            Edge e      = route.get(i);
-            long depMin = deps.get(i);
-            long arrMin = depMin + e.durationMinutes;
-            flightOccupancy.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
-            boolean esFinalLeg = (i == n - 1);
-            if (!esFinalLeg && e.to.idx >= 0) {
-                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, deps.get(i + 1),
-                        -batch.getQuantity());
-            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
-                        -batch.getQuantity());
-            }
-        }
-    }
-
-    /**
-     * Fase 2 — ¿un candidato de SUFIJO (enrutado desde una escala) entrega dentro del SLA medido
-     * desde el registro ORIGINAL del envío? El candidato mide su {@code cumpleSLA} desde la escala
-     * (sobreestima la holgura), así que el SLA real se recomputa contra el deadline absoluto
-     * {@code readyOriginal + sla}.
-     */
-    public boolean cumpleSlaDesdeOrigen(RouteCandidate sufijo, LuggageBatch original) {
-        if (sufijo == null || original == null) return false;
-        long deadlineMin = toEpochMin(original.getReadyTime()) + (long) original.getSlaLimitHours() * 60L;
-        return (sufijo.getArrivalMin() + DEST_STORAGE_MIN) <= deadlineMin;
     }
 
     // -----------------------------------------------------------------------
@@ -696,14 +595,6 @@ public class GreedyRepairOperator implements RepairOperator {
                 for (RouteState s = current; s.edge != null; s = s.parent) {
                     edges.add(0, s.edge);
                     deps.add(0, s.depMin);
-                }
-                // Fase R — la expansión solo chequeó el slot de LLEGADA de cada pierna (la
-                // salida siguiente aún no existía). Aquí la ruta está completa: validar la
-                // estadía entera antes de confirmarla; si no cabe, seguir buscando otra
-                // llegada (otro día/celda) en vez de cobrar slots nunca validados.
-                if (!ignorarAlmacen
-                        && !cabeEstadiasRuta(edges, deps, batch.getQuantity(), blockAirport)) {
-                    continue;
                 }
                 long transitMinutes = (current.arrivalMin + DEST_STORAGE_MIN) - readyMin;
                 return new RouteResult(edges, deps, transitMinutes <= slaMaxMinutes);
@@ -1036,26 +927,6 @@ public class GreedyRepairOperator implements RepairOperator {
     }
 
     /**
-     * Ocupación global acumulada de un vuelo-día (clave de {@link FlightKeyEncoder#flightKey}).
-     * Tras {@link #commitBlock} incluye el bloque recién confirmado: es la carga total con la que
-     * la telemetría debe reportar el vuelo-día (no el delta de un bloque).
-     */
-    public int ocupacionGlobalVuelo(long flightKey) {
-        return flightOccupancy.getOrDefault(flightKey, 0);
-    }
-
-    /**
-     * Ocupación global acumulada de un slot de almacén (clave de {@link #claveAlmacenDeSlot}).
-     * Suma las estadías commiteadas y la espera en origen del backlog sin ruta
-     * ({@code backlogOrigenOcc}) — los mismos sumandos que el modelo interno resta en
-     * {@link #capacidadAlmacen} — para que la telemetría vea la presión real del slot.
-     */
-    public int ocupacionGlobalAlmacen(long slotKey) {
-        return airportOccupancy.getOrDefault(slotKey, 0)
-             + backlogOrigenOcc.getOrDefault(slotKey, 0);
-    }
-
-    /**
      * Aplica una asignación ya calculada (route + departures + cumpleSLA) al bloque.
      * Equivalente público a {@link #applyToBlock} para que un motor externo (p. ej. ACO)
      * actualice los mismos contadores que usa el ALNS.
@@ -1373,24 +1244,6 @@ public class GreedyRepairOperator implements RepairOperator {
     }
 
     /**
-     * Fase R — valida la estadía COMPLETA de cada pierna de una ruta ya resuelta (todas las
-     * salidas conocidas): escala = {@code [llegada, salida del siguiente vuelo)}; destino final =
-     * {@code [llegada, llegada+DEST_STORAGE_MIN)}. Es la contraparte exacta de lo que cobra
-     * {@link #applyToBlock}: sin esta pasada, los chequeos por slot-de-llegada de la expansión y
-     * la materialización dejan sin validar los slots intermedios de la estadía (overflow).
-     */
-    private boolean cabeEstadiasRuta(List<Edge> edges, List<Long> deps, int qty,
-                                     Map<Long, Integer> blockAirport) {
-        for (int i = 0; i < edges.size(); i++) {
-            Edge e = edges.get(i);
-            long llegada = deps.get(i) + e.durationMinutes;
-            long salida = (i < edges.size() - 1) ? deps.get(i + 1) : llegada + DEST_STORAGE_MIN;
-            if (!cabeAlmacenPierna(e.to, llegada, salida, qty, blockAirport)) return false;
-        }
-        return true;
-    }
-
-    /**
      * Fase R — true si caben {@code qty} maletas en TODOS los slots de la estadía
      * {@code [llegada, salida)} de la pierna (ocupación concurrente global + bloque ≤ capacidad).
      */
@@ -1453,13 +1306,6 @@ public class GreedyRepairOperator implements RepairOperator {
                                             Map<Long, Integer> blockFlight,
                                             Map<Long, Integer> blockAirport) {
         if (edges.isEmpty() || deps.size() != edges.size()) return null;
-
-        // Fase R — todo candidato (Dijkstra hijo, cache H3, materialización) pasa por aquí con
-        // las salidas ya resueltas: validar la estadía COMPLETA de cada pierna. Los chequeos
-        // previos solo cubrían el slot de llegada, y las hormigas del ACO aplican el candidato
-        // al bloque sin pasar por rutaSirveParaBatch — sin esto, los slots intermedios de una
-        // escala (p. ej. overnight) se cobraban sin haberse validado.
-        if (!cabeEstadiasRuta(edges, deps, batch.getQuantity(), blockAirport)) return null;
 
         long arrivalMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).durationMinutes;
         long transitMin = (arrivalMin + DEST_STORAGE_MIN) - readyMin;

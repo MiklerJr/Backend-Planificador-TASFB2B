@@ -1,22 +1,9 @@
 spring:
   datasource:
-    url: ${DB_URL:jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b}
+    url: ${DB_URL:jdbc:postgresql://tasf-b2b-db.cawzswvc2mzv.us-east-1.rds.amazonaws.com:5432/tasf_b2b}
     username: ${DB_USER:postgres}
     password: ${DB_PASSWORD:Furiousandfast.8}
     driver-class-name: org.postgresql.Driver
-  jpa:
-    hibernate:
-      # Fase 1 (alineación model↔BD): red de seguridad. validate SOLO comprueba que las
-      # @Entity casan con el esquema real; NUNCA modifica la BD (no usar update/create en RDS).
-      ddl-auto: validate
-    open-in-view: false
-  servlet:
-    multipart:
-      # Fase 6B: la ingesta sube los TXT de envíos (pueden ser cientos de MB). Volcado a disco
-      # temprano (file-size-threshold) para no cargarlos en heap.
-      max-file-size: 512MB
-      max-request-size: 2GB
-      file-size-threshold: 2MB
       
 data:
   airports:
@@ -43,14 +30,11 @@ planificador:
     #   52560  → 365 días
     max-ventanas: 720
 
-    # K FIJO por escenario (regla de negocio): E1=1, E2=144, E3=144. NO configurable por
-    # request — los endpoints devuelven 400 si llega un k distinto.
     k-default-1: 1
-    k-default-2: 144
-    k-default-3: 144
+    k-default-2: 5
+    k-default-3: 75
     umbral-colapso: 0.01
     umbral-colapso-backlog: 1000
-    simular-tiempo-real-1: true            # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
     simular-tiempo-real-2: true           # El perfil smoke pondrá esto en false
     simular-tiempo-real-3: true
     # Fase T (N3): pre-calienta la caché de esqueletos con la demanda de la ventana antes del bucle
@@ -104,3 +88,10 @@ planificador:
     # urgentes por deadline; el resto se difiere sin perderse). 0 = sin tope. Acota que el
     # backlog le robe Ta a la demanda nueva y dispare violaciones de Ta. Tunear con la medición.
     max-reproceso-por-bloque: 3000
+
+  benchmark:
+    # Configuramos el grid para que no sea infinito
+    k-grid: [7, 14, 28, 40]
+    cancel-prob-grid: [0.0]
+    repeticiones: 1
+    timeout-minutos: 90

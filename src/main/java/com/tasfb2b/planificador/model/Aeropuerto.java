@@ -1,66 +1,65 @@
 package com.tasfb2b.planificador.model;
 
+import com.tasfb2b.planificador.util.ContinenteUtil;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
-/**
- * Entidad mapeada a la tabla real {@code aeropuerto}. El back la usa como POJO
- * (la llena {@code DataLoader} vía JdbcTemplate); el mapeo JPA está alineado con
- * las columnas reales para que {@code ddl-auto=validate} confirme la correspondencia.
- * Los campos derivados o sin columna van como {@link Transient}.
- */
 @Entity
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@Table(name = "aeropuerto")
+@Table(name="aeropuerto")
 public class Aeropuerto {
 
-    /** PK real de la tabla: el código ICAO. */
-    @Id
-    @Column(name = "icao", nullable = false)
-    private String codigo;
-
-    @Column(name = "ciudad")
+    @NotBlank(message = "Al aeropuerto le corresponde una ciudad")
+    @Column(nullable = false)
     private String ciudad;
 
-    @Column(name = "pais")
+    @NotBlank(message = "Al aeropuerto le corresponde un país")
+    @Column(nullable = false)
     private String pais;
 
-    /** Columna {@code codigo_region} en la BD (el back la usa como "abreviatura"). */
-    @Column(name = "codigo_region")
-    private String abreviatura;
-
-    @Column(name = "huso_horario")
-    private Integer offsetHorario;
-
-    @Column(name = "capacidad_almacen")
-    private Integer capacidad;
-
-    @Column(name = "latitud")
-    private Double latitud;
-
-    @Column(name = "longitud")
-    private Double longitud;
-
-    @Column(name = "activo", nullable = false)
+    @Column(nullable = false)
     private boolean activo = true;
 
-    /**
-     * {@code id_numero} es varchar nullable en la BD y el back no lo usa, así que
-     * no se mapea: queda fuera del modelo JPA (Transient) para no exigir la columna.
-     */
     @Transient
-    private Integer id;
-
-    /** Continente derivado del ICAO (no es columna real). */
-    @Transient
+    @EqualsAndHashCode.Exclude
     private String continente;
+
+    @NotBlank(message = "El aeropuerto debe tener un codigo de identificación")
+    @Id
+    @Column(name = "icao", nullable = false, unique = true, length = 4)
+    private String codigo;
+
+    @NotNull(message = "El aeropuerto debe tener una offset de horario")
+    @Column(name = "huso_horario", nullable = false)
+    private Integer offsetHorario;
+
+    @NotNull(message = "El aeropuerto debe tener registrado una capacidad de almacenaje")
+    @Column(name = "capacidad_almacen", nullable = false)
+    private Integer capacidad;
+
+    @NotNull(message = "El aeropuerto debe indicar su latitud")
+    @Column(nullable = false)
+    private Double latitud;
+
+    @NotNull(message = "El aeropuerto debe indicar su longitud")
+    @Column(nullable = false)
+    private Double longitud;
+
+    public String getContinente() {
+        if (continente == null && codigo != null) {
+            return ContinenteUtil.desdeIcao(codigo);
+        }
+        return continente == null ? "UNKNOWN" : continente;
+    }
 }

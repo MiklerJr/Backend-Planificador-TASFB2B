@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
  * <p>El planificador real ejecuta cada {@code Sa} minutos y debe cumplir
  * {@code Ta < Sa} para no colapsar la operación; cada ejecución consume
  * {@code Sc} minutos de datos. K es el factor de aceleración (1 = tiempo real,
- * 14 ≈ 3 días, 144 ≈ colapso).
+ * 14 ≈ 3 días, 75 ≈ colapso).
  */
 public class TemporalContext {
 

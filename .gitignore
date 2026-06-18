@@ -34,7 +34,6 @@ build/
 
 ##
 .DS_Store
-*.bak
 
 audits/planificaciones_auditoria_test.csv
 

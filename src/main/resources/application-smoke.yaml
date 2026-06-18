@@ -3,7 +3,6 @@
 # Override solo de los flags relevantes; el resto se hereda de application.yaml.
 planificador:
   scenario:
-    simular-tiempo-real-1: false       # sin sleep entre bloques (paridad con E2/E3)
     simular-tiempo-real-2: false       # sin sleep entre bloques
     simular-tiempo-real-3: false
     ta-segundos: 0                     # Ta legacy (mide tiempo real, no fija) → smoke rápido

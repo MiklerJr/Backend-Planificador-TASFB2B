@@ -8,58 +8,48 @@ import java.time.LocalDateTime;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
 import jakarta.persistence.Table;
-import jakarta.persistence.Transient;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * Entidad mapeada a la tabla real {@code vuelo}. El back la usa como POJO (la llena
- * {@code DataLoader} vía JdbcTemplate). El mapeo JPA está alineado con las columnas
- * reales para {@code ddl-auto=validate}; los campos derivados van como {@link Transient}.
- */
 @Entity
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Table(name = "vuelo")
 public class Vuelo {
-
-    /** PK real de la tabla (varchar, p. ej. "SKBO-SEQM-0830"). */
+    
     @Id
-    @Column(name = "id_vuelo", nullable = false)
-    private String idVuelo;
+    @Column(name = "id_vuelo", nullable = false, unique = true)
+    private String id;
 
-    @Column(name = "icao_origen")
-    private String origen;
-
-    @Column(name = "icao_destino")
-    private String destino;
-
-    @Column(name = "capacidad_maxima")
+    @NotNull
+    @Column(name = "capacidad_maxima", nullable = false)
     private Integer capacidad;
 
-    /**
-     * Id numérico heredado. La tabla real no tiene esta columna (su PK es {@code id_vuelo});
-     * se conserva como Transient porque {@code AlgorithmMapper}/{@code SimulacionFormat} leen
-     * {@code getId()} con guarda {@code != null} (en producción siempre es null).
-     */
-    @Transient
-    private Integer id;
+    @NotBlank
+    @Column(name = "icao_origen", nullable = false)
+    private String origen;
+    
+    @NotBlank
+    @Column(name = "icao_destino", nullable = false)
+    private String destino;
 
-    /**
-     * Derivados en RAM por {@code DataLoader} a partir de {@code hora_salida}/{@code hora_llegada}
-     * (que en la BD son varchar) y {@code FLIGHT_BASE_DATE}. No son columnas → Transient.
-     */
-    @Transient
+    @NotNull
+    @Convert(converter = com.tasfb2b.planificador.util.LocalDateTimeToTimeStringConverter.class)
+    @Column(name = "hora_salida", nullable = false)
     private LocalDateTime fechaHoraSalida;
 
-    @Transient
+    @NotNull
+    @Convert(converter = com.tasfb2b.planificador.util.LocalDateTimeToTimeStringConverter.class)
+    @Column(name = "hora_llegada", nullable = false)
     private LocalDateTime fechaHoraLlegada;
 
-    /** Resueltos desde la caché de aeropuertos por ICAO; no son FK por id en la tabla → Transient. */
     @Transient
     private Aeropuerto aeropuertoOrigen;
 
