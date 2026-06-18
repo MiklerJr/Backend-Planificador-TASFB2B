@@ -20,7 +20,6 @@ public class PlanificadorProperties {
     private Alns         alns         = new Alns();
     private Objetivo     objetivo     = new Objetivo();
     private Backlog      backlog      = new Backlog();
-    private Benchmark    benchmark    = new Benchmark();
     private StorageAware storageAware = new StorageAware();
     private AlertaColapso alertaColapso = new AlertaColapso();
 
@@ -46,7 +45,7 @@ public class PlanificadorProperties {
         /** K por defecto para escenario de período (3/5/7 días). */
         private int kDefault2 = 14;
         /** K por defecto para escenario hasta colapso. */
-        private int kDefault3 = 75;
+        private int kDefault3 = 144;
         /** Tasa de sinRuta por bloque que dispara el flag de colapso (escenario 3). */
         private double umbralColapso = 0.20;
         /** Tope absoluto de backlog que también dispara colapso por saturación. */
@@ -187,16 +186,4 @@ public class PlanificadorProperties {
         private int reSeedSlice = 256;
     }
 
-    /** Configuración del endpoint de calibración (fase 6). */
-    @Data
-    public static class Benchmark {
-        /** Valores de K a probar en el grid. */
-        private List<Integer> kGrid = List.of(1, 7, 14, 28, 50, 75, 100);
-        /** Probabilidades de cancelación a probar en el grid. */
-        private List<Double> cancelProbGrid = List.of(0.0, 0.05, 0.10);
-        /** Repeticiones por combinación (para promediar Ta). */
-        private int repeticiones = 3;
-        /** Timeout máximo del benchmark completo en minutos. */
-        private int timeoutMinutos = 90;
-    }
 }

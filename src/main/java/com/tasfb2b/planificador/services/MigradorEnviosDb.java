@@ -1,169 +1,181 @@
 package com.tasfb2b.planificador.services;
 
+import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.util.EnvioValidator;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Carga de datos crudos (aeropuertos, vuelos, envíos) a la BD. Originalmente una migración one-shot
+ * desde archivos locales; la Fase 6B reusa los métodos {@code *Desde(Reader)} para la ingesta por
+ * endpoint (subida multipart), sin depender de rutas en disco del servidor.
+ *
+ * <p>El parseo de envíos descarta líneas inválidas (RF03 vía {@link EnvioValidator}) sin abortar el
+ * archivo. El INSERT usa {@code ON CONFLICT DO NOTHING} (idempotente); con reemplazo total las
+ * tablas ya vienen vacías tras el TRUNCATE.
+ */
+@Slf4j
 @Component
 public class MigradorEnviosDb {
 
     private final JdbcTemplate jdbcTemplate;
 
+    private static final String SQL_ENVIO =
+            "INSERT INTO ENVIO (id_envio, icao_origen, icao_destino, cantidad_maletas, id_cliente, fecha_hora_registro) "
+          + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id_envio) DO NOTHING";
+    private static final String SQL_VUELO =
+            "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima) "
+          + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
+    private static final String SQL_AEROPUERTO =
+            "INSERT INTO AEROPUERTO (icao, ciudad, pais, codigo_region, huso_horario, capacidad_almacen, latitud, longitud, activo) "
+          + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (icao) DO NOTHING";
+
+    private static final int LOTE_ENVIOS = 10_000;
+    private static final int LOTE_VUELOS = 500;
+
     public MigradorEnviosDb(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    // ── Aeropuertos ─────────────────────────────────────────────────────────────
+
+    /** Inserta los aeropuertos ya parseados ({@code util/AeropuertoParser}). Devuelve el nº insertado. */
+    public int insertarAeropuertos(List<Aeropuerto> aeropuertos) {
+        if (aeropuertos == null || aeropuertos.isEmpty()) return 0;
+        List<Object[]> lote = new ArrayList<>(aeropuertos.size());
+        for (Aeropuerto a : aeropuertos) {
+            lote.add(new Object[]{ a.getCodigo(), a.getCiudad(), a.getPais(), a.getAbreviatura(),
+                    a.getOffsetHorario(), a.getCapacidad(), a.getLatitud(), a.getLongitud(), a.isActivo() });
+        }
+        jdbcTemplate.batchUpdate(SQL_AEROPUERTO, lote);
+        return lote.size();
+    }
+
+    // ── Vuelos ──────────────────────────────────────────────────────────────────
+
+    /** Carga vuelos desde un archivo local (uso legacy/one-shot). */
+    public void migrarVuelos(String rutaArchivoVuelos) {
+        try (BufferedReader br = new BufferedReader(new FileReader(rutaArchivoVuelos))) {
+            int n = migrarVuelosDesde(br);
+            log.info("Migración de VUELOS completada: {} filas", n);
+        } catch (Exception e) {
+            log.error("Error migrando vuelos desde {}: {}", rutaArchivoVuelos, e.getMessage());
+        }
+    }
+
+    /** Parsea e inserta vuelos desde un {@link Reader} (ingesta por endpoint). Devuelve el nº de filas. */
+    public int migrarVuelosDesde(Reader reader) throws IOException {
+        BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
+        List<Object[]> lote = new ArrayList<>();
+        int total = 0;
+        String linea;
+        while ((linea = br.readLine()) != null) {
+            linea = linea.trim();
+            if (linea.isEmpty() || linea.contains("ORIG-DEST")) continue;
+            linea = linea.replace("//", "");
+            String[] parts = linea.split("[\\s-]+");
+            if (parts.length < 4) continue;
+
+            String origen = parts[0], destino = parts[1], hSalida = parts[2], hLlegada = parts[3];
+            int capacidad = (parts.length >= 5 && parts[4].matches("\\d+")) ? Integer.parseInt(parts[4]) : 0;
+            String idVuelo = origen + "-" + destino + "-" + hSalida.replace(":", "");
+
+            lote.add(new Object[]{ idVuelo, origen, destino, hSalida, hLlegada, capacidad });
+            if (lote.size() >= LOTE_VUELOS) {
+                jdbcTemplate.batchUpdate(SQL_VUELO, lote);
+                total += lote.size();
+                lote.clear();
+            }
+        }
+        if (!lote.isEmpty()) {
+            jdbcTemplate.batchUpdate(SQL_VUELO, lote);
+            total += lote.size();
+        }
+        return total;
+    }
+
+    // ── Envíos ──────────────────────────────────────────────────────────────────
+
+    /** Carga todos los {@code _envios_<ICAO>_.txt} de un directorio local (uso legacy/one-shot). */
     public void migrarDirectorioCompleto(String rutaDirectorio) {
         File carpeta = new File(rutaDirectorio);
         File[] archivos = carpeta.listFiles((dir, name) -> name.endsWith(".txt") && name.startsWith("_envios_"));
-
         if (archivos == null || archivos.length == 0) {
-            System.out.println("No se encontraron archivos en la ruta: " + rutaDirectorio);
+            log.warn("No se encontraron archivos de envíos en: {}", rutaDirectorio);
             return;
         }
-
-        // Ahora incluimos id_cliente y el TIMESTAMP real (fecha_hora_registro)
-        String sql = "INSERT INTO ENVIO (id_envio, icao_origen, icao_destino, cantidad_maletas, hora_registro, minuto_registro, id_cliente, fecha_hora_registro) " +
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id_envio) DO NOTHING";
-
-        int totalArchivos = archivos.length;
-        int procesados = 0;
-
         for (File archivo : archivos) {
-            String nombre = archivo.getName();
-            String[] partesNombre = nombre.split("_");
-            if (partesNombre.length < 3) continue;
-            String origenIcao = partesNombre[2]; 
-
-            List<Object[]> batchArgs = new ArrayList<>();
-            int descartados = 0; // RF03: líneas con campos obligatorios faltantes o mal formados
-
+            String origenIcao = origenIcaoDeNombre(archivo.getName());
+            if (origenIcao == null) continue;
             try (BufferedReader br = new BufferedReader(new FileReader(archivo))) {
-                String linea;
-                while ((linea = br.readLine()) != null) {
-                    String[] parts = linea.split("-");
-
-                    // Aseguramos que tenga los 7 bloques
-                    if (parts.length < 7) continue;
-
-                    String idRaw      = parts[0].trim(); // RF03: el id es opcional (puede venir en blanco)
-                    String fechaRaw   = parts[1].trim(); // 20260102
-                    String horaStr    = parts[2].trim();
-                    String minStr     = parts[3].trim();
-                    String destino    = parts[4].trim();
-                    String maletasStr = parts[5].trim();
-                    String clienteStr = parts[6].trim();
-
-                    // RF03: todos los campos obligatorios (todos menos el id) deben estar presentes.
-                    if (!EnvioValidator.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
-                        descartados++;
-                        continue;
-                    }
-
-                    try {
-                        String id = origenIcao + "-" + idRaw;
-                        int hh = Integer.parseInt(horaStr);
-                        int mm = Integer.parseInt(minStr);
-                        int maletas = Integer.parseInt(maletasStr);
-                        int idCliente = Integer.parseInt(clienteStr);
-
-                        // Construcción del Timestamp para PostgreSQL (YYYY-MM-DD HH:MM:SS)
-                        String anio = fechaRaw.substring(0, 4);
-                        String mes = fechaRaw.substring(4, 6);
-                        String dia = fechaRaw.substring(6, 8);
-                        String timestampStr = String.format("%s-%s-%s %02d:%02d:00", anio, mes, dia, hh, mm);
-                        Timestamp fechaHoraRegistro = Timestamp.valueOf(timestampStr);
-
-                        batchArgs.add(new Object[]{id, origenIcao, destino, maletas, hh, mm, idCliente, fechaHoraRegistro});
-                    } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
-                        // RF03: línea con un campo obligatorio mal formado; se descarta sin abortar el archivo.
-                        descartados++;
-                        continue;
-                    }
-
-                    if (batchArgs.size() == 10000) {
-                        jdbcTemplate.batchUpdate(sql, batchArgs);
-                        batchArgs.clear();
-                    }
-                }
-
-                if (!batchArgs.isEmpty()) {
-                    jdbcTemplate.batchUpdate(sql, batchArgs);
-                }
-
-                procesados++;
-                System.out.println("[" + procesados + "/" + totalArchivos + "] Migrado exitosamente: " + nombre
-                        + (descartados > 0 ? " (RF03: " + descartados + " líneas descartadas por campos inválidos)" : ""));
-
+                int[] r = migrarEnviosDesde(br, origenIcao);
+                log.info("Migrado {}: {} insertados, {} descartados (RF03)", archivo.getName(), r[0], r[1]);
             } catch (Exception e) {
-                System.out.println("Error procesando " + nombre + ": " + e.getMessage());
+                log.error("Error procesando {}: {}", archivo.getName(), e.getMessage());
             }
         }
-        System.out.println("¡Migración de 9 millones de registros completada!");
     }
 
-    public void migrarVuelos(String rutaArchivoVuelos) {
-        System.out.println("Iniciando migración masiva de VUELOS...");
-        List<Object[]> lote = new ArrayList<>();
-        
-        try (BufferedReader br = new BufferedReader(new FileReader(rutaArchivoVuelos))) {
-            String linea;
-            while ((linea = br.readLine()) != null) {
-                // Limpiamos la línea
-                linea = linea.trim();
-                if (linea.isEmpty() || linea.contains("ORIG-DEST")) continue; 
-                linea = linea.replace("//", ""); // Por si las moscas
-                
-                // Cortamos por cualquier combinación de guiones o espacios
-                String[] parts = linea.split("[\\s-]+");
-                
-                // Necesitamos al menos Origen, Destino, Salida y Llegada
-                if (parts.length >= 4) {
-                    String origen = parts[0];
-                    String destino = parts[1];
-                    String hSalida = parts[2];
-                    String hLlegada = parts[3];
-                    
-                    // Extraemos la capacidad si existe (y si es un número válido)
-                    int capacidad = 0;
-                    if (parts.length >= 5 && parts[4].matches("\\d+")) {
-                        capacidad = Integer.parseInt(parts[4]);
-                    }
-                    
-                    // Creamos un ID único (Ej: SKBO-SEQM-1900)
-                    String idVuelo = origen + "-" + destino + "-" + hSalida.replace(":", "");
-                    
-                    lote.add(new Object[] { idVuelo, origen, destino, hSalida, hLlegada, capacidad });
-                    
-                    // Disparamos en lotes de 500 para no ahogar la red
-                    if (lote.size() >= 500) {
-                        jdbcTemplate.batchUpdate(
-                            "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", 
-                            lote
-                        );
-                        lote.clear();
-                    }
-                }
+    /** ICAO de origen embebido en {@code _envios_<ICAO>_.txt} ({@code partes[2]}); null si no casa. */
+    public static String origenIcaoDeNombre(String nombreArchivo) {
+        if (nombreArchivo == null) return null;
+        String[] partes = nombreArchivo.split("_");
+        return partes.length >= 3 ? partes[2] : null;
+    }
+
+    /**
+     * Parsea e inserta envíos desde un {@link Reader}, con el {@code origenIcao} (derivado del nombre
+     * del archivo). Devuelve {@code [insertados, descartados]}. RF03: descarta líneas inválidas sin
+     * abortar.
+     */
+    public int[] migrarEnviosDesde(Reader reader, String origenIcao) throws IOException {
+        BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
+        List<Object[]> batchArgs = new ArrayList<>();
+        int insertados = 0, descartados = 0;
+        String linea;
+        while ((linea = br.readLine()) != null) {
+            String[] parts = linea.split("-");
+            if (parts.length < 7) continue;
+
+            String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
+                   destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
+            // RF03: id opcional; el resto de campos obligatorios deben estar presentes.
+            if (!EnvioValidator.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
+                descartados++;
+                continue;
             }
-            
-            // Insertamos los últimos que hayan quedado en la lista
-            if (!lote.isEmpty()) {
-                jdbcTemplate.batchUpdate(
-                    "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", 
-                    lote
-                );
+            try {
+                String id = origenIcao + "-" + parts[0].trim();
+                int hh = Integer.parseInt(horaStr), mm = Integer.parseInt(minStr);
+                int maletas = Integer.parseInt(maletasStr), idCliente = Integer.parseInt(clienteStr);
+                // Timestamp PostgreSQL (YYYY-MM-DD HH:MM:SS) desde la fecha YYYYMMDD + hh:mm.
+                String ts = String.format("%s-%s-%s %02d:%02d:00",
+                        fechaRaw.substring(0, 4), fechaRaw.substring(4, 6), fechaRaw.substring(6, 8), hh, mm);
+                batchArgs.add(new Object[]{ id, origenIcao, destino, maletas, idCliente, Timestamp.valueOf(ts) });
+            } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
+                descartados++;
+                continue;
             }
-            System.out.println("¡Migración de VUELOS completada con éxito!");
-            
-        } catch (Exception e) {
-            e.printStackTrace();
+            if (batchArgs.size() == LOTE_ENVIOS) {
+                jdbcTemplate.batchUpdate(SQL_ENVIO, batchArgs);
+                insertados += batchArgs.size();
+                batchArgs.clear();
+            }
         }
+        if (!batchArgs.isEmpty()) {
+            jdbcTemplate.batchUpdate(SQL_ENVIO, batchArgs);
+            insertados += batchArgs.size();
+        }
+        return new int[]{ insertados, descartados };
     }
 }

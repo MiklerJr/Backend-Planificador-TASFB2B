@@ -9,6 +9,7 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Backlog acumulativo de pedidos pendientes de planificación o replanificación
@@ -20,8 +21,8 @@ import java.util.List;
  *       y deben reintentarse cuando avance el horizonte.</li>
  *   <li><b>replanificables</b>: batches enrutados pero con poca holgura SLA
  *       (próximos a tardar) que podrían beneficiarse de una nueva ruta.</li>
- *   <li><b>sinRutaDefinitivo</b> (contador): batches descartados — SLA ya
- *       vencido o tope absoluto excedido. No se reintentan.</li>
+ *   <li><b>sinRutaDefinitivo</b> (contador): batches descartados sin ruta
+ *       utilizable — SLA ya vencido o tope absoluto excedido. No se reintentan.</li>
  * </ul>
  *
  * <p>Single-thread por construcción: cada simulación crea su propia instancia.
@@ -35,10 +36,23 @@ public class BacklogManager {
     private int     picoHistorico     = 0;
     private final int     maxSize;
     private final boolean purgarVencidas;
+    private final Consumer<LuggageBatch> onDescarte;
 
     public BacklogManager(int maxSize, boolean purgarVencidas) {
+        this(maxSize, purgarVencidas, null);
+    }
+
+    /**
+     * @param onDescarte hook invocado por cada batch que sale DEFINITIVAMENTE del backlog
+     *                   (purga por SLA vencido o tope absoluto). El llamador lo usa para
+     *                   liberar la ocupación global de las rutas rotas por cancelación
+     *                   ({@code releaseFromGlobal} + {@code clearRoute}) — este manager no
+     *                   conoce al enrutador. Puede ser {@code null}.
+     */
+    public BacklogManager(int maxSize, boolean purgarVencidas, Consumer<LuggageBatch> onDescarte) {
         this.maxSize        = Math.max(0, maxSize);
         this.purgarVencidas = purgarVencidas;
+        this.onDescarte     = onDescarte;
     }
 
     /** Marca un batch como sin ruta para reintentar en el próximo bloque. */
@@ -104,13 +118,6 @@ public class BacklogManager {
     }
 
     /**
-     * Descarta del backlog cualquier batch cuyo SLA ya venció ({@code readyTime + slaLimit < scNow}).
-     * Estos batches no tienen forma de cumplir el contrato aunque se enruten — se mueven
-     * a {@code sinRutaDefinitivo}. Solo activo si el manager fue creado con {@code purgarVencidas=true}.
-     *
-     * @return cantidad purgada en esta llamada
-     */
-    /**
      * Fase M (anti-thrash): devuelve hasta {@code max} pendientes priorizando los de
      * DEADLINE más cercano ({@code readyTime + SLA}), mezclando sinRuta y replanificables.
      * Los no devueltos (los MENOS urgentes) permanecen en el backlog para el siguiente
@@ -138,6 +145,17 @@ public class BacklogManager {
         return out;
     }
 
+    /**
+     * Descarta del backlog cualquier batch cuyo SLA ya venció ({@code readyTime + slaLimit < scNow}).
+     * Cada descartado pasa antes por el hook {@code onDescarte}, que libera la ocupación global
+     * de las rutas rotas por cancelación y las limpia. Solo cuentan como {@code sinRutaDefinitivo}
+     * los que salen SIN ruta utilizable: un replanificable con ruta válida on-time ya tiene su
+     * entrega comprometida dentro del SLA — sale del backlog sin contarse como incumplimiento
+     * (sigue figurando como enrutado en métricas/auditoría y no dispara el colapso del E3).
+     * Solo activo si el manager fue creado con {@code purgarVencidas=true}.
+     *
+     * @return cantidad movida a {@code sinRutaDefinitivo} en esta llamada (vencidos reales)
+     */
     public int purgarVencidas(LocalDateTime scNow) {
         if (!purgarVencidas || scNow == null) return 0;
         int n = 0;
@@ -155,21 +173,31 @@ public class BacklogManager {
             LocalDateTime deadline = b.getReadyTime().plusHours(b.getSlaLimitHours());
             if (deadline.isBefore(scNow)) {
                 it.remove();
-                count++;
+                if (descartarDefinitivamente(b)) count++;
             }
         }
         return count;
     }
 
-    /** Aplica el tope absoluto: si se excede, los más viejos pasan a sinRutaDefinitivo. */
+    /** Aplica el tope absoluto: si se excede, los más viejos salen del backlog definitivamente. */
     private void aplicarTope() {
         if (maxSize <= 0) return;
         while (sinRuta.size() + replanificables.size() > maxSize) {
-            if (!sinRuta.isEmpty())          sinRuta.pollFirst();
-            else if (!replanificables.isEmpty()) replanificables.pollFirst();
+            LuggageBatch b;
+            if (!sinRuta.isEmpty())              b = sinRuta.pollFirst();
+            else if (!replanificables.isEmpty()) b = replanificables.pollFirst();
             else break;
-            sinRutaDefinitivo++;
+            if (descartarDefinitivamente(b)) sinRutaDefinitivo++;
         }
+    }
+
+    /**
+     * Pasa el batch por el hook {@code onDescarte} (liberación de rutas rotas) y decide si
+     * cuenta como definitivo: solo si sale SIN ruta utilizable tras el hook.
+     */
+    private boolean descartarDefinitivamente(LuggageBatch b) {
+        if (onDescarte != null) onDescarte.accept(b);
+        return b.getAssignedRoute() == null || b.getAssignedRoute().isEmpty();
     }
 
     private void actualizarPico() {

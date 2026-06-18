@@ -7,7 +7,7 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Maleta;
+import com.tasfb2b.planificador.model.Envio;
 import com.tasfb2b.planificador.model.Vuelo;
 import org.springframework.stereotype.Component;
 
@@ -28,10 +28,11 @@ public class AlgorithmMapper {
         for (Aeropuerto a : aeropuertos) {
             graph.addNode(a.getCodigo());
             Node nodo = graph.nodes.get(a.getCodigo());
-            nodo.capacity = a.getCapacidad();
+            int capacidadAlmacen = a.getCapacidad() != null ? a.getCapacidad() : 0;
+            nodo.capacity = capacidadAlmacen;
             // El ACO consulta storageCapacity (vs Node.storageUsed) en buildSolution.
             // El ALNS consulta capacity. Mantener ambos sincronizados para que ambos motores funcionen.
-            nodo.storageCapacity = a.getCapacidad() != null ? a.getCapacidad() : 0;
+            nodo.storageCapacity = capacidadAlmacen;
         }
 
         // 2. Mapear Aristas (Vuelos)
@@ -53,7 +54,7 @@ public class AlgorithmMapper {
             edge.from = graph.nodes.get(v.getAeropuertoOrigen().getCodigo());
             edge.to = graph.nodes.get(v.getAeropuertoDestino().getCodigo());
 
-            edge.capacity = v.getCapacidad();
+            edge.capacity = v.getCapacidad() != null ? v.getCapacidad() : 0;
 
             // Normalizar salida y llegada a UTC restando el offset de cada aeropuerto.
             // Los archivos de datos usan hora LOCAL en cada aeropuerto; para que el Dijkstra
@@ -63,17 +64,25 @@ public class AlgorithmMapper {
             int destOffset   = v.getAeropuertoDestino().getOffsetHorario();
 
             LocalDateTime depUtc = v.getFechaHoraSalida().minusHours(originOffset);
-            LocalDateTime arrUtc = v.getFechaHoraLlegada().minusHours(destOffset);
 
-            Duration utcDur = Duration.between(depUtc, arrUtc);
-            if (utcDur.isNegative() || utcDur.isZero()) utcDur = utcDur.plusDays(1);
+            // La duración se calcula SOLO desde las horas de pared y los husos, con un único
+            // módulo 24h. No se deriva de fechaHoraLlegada porque el cruce de medianoche no se
+            // puede decidir comparando horas de pared de aeropuertos en husos distintos: un vuelo
+            // hacia el oeste más corto que su diferencia de huso aterriza a una hora de pared menor
+            // que la de salida sin cruzar medianoche, lo que inflaba la duración en 24h.
+            int depWall = v.getFechaHoraSalida().getHour() * 60 + v.getFechaHoraSalida().getMinute();
+            int arrWall = v.getFechaHoraLlegada().getHour() * 60 + v.getFechaHoraLlegada().getMinute();
+            int durMin = Math.floorMod((arrWall - destOffset * 60) - (depWall - originOffset * 60), 1440);
+
+            LocalDateTime arrUtc = depUtc.plusMinutes(durMin);
+            Duration utcDur = Duration.ofMinutes(durMin);
 
             edge.departureTime     = depUtc;
             edge.arrivalTime       = arrUtc;
             edge.duration          = utcDur;
-            edge.cost              = utcDur.toMinutes();
+            edge.cost              = durMin;
             edge.departureLocalTime = depUtc.toLocalTime();
-            edge.durationMinutes   = (int) utcDur.toMinutes();
+            edge.durationMinutes   = durMin;
             edge.depMinuteOfDay    = depUtc.getHour() * 60 + depUtc.getMinute();
             edge.idx               = edgeIdx++;
 
@@ -86,7 +95,7 @@ public class AlgorithmMapper {
     /**
      * Convierte la lista masiva de maletas en lotes (Batches) para el algoritmo.
      */
-    public List<LuggageBatch> mapToBatches(List<Maleta> maletas) {
+    public List<LuggageBatch> mapToBatches(List<Envio> maletas) {
         return maletas.stream().map(m -> {
             // Normalizar readyTime a UTC restando el offset del aeropuerto origen.
             // Los archivos de envíos usan hora local; el Dijkstra opera en UTC.
