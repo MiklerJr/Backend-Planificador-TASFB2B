@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.dto.VueloCancelado;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.TipoEnvio;
 import com.tasfb2b.planificador.util.DataLoader;
@@ -166,6 +167,49 @@ public class SolucionBdReader {
         });
         emitir(acc, indiceVuelo, out::add);
         return out;
+    }
+
+    /**
+     * Lee las cancelaciones de vuelo persistidas en {@code cancelacion_vuelo} y las reconstruye como
+     * {@link VueloCancelado} para el CSV de auditoría (fuente de verdad en BD, no la lista en RAM).
+     * {@code origen}/{@code destino}/hora-salida UTC salen del {@code Edge} del índice (sin parsear
+     * strings); {@code enviosAfectados} de la propia fila. Orden estable por fecha + id_vuelo. Si un
+     * {@code id_vuelo} no estuviera en el índice (defensivo), deriva origen/destino/hora del propio id.
+     */
+    public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo) {
+        String sql = "SELECT id_vuelo, fecha_cancelacion, envios_afectados FROM cancelacion_vuelo "
+                   + "ORDER BY fecha_cancelacion, id_vuelo";
+        return jdbc.query(sql, (rs, n) -> {
+            String idVuelo = rs.getString("id_vuelo");
+            LocalDate fecha = rs.getObject("fecha_cancelacion", LocalDate.class);
+            int afectados = rs.getInt("envios_afectados");
+            Edge e = indiceVuelo != null ? indiceVuelo.get(idVuelo) : null;
+            String origen, destino;
+            int depMin;
+            if (e != null) {
+                origen = e.from.code;
+                destino = e.to.code;
+                depMin = e.depMinuteOfDay;
+            } else {
+                // Fallback defensivo: derivar del propio id_vuelo (ICAO-ICAO-HHMM).
+                String[] partes = idVuelo != null ? idVuelo.split("-") : new String[0];
+                origen = partes.length > 0 ? partes[0] : "";
+                destino = partes.length > 1 ? partes[1] : "";
+                depMin = partes.length > 2 ? parseHHMM(partes[2]) : 0;
+            }
+            LocalDateTime salidaUtc = fecha.atStartOfDay().plusMinutes(depMin);
+            return new VueloCancelado(origen, destino, salidaUtc, afectados);
+        });
+    }
+
+    /** {@code "HHMM"} → minutos del día; 0 si no parsea (fallback de {@link #leerCancelaciones}). */
+    private static int parseHHMM(String hhmm) {
+        try {
+            int v = Integer.parseInt(hhmm.trim());
+            return (v / 100) * 60 + (v % 100);
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
     }
 
     /**

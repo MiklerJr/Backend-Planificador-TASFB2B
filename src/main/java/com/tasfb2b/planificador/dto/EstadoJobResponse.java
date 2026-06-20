@@ -46,4 +46,6 @@ public class EstadoJobResponse {
     private List<VueloCancelado> vuelosCancelados;
     /** Órdenes de cancelación que no casaron ningún vuelo-día (eje equivocado o trayecto inexistente). */
     private List<CancelacionVueloRequest> cancelacionesNoAplicadas;
+    /** Envíos inyectados EN VIVO ya aplicados (liberados a la simulación), en orden de entrada. */
+    private List<EnvioInyectadoInfo> enviosInyectados;
 }

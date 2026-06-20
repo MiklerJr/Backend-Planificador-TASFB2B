@@ -116,7 +116,7 @@ public class IngestaService {
     private void ejecutar(Path aero, Path vuelos, List<EnvioTemp> envios, IngestaEstado e) {
         try {
             // 1. Reemplazo destructivo. CASCADE limpia las soluciones de la 5a (ruta_asignada/
-            //    tramo_ruta/cancelacion_vuelo, FK a envio/vuelo).
+            //    tramo_ruta/cancelacion_vuelo, FK a envio/vuelo) y envio_inyectado (FK a aeropuerto).
             e.setFase("limpiando");
             jdbc.execute("TRUNCATE aeropuerto, vuelo, envio RESTART IDENTITY CASCADE");
 

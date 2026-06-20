@@ -236,6 +236,31 @@ public class JobState {
     }
 
     /**
+     * Envíos a inyectar EN VIVO pendientes de procesar, enviados por el operador. El worker los drena
+     * a un buffer local al inicio de cada bloque y los libera cuando el cursor UTC alcanza su
+     * readyTime (ver {@code PlanificadorService.aplicarInyeccionesEnvio}). {@link ConcurrentLinkedQueue}
+     * permite que el endpoint REST encole desde otro hilo sin bloquear al worker.
+     */
+    private final Queue<InyeccionEnviosRequest.Item> inyeccionesPendientes = new ConcurrentLinkedQueue<>();
+
+    /** Encola un envío para inyectarlo en vivo (lo recoge el worker en el próximo bloque). */
+    public void encolarInyeccion(InyeccionEnviosRequest.Item it) {
+        if (it != null) inyeccionesPendientes.add(it);
+    }
+
+    /** Cola de envíos a inyectar pendientes (la drena el worker del job). */
+    public Queue<InyeccionEnviosRequest.Item> getInyeccionesPendientes() {
+        return inyeccionesPendientes;
+    }
+
+    /**
+     * Envíos inyectados EN VIVO ya APLICADOS por el worker (liberados a la simulación), en orden de
+     * entrada. Los expone {@code GET /jobs/{id}/estado} para que el front sepa qué envíos adicionales
+     * entraron y en qué bloque. El worker escribe y el front lee concurrentemente: CopyOnWriteArrayList.
+     */
+    private final List<EnvioInyectadoInfo> enviosInyectados = new CopyOnWriteArrayList<>();
+
+    /**
      * Series de ocupación de almacén por SLOT de 60 min, una entrada por bloque publicado (mismo
      * orden e índices que {@link #bloquesParciales}). El front las consume con
      * {@code GET /jobs/{id}/almacenes/serie?desde=N} para actualizar EN VIVO las maletas de cada

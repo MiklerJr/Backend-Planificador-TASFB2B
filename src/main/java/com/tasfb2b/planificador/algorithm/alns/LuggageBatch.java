@@ -17,6 +17,14 @@ public class LuggageBatch {
     /** Identificador del cliente que originó el envío (puede ser null si no se propaga). */
     private Integer clienteId;
 
+    /**
+     * Marca un envío inyectado EN VIVO por el operador (id sintético "INV-..."). Su ruta NO se
+     * persiste en {@code ruta_asignada} (id_envio inexistente en la tabla {@code envio} ⇒ rompería la
+     * FK y la transacción del bloque); ver {@code PersistenciaSolucionService.persistirBloque}. El
+     * hecho del envío se registra aparte en {@code envio_inyectado}.
+     */
+    private boolean sintetico;
+
     private List<Edge> assignedRoute;
     private List<Long> assignedDepartures; // epoch-minutes, paralelo a assignedRoute
     private boolean cumpleSLA;
@@ -141,6 +149,7 @@ public class LuggageBatch {
         LuggageBatch clone = new LuggageBatch(id, quantity, slaLimitHours,
                                                originCode, destCode, readyTime);
         clone.setClienteId(this.clienteId);
+        clone.setSintetico(this.sintetico);
         clone.setAssignedRoute(new ArrayList<>(this.assignedRoute));
         clone.setAssignedDepartures(
                 assignedDepartures != null ? new ArrayList<>(assignedDepartures) : null);
@@ -170,4 +179,6 @@ public class LuggageBatch {
     public void setCumpleSLA(boolean v)       { this.cumpleSLA = v; }
     public Integer getClienteId()             { return clienteId; }
     public void setClienteId(Integer id)      { this.clienteId = id; }
+    public boolean isSintetico()              { return sintetico; }
+    public void setSintetico(boolean v)       { this.sintetico = v; }
 }

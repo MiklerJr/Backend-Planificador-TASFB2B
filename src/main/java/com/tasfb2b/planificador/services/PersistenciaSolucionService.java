@@ -3,6 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.dto.EnvioInyectadoInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -62,7 +63,8 @@ public class PersistenciaSolucionService {
 
     /**
      * Intenta tomar la persistencia para {@code jobId}. Si la toma (no hay otra corrida activa),
-     * vacía las tablas de solución ({@code TRUNCATE ruta_asignada/tramo_ruta/cancelacion_vuelo}) y
+     * vacía las tablas de solución ({@code TRUNCATE ruta_asignada/tramo_ruta/cancelacion_vuelo/
+     * envio_inyectado}) y
      * devuelve {@code true}. Si ya hay otra corrida persistiendo, devuelve {@code false} (ese job
      * corre solo en memoria).
      *
@@ -80,7 +82,7 @@ public class PersistenciaSolucionService {
             return false;
         }
         try {
-            jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo RESTART IDENTITY CASCADE");
+            jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo, envio_inyectado RESTART IDENTITY CASCADE");
             corridaPersistidaEnBd = jobId;   // a partir de aquí la BD refleja la solución de este job
             log.info("Persistencia iniciada para la corrida {} (tablas de solución limpias).", jobId);
             return true;
@@ -125,7 +127,10 @@ public class PersistenciaSolucionService {
         // endpoint de estado lo muestre EN_ESCALA esperando.
         List<LuggageBatch> enrutados = new ArrayList<>();
         for (LuggageBatch b : batches) {
-            if (b == null || b.getId() == null) continue;
+            // Los inyectados en vivo (id sintético "INV-...") NO existen en la tabla envio: persistir su
+            // ruta rompería la FK ruta_asignada→envio y revertiría el bloque entero. Su hecho va aparte
+            // en envio_inyectado (ver persistirInyecciones).
+            if (b == null || b.getId() == null || b.isSintetico()) continue;
             List<Edge> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();
             if (ruta != null && !ruta.isEmpty() && deps != null && deps.size() == ruta.size()) {
@@ -146,6 +151,59 @@ public class PersistenciaSolucionService {
             log.error("Persistencia del bloque falló (corrida {}): {}", jobId, e.getMessage());
         }
     }
+
+    /**
+     * Persiste en {@code envio_inyectado} los envíos inyectados EN VIVO liberados en un bloque (solo si
+     * {@code jobId} es la corrida activa). Tabla independiente, sin FK a {@code envio}; la limpia el
+     * {@code TRUNCATE} de {@link #iniciarCorrida} al arrancar otra corrida. Best-effort: si falla,
+     * loguea y no propaga (la simulación no debe caerse por la persistencia).
+     */
+    public void persistirInyecciones(String jobId, List<EnvioInyectadoInfo> items) {
+        if (items == null || items.isEmpty() || !persiste(jobId)) return;
+        try {
+            List<Object[]> args = new ArrayList<>(items.size());
+            for (EnvioInyectadoInfo it : items) {
+                args.add(new Object[]{
+                        it.getIdEnvio(), it.getOrigen(), it.getDestino(), it.getCantidad(),
+                        it.getClienteId(), LocalDateTime.parse(it.getReadyTimeUtc()),
+                        it.getSlaHoras(), it.getBloqueIdx() });
+            }
+            jdbc.batchUpdate("INSERT INTO envio_inyectado (id_envio, icao_origen, icao_destino, "
+                    + "cantidad_maletas, id_cliente, ready_time_utc, sla_horas, bloque_idx) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", args);
+        } catch (Exception e) {
+            log.error("Persistencia de inyecciones falló (corrida {}): {}", jobId, e.getMessage());
+        }
+    }
+
+    /**
+     * Persiste en {@code cancelacion_vuelo} los vuelo-días que el usuario canceló EN VIVO durante un
+     * bloque (solo si {@code jobId} es la corrida activa). FK {@code id_vuelo → vuelo(id_vuelo)}: el
+     * {@code idVuelo} debe venir ya normalizado a {@code ICAO-ICAO-HHMM} (ver {@link #normalizarIdVuelo}),
+     * el mismo formato que {@code tramo_ruta.id_vuelo}. La limpia el {@code TRUNCATE} de
+     * {@link #iniciarCorrida} al arrancar otra corrida. Best-effort: si falla, loguea y NO propaga
+     * (la simulación no debe caerse por la persistencia).
+     */
+    public void persistirCancelaciones(String jobId, List<CancelacionVueloDb> nuevas) {
+        if (nuevas == null || nuevas.isEmpty() || !persiste(jobId)) return;
+        try {
+            List<Object[]> args = new ArrayList<>(nuevas.size());
+            for (CancelacionVueloDb c : nuevas) {
+                args.add(new Object[]{ c.idVuelo(), c.fecha(), c.enviosAfectados() });
+            }
+            jdbc.batchUpdate("INSERT INTO cancelacion_vuelo (id_vuelo, fecha_cancelacion, envios_afectados) "
+                    + "VALUES (?, ?, ?)", args);
+        } catch (Exception e) {
+            log.error("Persistencia de cancelaciones falló (corrida {}): {}", jobId, e.getMessage());
+        }
+    }
+
+    /**
+     * Vuelo-día cancelado a persistir: {@code id_vuelo} ({@code ICAO-ICAO-HHMM}) + fecha (UTC) +
+     * {@code enviosAfectados} (devueltos al backlog por la cancelación, para reconstruir el CSV de
+     * auditoría desde BD sin perder esa columna).
+     */
+    public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
     /** Escribe el bloque (debe correr dentro de una transacción): desactiva previa → rutas → tramos. */
     private void escribirBloque(List<LuggageBatch> enrutados) {

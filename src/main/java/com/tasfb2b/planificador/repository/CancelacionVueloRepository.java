@@ -4,8 +4,10 @@ import com.tasfb2b.planificador.model.db.CancelacionVuelo;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
- * Repositorio JPA de {@link CancelacionVuelo}. Estructura inerte de la "casa": existe como bean
- * pero ningún componente del motor lo inyecta todavía (se conectará en la Fase 4).
+ * Repositorio JPA de {@link CancelacionVuelo}. Existe como bean pero el motor NO lo inyecta: la
+ * tabla {@code cancelacion_vuelo} la escribe {@code PersistenciaSolucionService.persistirCancelaciones}
+ * por {@code JdbcTemplate} (mismo patrón que {@code EnvioInyectadoRepository}). Disponible para
+ * lecturas JPA si en el futuro hiciera falta.
  */
 public interface CancelacionVueloRepository extends JpaRepository<CancelacionVuelo, Integer> {
 }

@@ -299,4 +299,28 @@ public class EscenarioController {
                 "destino",  orden.getDestino(),
                 "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
     }
+
+    /**
+     * Agrega envíos EN VIVO durante un job async (E1 async / E2 / E3). Encola el lote; el worker libera
+     * cada envío cuando el cursor UTC alcanza su {@code fechaHoraRegistro} (próximo bloque si es
+     * pasada/actual u omitida). Solo valen para esa simulación: no contaminan el dataset maestro
+     * {@code ENVIO} y se registran en {@code envio_inyectado} (que se vacía al iniciar otra corrida).
+     *
+     * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó, 400 si el input es
+     *         inválido (ICAO desconocido, origen=destino, cantidad ≤ 0, lista vacía).
+     */
+    @PostMapping("/jobs/{jobId}/inyectar-envios")
+    public ResponseEntity<Map<String, Object>> inyectarEnvios(
+            @PathVariable String jobId,
+            @RequestBody InyeccionEnviosRequest req) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
+        if (encolados < 0) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "jobId", jobId, "encolado", false,
+                    "motivo", "el job no está activo (ya terminó o fue cancelado)"));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId", jobId, "encolado", true, "encolados", encolados));
+    }
 }

@@ -9,9 +9,12 @@ import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.EjecucionParams;
 import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.dto.VueloCancelado;
+import com.tasfb2b.planificador.exception.ParametroInvalidoException;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Envio;
+import com.tasfb2b.planificador.model.TipoEnvio;
 import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.util.EnvioValidator;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
 import com.tasfb2b.planificador.util.DataLoader;
@@ -351,13 +354,45 @@ public class PlanificadorService {
     }
 
     /**
+     * Solicita agregar envíos EN VIVO a un job async (E1 async / E2 / E3). Valida TODO el lote antes de
+     * encolar nada (todo-o-nada); el worker libera cada envío cuando el cursor UTC alcanza su
+     * {@code fechaHoraRegistro} (ver {@link #aplicarInyeccionesEnvio}).
+     *
+     * @return número de envíos encolados; {@code -1} si el job no existe o ya no está activo (→ 409).
+     * @throws ParametroInvalidoException si el lote es vacío o algún envío es inválido (→ 400).
+     */
+    public int solicitarInyeccionEnvios(String jobId, InyeccionEnviosRequest req) {
+        if (req == null || req.getEnvios() == null || req.getEnvios().isEmpty())
+            throw new ParametroInvalidoException("inyección vacía: se requiere al menos un envío");
+        JobState job = jobs.get(jobId);
+        if (job == null) return -1;
+        for (InyeccionEnviosRequest.Item it : req.getEnvios()) {
+            if (!EnvioValidator.camposObligatoriosPresentes(it.getOrigen(), it.getDestino()))
+                throw new ParametroInvalidoException("origen y destino son obligatorios (RF03)");
+            if (EnvioValidator.esMismoAeropuerto(it.getOrigen(), it.getDestino()))
+                throw new ParametroInvalidoException("origen y destino no pueden ser iguales (RF02)");
+            if (it.getCantidad() <= 0)
+                throw new ParametroInvalidoException("la cantidad debe ser > 0");
+            if (dataLoader.getAeropuerto(it.getOrigen()) == null)
+                throw new ParametroInvalidoException("ICAO origen desconocido: " + it.getOrigen());
+            if (dataLoader.getAeropuerto(it.getDestino()) == null)
+                throw new ParametroInvalidoException("ICAO destino desconocido: " + it.getDestino());
+        }
+        if (!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) return -1;
+        for (InyeccionEnviosRequest.Item it : req.getEnvios()) job.encolarInyeccion(it);
+        log.info("Inyección de {} envío(s) encolada (job {})", req.getEnvios().size(), jobId);
+        return req.getEnvios().size();
+    }
+
+    /**
      * Drena la cola de órdenes de cancelación y las aplica sobre la corrida en curso: marca cada
      * vuelo-día como no disponible en el enrutador (capacidad 0) y devuelve al backlog los envíos ya
      * comprometidos en él, que {@code procesarBloque} liberará y re-enrutará en el bloque actual.
      *
      * @return cantidad de vuelo-días efectivamente cancelados en esta llamada (para acumular).
      */
-    private int aplicarCancelacionesVuelo(java.util.Queue<CancelacionVueloRequest> cola, Graph graph,
+    private int aplicarCancelacionesVuelo(String jobId, java.util.Queue<CancelacionVueloRequest> cola,
+                                          Graph graph,
                                           GreedyRepairOperator enrutador, BacklogManager backlog,
                                           List<VueloCancelado> registro,
                                           List<CancelacionVueloRequest> noAplicadas) {
@@ -366,6 +401,9 @@ public class PlanificadorService {
         // construye cuando hay cancelaciones reales que aplicar, evento raro).
         Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         int cancelados = 0;
+        // Vuelo-días efectivamente cancelados en este drenado, para persistir en cancelacion_vuelo
+        // al final (best-effort; solo si este job tiene tomada la persistencia).
+        List<PersistenciaSolucionService.CancelacionVueloDb> aPersistir = new ArrayList<>();
         CancelacionVueloRequest orden;
         while ((orden = cola.poll()) != null) {
             if (orden.getOrigen() == null || orden.getDestino() == null
@@ -401,19 +439,81 @@ public class PlanificadorService {
                 continue;
             }
 
+            List<Edge> edgesCancelados = new ArrayList<>();
             for (Edge e : matches) {
                 if (enrutador.addCancelledFlight(FlightKeyEncoder.flightKey(e.idx, epochMin))) {
                     cancelados++;
+                    edgesCancelados.add(e);
                 }
             }
             int afectados = reencolarAfectadosPorCancelacion(matches, epochDay, backlog, indiceVuelo);
             if (registro != null) {
                 registro.add(new VueloCancelado(origen, destino, dep, afectados));
             }
+            // Persistir un vuelo-día por edge efectivamente cancelado (normalmente 1). id_vuelo
+            // normalizado (ICAO-ICAO-HHMM) = el mismo que persiste tramo_ruta ⇒ FK a vuelo OK.
+            for (Edge e : edgesCancelados) {
+                aPersistir.add(new PersistenciaSolucionService.CancelacionVueloDb(
+                        PersistenciaSolucionService.normalizarIdVuelo(e.id), dep.toLocalDate(), afectados));
+            }
             log.info("Vuelo cancelado {}->{} salida {} ({} edge-día) — {} envíos devueltos al backlog",
                     origen, destino, dep, matches.size(), afectados);
         }
+        // Persistencia best-effort de los vuelo-días cancelados (no-op si este job no persiste).
+        persistencia.persistirCancelaciones(jobId, aPersistir);
         return cancelados;
+    }
+
+    /**
+     * Drena la cola de envíos inyectados a un {@code buffer} local del worker y libera los que ya entran
+     * en la ventana actual (readyTime {@code null} o anterior a {@code ctx.scEnd}); los de fecha futura
+     * quedan en el buffer hasta que el cursor los alcance. Cada liberado se construye como
+     * {@link LuggageBatch} sintético, se añade al backlog como {@code sinRuta} (lo recoge el flujo
+     * estándar de {@code procesarBloque}), se registra en {@code JobState.enviosInyectados} (para
+     * {@code /estado}) y se persiste en {@code envio_inyectado} (best-effort, solo si el job tiene la
+     * persistencia). Construye el batch directo (no vía {@code mapToBatches}) porque
+     * {@code fechaHoraRegistro} ya viene en UTC: pasar por el mapper restaría el offset otra vez.
+     *
+     * @return cantidad de envíos liberados en esta llamada.
+     */
+    private int aplicarInyeccionesEnvio(JobState job, List<InyeccionEnviosRequest.Item> buffer,
+                                        TemporalContext ctx, BacklogManager backlog) {
+        if (job == null || backlog == null) return 0;
+        // 1) Drenar la cola del job (escrita por HTTP) al buffer local del worker.
+        InyeccionEnviosRequest.Item it;
+        while ((it = job.getInyeccionesPendientes().poll()) != null) buffer.add(it);
+        if (buffer.isEmpty()) return 0;
+        // 2) Liberar los maduros: readyTime null o anterior al fin de la ventana actual.
+        List<EnvioInyectadoInfo> liberados = new ArrayList<>();
+        Iterator<InyeccionEnviosRequest.Item> itr = buffer.iterator();
+        int n = 0;
+        while (itr.hasNext()) {
+            InyeccionEnviosRequest.Item x = itr.next();
+            LocalDateTime ready = x.getFechaHoraRegistro();              // UTC o null
+            if (ready != null && !ready.isBefore(ctx.scEnd)) continue;   // aún futura → esperar
+            LocalDateTime readyEff = (ready != null) ? ready : ctx.scStart;  // honra el pasado para el SLA
+            Aeropuerto o = dataLoader.getAeropuerto(x.getOrigen());
+            Aeropuerto d = dataLoader.getAeropuerto(x.getDestino());
+            if (o == null || d == null) { itr.remove(); continue; }      // defensivo (ya validado al encolar)
+            int sla = TipoEnvio.derivar(o, d) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
+            String id = "INV-" + ctx.bloqueIdx + "-" + (n++);            // sintético; NO existe en ENVIO
+            LuggageBatch b = new LuggageBatch(id, x.getCantidad(), sla,
+                    o.getCodigo(), d.getCodigo(), readyEff);
+            b.setSintetico(true);
+            if (x.getClienteId() != null) b.setClienteId(x.getClienteId());
+            backlog.addSinRuta(b);                                       // el flujo estándar lo recoge
+            EnvioInyectadoInfo info = new EnvioInyectadoInfo(id, o.getCodigo(), d.getCodigo(),
+                    x.getCantidad(), x.getClienteId(), sla, readyEff.toString(), ctx.bloqueIdx);
+            job.getEnviosInyectados().add(info);                         // siempre (para /estado, en RAM)
+            liberados.add(info);
+            itr.remove();
+        }
+        if (!liberados.isEmpty()) {
+            persistencia.persistirInyecciones(job.getJobId(), liberados);   // BD activa, best-effort
+            log.info("Inyección: {} envío(s) liberado(s) al bloque {} (job {})",
+                    liberados.size(), ctx.bloqueIdx, job.getJobId());
+        }
+        return liberados.size();
     }
 
     /**
@@ -583,6 +683,8 @@ public class PlanificadorService {
         body.setVuelosCancelados(job.getVuelosCancelados());
         // Cancelaciones que no casaron ningún vuelo-día (p. ej. eje equivocado): no fallar en silencio.
         body.setCancelacionesNoAplicadas(job.getCancelacionesNoAplicadas());
+        // Envíos inyectados en vivo ya aplicados (liberados a la simulación), en orden de entrada.
+        body.setEnviosInyectados(job.getEnviosInyectados());
         return body;
     }
 
@@ -729,6 +831,7 @@ public class PlanificadorService {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             totalVuelosCancelados += aplicarCancelacionesVuelo(
+                    job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
                     graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
@@ -916,6 +1019,9 @@ public class PlanificadorService {
         // Cancelaciones que no casaron ningún vuelo-día: se exponen en /estado (no fallar en silencio).
         List<CancelacionVueloRequest> cancelacionesNoAplicadas =
                 job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
+        // Envíos inyectados en vivo: buffer local del worker con gate temporal (cada envío se libera
+        // cuando el cursor UTC alcanza su readyTime). El registro aplicado vive en el JobState.
+        List<InyeccionEnviosRequest.Item> bufferInyecciones = new ArrayList<>();
 
         List<BloqueSimulacion> bloques = new ArrayList<>(plan.size());
         Map<String, int[]> odStats = new HashMap<>();
@@ -947,8 +1053,11 @@ public class PlanificadorService {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             totalVuelosCancelados += aplicarCancelacionesVuelo(
+                    job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
                     graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
+            // Envíos inyectados en vivo: drenar y liberar los que ya entran en esta ventana (al backlog).
+            if (job != null) aplicarInyeccionesEnvio(job, bufferInyecciones, ctx, backlog);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
 
@@ -1169,6 +1278,7 @@ public class PlanificadorService {
             bloqueActual++;
             // Cancelaciones de vuelo ordenadas por el usuario en vivo: se aplican antes de procesar.
             aplicarCancelacionesVuelo(
+                    job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
                     graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
@@ -1314,7 +1424,16 @@ public class PlanificadorService {
             // (son ligeros, sin Edges).
             List<LuggageBatch> sinRuta = auditAcc != null
                     ? new ArrayList<>(auditAcc.sinRuta()) : new ArrayList<>();
-            boolean hayCancelados = vuelosCancelados != null && !vuelosCancelados.isEmpty();
+
+            // Índice id_vuelo→Edge (solo si persistió): reconstruye enrutados Y cancelaciones desde BD.
+            Map<String, Edge> indiceVuelo = persistio
+                    ? solucionBdReader.construirIndiceVuelo(graph) : null;
+            // Cancelaciones del CSV: desde BD si este job persistió (fuente de verdad, con
+            // enviosAfectados); si no, la lista en RAM (degradado, igual que los enrutados).
+            List<VueloCancelado> cancelaciones = persistio
+                    ? solucionBdReader.leerCancelaciones(indiceVuelo)
+                    : (vuelosCancelados != null ? vuelosCancelados : new ArrayList<>());
+            boolean hayCancelados = !cancelaciones.isEmpty();
             // Generar el ZIP si hay enrutados en BD, sin-ruta en RAM o vuelos cancelados.
             if (!persistio && sinRuta.isEmpty() && !hayCancelados) return;
 
@@ -1325,7 +1444,6 @@ public class PlanificadorService {
 
             // Enrutados: desde BD si este job persistió. Si no (caso raro de multi-job sin lock), la
             // Fase 5b ya no los retiene en RAM ⇒ ZIP degradado (solo sin-ruta + cancelados).
-            Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
             java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados =
                     persistio ? sink -> solucionBdReader.forEachEnrutado(indiceVuelo, sink)
                               : sink -> { };
@@ -1335,7 +1453,7 @@ public class PlanificadorService {
             Path path = Files.createTempFile("planificador-auditoria-" + jobId + "-", ".zip");
             path.toFile().deleteOnExit();
             int filas = auditoria.escribirZipStreaming(path, AuditoriaService.FILAS_POR_ARCHIVO, jobId,
-                    fuenteEnrutados, sinRuta, vuelosCancelados);
+                    fuenteEnrutados, sinRuta, cancelaciones);
             job.auditoriaZipPath = path;
             job.auditoriaCsvPath = null;
             job.auditoriaCsv = null;
