@@ -43,6 +43,16 @@ planificador:
     #   52560  → 365 días
     max-ventanas: 720
 
+    # Anti-OOM (Fase 1): nº de bloques recientes cuyas asignaciones + series por slot se retienen en
+    # RAM por job (el resto se purga; el front consume /bloques y /asignaciones incrementalmente).
+    # Antes era 500 hardcoded. Bajar = menos RAM; subir = más holgura si el front se atrasa.
+    max-bloques-buffer: 60
+
+    # Anti-OOM (Fase 2): nº de jobs TERMINADOS recientes que conservan sus bloques/acumuladores en RAM
+    # (el front anima el último); de los más viejos se liberan (sus rutas están en BD, el ZIP en disco).
+    # Evita que correr varias simulaciones seguidas acumule RAM hasta reiniciar.
+    max-jobs-en-memoria: 3
+
     # K FIJO por escenario (regla de negocio): E1=1, E2=144, E3=144. NO configurable por
     # request — los endpoints devuelven 400 si llega un k distinto.
     k-default-1: 1

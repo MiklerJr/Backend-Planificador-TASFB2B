@@ -1,6 +1,8 @@
 package com.tasfb2b.planificador.services;
 
+import com.tasfb2b.planificador.config.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -46,13 +48,46 @@ public class JobsRegistry {
                 return t;
             });
 
+    /** Anti-OOM (Fase 2): nº de jobs terminados recientes que conservan sus estructuras pesadas. */
+    private final int maxJobsEnMemoria;
+
+    /** Constructor de Spring: toma el tope de jobs en memoria del yaml. */
+    @Autowired
+    public JobsRegistry(PlanificadorProperties props) {
+        this.maxJobsEnMemoria = props.getScenario().getMaxJobsEnMemoria();
+    }
+
+    /** Constructor sin config para tests (default 3). */
+    public JobsRegistry() {
+        this.maxJobsEnMemoria = 3;
+    }
+
     /** Crea un nuevo job y lo registra. Devuelve el jobId generado. */
     public JobState crear(String escenario, int k) {
         String jobId = UUID.randomUUID().toString();
         JobState job = new JobState(jobId, escenario, k);
         jobs.put(jobId, job);
         log.info("Job creado: {} (escenario={}, K={}) — estado=encolado", jobId, escenario, k);
+        purgarJobsViejos();   // anti-OOM: libera los pesados de corridas anteriores ya terminadas
         return job;
+    }
+
+    /**
+     * Anti-OOM (Fase 2): libera las estructuras pesadas ({@link JobState#liberarPesados()}) de los jobs
+     * TERMINADOS más antiguos, dejando intactos los {@link #maxJobsEnMemoria} más recientes (por hora de
+     * fin) para que el front siga animando el último que terminó. No toca jobs activos ni elimina nada
+     * del registro: los metadatos ligeros (estado, fin, métricas, ruta del ZIP) se conservan.
+     */
+    public void purgarJobsViejos() {
+        List<JobState> terminados = new ArrayList<>();
+        for (JobState j : jobs.values()) {
+            if (!ESTADOS_ACTIVOS.contains(j.estado) && j.fin != null) terminados.add(j);
+        }
+        if (terminados.size() <= maxJobsEnMemoria) return;
+        terminados.sort(Comparator.comparing((JobState j) -> j.fin).reversed());
+        for (int i = maxJobsEnMemoria; i < terminados.size(); i++) {
+            terminados.get(i).liberarPesados();
+        }
     }
 
     /**
@@ -101,6 +136,11 @@ public class JobsRegistry {
     /** Devuelve el estado de un job o null si no existe. */
     public JobState get(String jobId) {
         return jobs.get(jobId);
+    }
+
+    /** Fase 0 (medición anti-OOM): nº de jobs retenidos en el registro (nunca se purgan hoy). */
+    public int cantidadJobs() {
+        return jobs.size();
     }
 
     /**

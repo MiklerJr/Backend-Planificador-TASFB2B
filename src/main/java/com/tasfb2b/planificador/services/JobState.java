@@ -380,6 +380,25 @@ public class JobState {
         }
     }
 
+    /** Fase 0 (medición anti-OOM): nº de vuelos-día acumulados en {@link #vuelosUsadosAcum}. */
+    public int vuelosUsadosAcumSize() {
+        synchronized (vuelosUsadosAcum) { return vuelosUsadosAcum.size(); }
+    }
+
+    /**
+     * Anti-OOM (Fase 2): suelta las estructuras pesadas de este job (bloques publicados, acumulador de
+     * vuelos usados, series de almacén, estado inicial y el resultado cacheado), conservando metadatos
+     * ligeros + {@link #metricasSnapshot} + {@link #auditoriaZipPath} (el ZIP vive en disco). Solo debe
+     * invocarse sobre jobs ya TERMINADOS (ver {@code JobsRegistry.purgarJobsViejos}). Idempotente.
+     */
+    public void liberarPesados() {
+        bloquesParciales.clear();
+        synchronized (vuelosUsadosAcum) { vuelosUsadosAcum.clear(); }
+        synchronized (seriesLock) { seriesAlmacenes.clear(); }
+        estadoInicial = null;
+        resultado = null;
+    }
+
     /** Vuelos usados acumulados desde el bloque {@code desde} (índice absoluto), ordenados. */
     public List<VuelosUsadosResponse.VueloUsado> vuelosUsadosDesde(int desde) {
         synchronized (vuelosUsadosAcum) {

@@ -124,6 +124,7 @@ public class PlanificadorService {
         long seedRes = resolverSeed(params.getSeed());
 
         JobState job = jobs.crear("2", k);
+        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = params.getFechaInicio();
@@ -161,6 +162,7 @@ public class PlanificadorService {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         JobState job = jobs.crear("3", k);
+        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
@@ -187,6 +189,7 @@ public class PlanificadorService {
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1();
         JobState job = jobs.crear("1", k);
+        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
@@ -884,7 +887,7 @@ public class PlanificadorService {
             backlog.purgarVencidas(ctx.scEnd);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen());
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job);
 
             // Colapso logístico por almacén lleno: DETIENE el escenario 2.
             if (rv.colapsoAlmacen()) {
@@ -1103,7 +1106,7 @@ public class PlanificadorService {
             backlog.purgarVencidas(ctx.scEnd);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen());
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job);
 
             // Colapso logístico por almacén lleno: DETIENE el escenario 1.
             if (rv.colapsoAlmacen()) {
@@ -1336,7 +1339,7 @@ public class PlanificadorService {
 
             logBloque(motorRes, bloqueActual, totalBloques,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(),
-                    backlogDefinitivo || rv.colapsoAlmacen());
+                    backlogDefinitivo || rv.colapsoAlmacen(), job);
 
             // Colapso logístico por almacén lleno (origen/escala/destino) — disparo inmediato.
             if (rv.colapsoAlmacen()) {
@@ -2805,10 +2808,31 @@ public class PlanificadorService {
      * dispara el colapso logístico.
      */
     private void logBloque(String motor, int bloque, int total, int envios, int onTime,
-                           int tardadas, int sinRuta, long taMs, int backlog, boolean colapso) {
+                           int tardadas, int sinRuta, long taMs, int backlog, boolean colapso,
+                           JobState job) {
         log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
                 bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
                 colapso ? " | COLAPSO" : "");
+        // Fase 0 (medición anti-OOM): huella de memoria periódica (heap + acumuladores del job).
+        if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job);
+    }
+
+    /**
+     * Fase 0 (medición anti-OOM): huella de memoria del proceso y de los acumuladores que crecen con
+     * el tiempo, para confirmar con números qué domina en corridas largas antes de tocar nada
+     * estructural. Heap en MB y % de uso; nº de bloques retenidos, tamaño de {@code vuelosUsadosAcum}
+     * y nº de jobs vivos en el registro (que hoy nunca se purgan).
+     */
+    private void logHuellaMemoria(JobState job) {
+        Runtime rt = Runtime.getRuntime();
+        long usadoMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
+        long comprometidoMb = rt.totalMemory() / (1024 * 1024);
+        long maxMb = rt.maxMemory() / (1024 * 1024);
+        log.info("MEM job={} | heap usado={}MB comprometido={}MB max={}MB ({}%) | bloques={} | "
+                        + "vuelosUsadosAcum={} | jobs={}",
+                job.getJobId(), usadoMb, comprometidoMb, maxMb,
+                maxMb > 0 ? (usadoMb * 100 / maxMb) : 0,
+                job.bloquesPublicados(), job.vuelosUsadosAcumSize(), jobs.cantidadJobs());
     }
 
     private record ResultadoVentana(

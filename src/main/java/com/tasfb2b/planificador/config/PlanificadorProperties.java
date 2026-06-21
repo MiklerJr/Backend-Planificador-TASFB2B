@@ -71,6 +71,22 @@ public class PlanificadorProperties {
          */
         private int maxVentanas = 0;
 
+        /**
+         * Anti-OOM (Fase 1): nº de bloques RECIENTES cuyas {@code asignaciones} y series por slot se
+         * retienen en RAM por job; los más viejos se purgan ({@code JobState.publicarBloque}). El front
+         * consume {@code /bloques} y {@code /asignaciones} incrementalmente, así que solo necesita la
+         * ventana reciente. Bajarlo reduce el pico de RAM; subirlo da más holgura si el front se atrasa.
+         */
+        private int maxBloquesBuffer = 60;
+
+        /**
+         * Anti-OOM (Fase 2): nº de jobs TERMINADOS más recientes que conservan sus estructuras pesadas
+         * en RAM (para que el front siga animando el último que terminó). De los más antiguos se liberan
+         * bloques/acumuladores (sus rutas viven en BD y el ZIP de auditoría en disco). Los jobs activos
+         * nunca se tocan. Evita que correr varias simulaciones acumule RAM hasta reiniciar.
+         */
+        private int maxJobsEnMemoria = 3;
+
         public int getMaxVentanas() {
             return maxVentanas;
         }
