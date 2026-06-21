@@ -6,6 +6,7 @@ import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import lombok.Data;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -161,6 +162,10 @@ public class JobState {
     private final List<BloqueSimulacion> bloquesParciales =
             new CopyOnWriteArrayList<>();
 
+    /** Fase 3 (anti-OOM): nº de bloques ya purgados del frente (offset base para índices absolutos). */
+    private volatile int baseBloquesPurgados = 0;
+    private final Object bloquesLock = new Object();
+
     /**
      * Fase 5b-2: nº de bloques RECIENTES cuyas {@code asignaciones} se mantienen en RAM. Las de
      * bloques más viejos se purgan (el peso O(envíos)); sus agregados ya viven en
@@ -278,16 +283,19 @@ public class JobState {
     /** Publica un bloque procesado para que el front lo consuma incrementalmente. */
     public void publicarBloque(BloqueSimulacion bloque) {
         if (bloque == null) return;
-        acumularVuelosUsados(bloque);          // extraer el agregado ANTES de cualquier purga
-        bloquesParciales.add(bloque);
-        // Purga el peso O(envíos): suelta las asignaciones del bloque que sale de la ventana de
-        // retención (sus cargas/ocupaciones/métricas se conservan en el propio bloque).
-        int idx = bloquesParciales.size() - maxBloquesConAsignaciones - 1;
-        if (idx >= 0) {
-            BloqueSimulacion viejo = bloquesParciales.get(idx);
-            if (viejo.getAsignaciones() != null) viejo.setAsignaciones(null);
+        acumularVuelosUsados(bloque);          // extraer el agregado ANTES de purgar
+        synchronized (bloquesLock) {
+            bloquesParciales.add(bloque);
+            // Fase 3 (anti-OOM): buffer deslizante. Suelta los bloques fuera de la ventana reciente
+            // (con sus cargasVuelos/ocupacionAlmacenes). El histórico de /vuelos/carga se reconstruye
+            // desde BD; /almacenes/ocupacion queda acotado a la ventana. El front consume /bloques y
+            // /asignaciones incrementalmente.
+            while (bloquesParciales.size() > maxBloquesConAsignaciones) {
+                bloquesParciales.remove(0);
+                baseBloquesPurgados++;
+            }
         }
-        purgarVuelosUsadosViejos();   // Fase 3: acota vuelosUsadosAcum a la ventana (histórico → BD)
+        purgarVuelosUsadosViejos();   // acota vuelosUsadosAcum a la ventana (histórico → BD)
     }
 
     /**
@@ -297,7 +305,7 @@ public class JobState {
      * frente: se remueven hasta encontrar una dentro de la ventana.
      */
     private void purgarVuelosUsadosViejos() {
-        int corte = bloquesParciales.size() - maxBloquesConAsignaciones;
+        int corte = bloquesPublicados() - maxBloquesConAsignaciones;   // total, no solo la ventana
         if (corte <= 0) return;
         synchronized (vuelosUsadosAcum) {
             Iterator<VueloUsadoAcc> it = vuelosUsadosAcum.values().iterator();
@@ -334,16 +342,24 @@ public class JobState {
         }
     }
 
-    /** Devuelve los bloques publicados desde {@code desde} (inclusive). */
+    /**
+     * Devuelve los bloques publicados desde {@code desde} (índice ABSOLUTO, inclusive). Fase 3: si
+     * {@code desde} ya fue purgado del buffer deslizante, arranca en la base (el front consume
+     * incrementalmente; el histórico de los agregados se reconstruye desde BD).
+     */
     public List<BloqueSimulacion> bloquesDesde(int desde) {
-        int n = bloquesParciales.size();
-        if (desde < 0) desde = 0;
-        if (desde >= n) return List.of();
-        return List.copyOf(bloquesParciales.subList(desde, n));
+        synchronized (bloquesLock) {
+            if (desde < baseBloquesPurgados) desde = baseBloquesPurgados;
+            int rel = desde - baseBloquesPurgados;
+            if (rel < 0 || rel >= bloquesParciales.size()) return List.of();
+            return List.copyOf(bloquesParciales.subList(rel, bloquesParciales.size()));
+        }
     }
 
     public int bloquesPublicados() {
-        return bloquesParciales.size();
+        synchronized (bloquesLock) {
+            return baseBloquesPurgados + bloquesParciales.size();
+        }
     }
 
     /**
@@ -352,8 +368,10 @@ public class JobState {
      * referencia por defecto cuando el front no pasa uno explícito.
      */
     public BloqueSimulacion ultimoBloque() {
-        int n = bloquesParciales.size();
-        return n == 0 ? null : bloquesParciales.get(n - 1);
+        synchronized (bloquesLock) {
+            int n = bloquesParciales.size();
+            return n == 0 ? null : bloquesParciales.get(n - 1);
+        }
     }
 
     // ── Fase 5b-2: acumulador incremental de vuelos usados (reemplaza la reconstrucción desde
@@ -413,8 +431,21 @@ public class JobState {
      * ligeros + {@link #metricasSnapshot} + {@link #auditoriaZipPath} (el ZIP vive en disco). Solo debe
      * invocarse sobre jobs ya TERMINADOS (ver {@code JobsRegistry.purgarJobsViejos}). Idempotente.
      */
+    /**
+     * Anti-OOM (disco): borra el ZIP de auditoría de este job (best-effort) y olvida su ruta. Tras esto
+     * {@code GET /jobs/{id}/auditoria.zip} responde 204. Cada ZIP de un E3 largo pesa cientos de MB y
+     * {@code deleteOnExit} solo limpia al cerrar la JVM, así que se borra activamente.
+     */
+    public void borrarZip() {
+        Path z = auditoriaZipPath;
+        if (z != null) {
+            auditoriaZipPath = null;
+            try { Files.deleteIfExists(z); } catch (Exception ignored) { /* best-effort */ }
+        }
+    }
+
     public void liberarPesados() {
-        bloquesParciales.clear();
+        synchronized (bloquesLock) { bloquesParciales.clear(); }
         synchronized (vuelosUsadosAcum) { vuelosUsadosAcum.clear(); }
         synchronized (seriesLock) { seriesAlmacenes.clear(); }
         estadoInicial = null;

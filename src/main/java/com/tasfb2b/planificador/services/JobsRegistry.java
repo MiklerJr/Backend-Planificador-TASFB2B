@@ -68,8 +68,21 @@ public class JobsRegistry {
         JobState job = new JobState(jobId, escenario, k);
         jobs.put(jobId, job);
         log.info("Job creado: {} (escenario={}, K={}) — estado=encolado", jobId, escenario, k);
-        purgarJobsViejos();   // anti-OOM: libera los pesados de corridas anteriores ya terminadas
+        purgarJobsViejos();   // anti-OOM (RAM): libera los pesados de corridas anteriores ya terminadas
+        purgarZipsViejos();   // anti-OOM (disco): borra los ZIP de auditoría de corridas anteriores
         return job;
+    }
+
+    /**
+     * Anti-OOM (disco): al iniciar un nuevo job borra los ZIP de auditoría de las corridas TERMINADAS
+     * anteriores (cada ZIP de un E3 largo pesa cientos de MB; {@code deleteOnExit} solo limpia al cerrar
+     * la JVM). Así nunca se acumulan: a lo sumo queda el ZIP de la corrida en curso, una vez termine, y
+     * se borra al arrancar la siguiente.
+     */
+    public void purgarZipsViejos() {
+        for (JobState j : jobs.values()) {
+            if (!ESTADOS_ACTIVOS.contains(j.estado)) j.borrarZip();
+        }
     }
 
     /**

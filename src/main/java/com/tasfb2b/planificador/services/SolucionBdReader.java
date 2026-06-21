@@ -3,6 +3,8 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.dto.CargaVuelo;
+import com.tasfb2b.planificador.dto.CargaVueloRow;
 import com.tasfb2b.planificador.dto.VueloCancelado;
 import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.model.Aeropuerto;
@@ -206,16 +208,17 @@ public class SolucionBdReader {
     }
 
     /**
-     * Fase 3 (anti-OOM): índice {@code id_vuelo} (BD, {@code ICAO-ICAO-HHMM}) → {@code vueloId} del front
-     * ({@code ICAO-ICAO-HH:MM}). La clave se deriva con {@code normalizarIdVuelo(vueloFrontId(v))} (NO de
-     * {@code Vuelo.getIdVuelo()}, que {@code DataLoader} deja null en prod); así casa con {@code tramo_ruta.id_vuelo}.
+     * Fase 3 (anti-OOM): índice {@code id_vuelo} (BD, {@code ICAO-ICAO-HHMM}) → {@link Vuelo} del dataset.
+     * La clave se deriva con {@code normalizarIdVuelo(vueloFrontId(v))} (NO de {@code Vuelo.getIdVuelo()},
+     * que {@code DataLoader} deja null en prod); así casa con {@code tramo_ruta.id_vuelo}. Da el {@code Vuelo}
+     * para reconstruir el vueloId del front ({@code vueloFrontId} = {@code Edge.id}) y la capacidad.
      */
-    private Map<String, String> indiceVueloFrontPorIdBd() {
-        Map<String, String> idx = new HashMap<>();
+    private Map<String, Vuelo> indiceVueloPorIdBd() {
+        Map<String, Vuelo> idx = new HashMap<>();
         for (Vuelo v : dataLoader.getVuelos()) {
             String front = SimulacionFormat.vueloFrontId(v);
             if (front != null && !front.isEmpty()) {
-                idx.put(PersistenciaSolucionService.normalizarIdVuelo(front), front);
+                idx.put(PersistenciaSolucionService.normalizarIdVuelo(front), v);
             }
         }
         return idx;
@@ -232,7 +235,7 @@ public class SolucionBdReader {
      * ({@code INV-…}) no están en {@code ruta_asignada} (sin FK) ⇒ no aparecen, igual que su ruta no se persiste.
      */
     public List<VuelosUsadosResponse.VueloUsado> reconstruirVuelosUsados() {
-        Map<String, String> idxFront = indiceVueloFrontPorIdBd();
+        Map<String, Vuelo> idx = indiceVueloPorIdBd();
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
                 + "COUNT(DISTINCT r.id_envio) AS envios, COALESCE(SUM(e.cantidad_maletas), 0) AS maletas "
                 + "FROM tramo_ruta t "
@@ -242,7 +245,8 @@ public class SolucionBdReader {
                 + "ORDER BY t.hora_salida_utc, t.id_vuelo";
         return jdbc.query(sql, (rs, rowNum) -> {
             String idBD = rs.getString("id_vuelo");
-            String vueloFront = idxFront.getOrDefault(idBD, idBD);
+            Vuelo v = idx.get(idBD);
+            String vueloFront = v != null ? SimulacionFormat.vueloFrontId(v) : idBD;
             String[] partes = vueloFront.split("-");   // ICAO-ICAO-HH:MM
             String salida = rs.getTimestamp("hora_salida_utc").toLocalDateTime().toString();
             VuelosUsadosResponse.VueloUsado u = new VuelosUsadosResponse.VueloUsado();
@@ -257,6 +261,52 @@ public class SolucionBdReader {
             u.setCantidadEnvios(rs.getInt("envios"));
             u.setEnvioIds(List.of());
             return u;
+        });
+    }
+
+    /**
+     * Fase 3 (anti-OOM): reconstruye el histórico COMPLETO de {@code /vuelos/carga} desde las rutas
+     * ACTIVAS en BD, para servirlo cuando el buffer deslizante ya soltó los bloques viejos. Misma
+     * agregación por vuelo-día que {@link #reconstruirVuelosUsados}; {@code cargaAsignada = SUM(cantidad)},
+     * capacidad/%/semáforo del {@link Vuelo} del dataset. {@code bloqueIdx} = orden temporal;
+     * {@code horaInicio/horaFin} quedan null (no hay bloque en BD).
+     */
+    public List<CargaVueloRow> reconstruirCargasVuelos() {
+        Map<String, Vuelo> idx = indiceVueloPorIdBd();
+        String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
+                + "COALESCE(SUM(e.cantidad_maletas), 0) AS carga "
+                + "FROM tramo_ruta t "
+                + "JOIN ruta_asignada r ON r.id_ruta = t.id_ruta AND r.activa "
+                + "JOIN envio e ON e.id_envio = r.id_envio "
+                + "GROUP BY t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc "
+                + "ORDER BY t.hora_salida_utc, t.id_vuelo";
+        return jdbc.query(sql, (rs, rowNum) -> {
+            String idBD = rs.getString("id_vuelo");
+            Vuelo v = idx.get(idBD);
+            String vueloFront = v != null ? SimulacionFormat.vueloFrontId(v) : idBD;
+            String[] partes = vueloFront.split("-");
+            String salida = rs.getTimestamp("hora_salida_utc").toLocalDateTime().toString();
+            CargaVuelo c = new CargaVuelo();
+            c.setVueloId(vueloFront);
+            c.setOrigen(partes.length > 0 ? partes[0] : "");
+            c.setDestino(partes.length > 1 ? partes[1] : "");
+            c.setFechaSalida(salida);
+            c.setFechaLlegada(rs.getTimestamp("hora_llegada_utc").toLocalDateTime().toString());
+            c.setCapacidadMaxima(v != null && v.getCapacidad() != null ? v.getCapacidad() : 0);
+            c.setCargaAsignada(rs.getInt("carga"));
+            SimulacionFormat.completarCargaVuelo(c);   // porcentajeCarga + semáforo
+            CargaVueloRow row = new CargaVueloRow();
+            row.setVueloId(c.getVueloId());
+            row.setOrigen(c.getOrigen());
+            row.setDestino(c.getDestino());
+            row.setFechaSalida(c.getFechaSalida());
+            row.setFechaLlegada(c.getFechaLlegada());
+            row.setCapacidadMaxima(c.getCapacidadMaxima());
+            row.setCargaAsignada(c.getCargaAsignada());
+            row.setPorcentajeCarga(c.getPorcentajeCarga());
+            row.setSemaforo(c.getSemaforo());
+            row.setBloqueIdx(rowNum);   // orden temporal, no el bloque de cálculo
+            return row;
         });
     }
 

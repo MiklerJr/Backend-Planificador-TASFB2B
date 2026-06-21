@@ -840,6 +840,9 @@ public class PlanificadorService {
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
             bloques.add(rv.bloque);
+            // Fase 3 (anti-OOM): en async la lista local es buffer deslizante (los bloques los sirve
+            // job.bloquesParciales, ya acotado). En síncrono legacy (sin job) se conserva todo.
+            if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -887,7 +890,8 @@ public class PlanificadorService {
             backlog.purgarVencidas(ctx.scEnd);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job);
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job,
+                    auditAcc.sinRutaSize());
 
             // Colapso logístico por almacén lleno: DETIENE el escenario 2.
             if (rv.colapsoAlmacen()) {
@@ -939,7 +943,7 @@ public class PlanificadorService {
         bloquesCacheados = bloques;
         long tiempoMs = System.currentTimeMillis() - inicio;
         log.info("E2 completado en {} ms — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms (Sa={} ms) | backlog: pico={} actual={} definitivo={}",
-                tiempoMs, bloques.size(), totalEnvios, totalMaletas,
+                tiempoMs, bloqueActual, totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(), saMs,
                 backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
@@ -949,7 +953,7 @@ public class PlanificadorService {
         logDiagnosticos(odStats, graph, enrutador);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
-                dataLoader.getVuelos(), bloques.size(), plan.get(0).scStart.toLocalDate());
+                dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
                 colapsoAlmacenDetectado, bloqueColapsoAlmacen);
@@ -1067,6 +1071,9 @@ public class PlanificadorService {
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
+            // Fase 3 (anti-OOM): en async la lista local es buffer deslizante (los bloques los sirve
+            // job.bloquesParciales, ya acotado). En síncrono legacy (sin job) se conserva todo.
+            if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -1106,7 +1113,8 @@ public class PlanificadorService {
             backlog.purgarVencidas(ctx.scEnd);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job);
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job,
+                    auditAcc.sinRutaSize());
 
             // Colapso logístico por almacén lleno: DETIENE el escenario 1.
             if (rv.colapsoAlmacen()) {
@@ -1145,7 +1153,7 @@ public class PlanificadorService {
         bloquesCacheados = bloques;
         long tiempoMs = System.currentTimeMillis() - inicio;
         log.info("E1 completado en {} ms — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms (Sa={} ms) | backlog: pico={} actual={} definitivo={}",
-                tiempoMs, bloques.size(), totalEnvios, totalMaletas,
+                tiempoMs, bloqueActual, totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(), saMs,
                 backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
@@ -1155,7 +1163,7 @@ public class PlanificadorService {
         logDiagnosticos(odStats, graph, enrutador);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
-                dataLoader.getVuelos(), bloques.size(), plan.get(0).scStart.toLocalDate());
+                dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
                 colapsoAlmacenDetectado, bloqueColapsoAlmacen);
@@ -1290,6 +1298,9 @@ public class PlanificadorService {
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
+            // Fase 3 (anti-OOM): en async la lista local es buffer deslizante (los bloques los sirve
+            // job.bloquesParciales, ya acotado). En síncrono legacy (sin job) se conserva todo.
+            if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -1339,7 +1350,7 @@ public class PlanificadorService {
 
             logBloque(motorRes, bloqueActual, totalBloques,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(),
-                    backlogDefinitivo || rv.colapsoAlmacen(), job);
+                    backlogDefinitivo || rv.colapsoAlmacen(), job, auditAcc.sinRutaSize());
 
             // Colapso logístico por almacén lleno (origen/escala/destino) — disparo inmediato.
             if (rv.colapsoAlmacen()) {
@@ -1385,13 +1396,13 @@ public class PlanificadorService {
                                 : ("cancelado_front".equals(motivoParada)
                                         ? "CANCELADO por front en bloque " + bloqueActual
                                         : "fin por falta de datos")),
-                bloques.size(), totalEnvios, totalMaletas,
+                bloqueActual, totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(),
                 backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo(), tiempoMs);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
-                dataLoader.getVuelos(), bloques.size(), plan.get(0).scStart.toLocalDate());
+                dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, 0, collapsoDetectado, bloqueColapso);
         llenarMetricasTa(res.getMetricas(), taStats, saMs);
@@ -2671,6 +2682,7 @@ public class PlanificadorService {
 
         boolean isEmpty()                    { return resumen.isEmpty(); }
         Collection<LuggageBatch> sinRuta()   { return sinRuta.values(); }
+        int sinRutaSize()                    { return sinRuta.size(); }   // Fase 0/E3: medición de huella
         Collection<LuggageBatch> completos() { return completos != null ? completos.values() : List.of(); }
 
         TotalesUnicos totalesUnicos() {
@@ -2809,12 +2821,12 @@ public class PlanificadorService {
      */
     private void logBloque(String motor, int bloque, int total, int envios, int onTime,
                            int tardadas, int sinRuta, long taMs, int backlog, boolean colapso,
-                           JobState job) {
+                           JobState job, int sinRutaRam) {
         log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
                 bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
                 colapso ? " | COLAPSO" : "");
         // Fase 0 (medición anti-OOM): huella de memoria periódica (heap + acumuladores del job).
-        if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job);
+        if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam);
     }
 
     /**
@@ -2823,16 +2835,16 @@ public class PlanificadorService {
      * estructural. Heap en MB y % de uso; nº de bloques retenidos, tamaño de {@code vuelosUsadosAcum}
      * y nº de jobs vivos en el registro (que hoy nunca se purgan).
      */
-    private void logHuellaMemoria(JobState job) {
+    private void logHuellaMemoria(JobState job, int sinRutaRam) {
         Runtime rt = Runtime.getRuntime();
         long usadoMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
         long comprometidoMb = rt.totalMemory() / (1024 * 1024);
         long maxMb = rt.maxMemory() / (1024 * 1024);
         log.info("MEM job={} | heap usado={}MB comprometido={}MB max={}MB ({}%) | bloques={} | "
-                        + "vuelosUsadosAcum={} | jobs={}",
+                        + "vuelosUsadosAcum={} | sinRutaRam={} | jobs={}",
                 job.getJobId(), usadoMb, comprometidoMb, maxMb,
                 maxMb > 0 ? (usadoMb * 100 / maxMb) : 0,
-                job.bloquesPublicados(), job.vuelosUsadosAcumSize(), jobs.cantidadJobs());
+                job.bloquesPublicados(), job.vuelosUsadosAcumSize(), sinRutaRam, jobs.cantidadJobs());
     }
 
     private record ResultadoVentana(

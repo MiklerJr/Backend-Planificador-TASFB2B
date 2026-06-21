@@ -111,10 +111,18 @@ public class JobQueryService {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
-        List<CargaVueloRow> vuelos = new ArrayList<>();
-        for (BloqueSimulacion bloque : job.bloquesDesde(0)) {
-            for (CargaVuelo carga : cargasDelBloque(bloque)) {
-                vuelos.add(cargaVueloRow(carga, bloque));
+        List<CargaVueloRow> vuelos;
+        // Fase 3 (anti-OOM): si el buffer deslizante ya soltó bloques (hay histórico fuera de RAM) y el
+        // job tiene su solución en BD, se reconstruye el histórico COMPLETO desde BD; si no, la ventana RAM.
+        if (job.bloquesPublicados() > job.getMaxBloquesConAsignaciones()
+                && solucionBdReader != null && persistencia != null && persistencia.reflejaEnBd(jobId)) {
+            vuelos = solucionBdReader.reconstruirCargasVuelos();
+        } else {
+            vuelos = new ArrayList<>();
+            for (BloqueSimulacion bloque : job.bloquesDesde(0)) {
+                for (CargaVuelo carga : cargasDelBloque(bloque)) {
+                    vuelos.add(cargaVueloRow(carga, bloque));
+                }
             }
         }
 
@@ -163,6 +171,8 @@ public class JobQueryService {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
+        // Fase 3 (anti-OOM): la ocupación concurrente por slot NO se deriva directo de BD ⇒ se acota a
+        // la VENTANA reciente (bloquesDesde(0) tras el buffer deslizante). El front la consume incremental.
         List<OcupacionAlmacenRow> almacenes = new ArrayList<>();
         for (BloqueSimulacion bloque : job.bloquesDesde(0)) {
             for (OcupacionAlmacen ocupacion : ocupacionesDelBloque(bloque)) {
