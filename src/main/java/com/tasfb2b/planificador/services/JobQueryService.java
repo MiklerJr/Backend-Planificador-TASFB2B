@@ -6,6 +6,7 @@ import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.util.DataLoader;
 import com.tasfb2b.planificador.util.SimulacionFormat;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -31,10 +32,22 @@ public class JobQueryService {
 
     private final JobsRegistry jobs;
     private final DataLoader dataLoader;
+    /** Fase 3 (anti-OOM): reconstruye agregados desde BD cuando se pide histórico fuera de la ventana RAM. */
+    private final SolucionBdReader solucionBdReader;
+    private final PersistenciaSolucionService persistencia;
 
-    public JobQueryService(JobsRegistry jobs, DataLoader dataLoader) {
+    @Autowired
+    public JobQueryService(JobsRegistry jobs, DataLoader dataLoader,
+                           SolucionBdReader solucionBdReader, PersistenciaSolucionService persistencia) {
         this.jobs = jobs;
         this.dataLoader = dataLoader;
+        this.solucionBdReader = solucionBdReader;
+        this.persistencia = persistencia;
+    }
+
+    /** Constructor sin acceso a BD para tests (la reconstrucción desde BD queda deshabilitada). */
+    public JobQueryService(JobsRegistry jobs, DataLoader dataLoader) {
+        this(jobs, dataLoader, null, null);
     }
 
     private JobState getJob(String jobId) {
@@ -125,7 +138,16 @@ public class JobQueryService {
         int desdeNormalizado = Math.max(0, desde);
         // Fase 5b-2: el agregado vive en el JobState (acumulado por bloque), no se reconstruye desde
         // las asignaciones (que se purgan de los bloques viejos).
-        List<VuelosUsadosResponse.VueloUsado> vuelos = job.vuelosUsadosDesde(desdeNormalizado);
+        // Fase 3 (anti-OOM): si se pide histórico FUERA de la ventana reciente en RAM y el job tiene su
+        // solución en BD, se reconstruye el histórico COMPLETO desde BD; si no, se sirve la ventana RAM.
+        int corte = Math.max(0, job.bloquesPublicados() - job.getMaxBloquesConAsignaciones());
+        List<VuelosUsadosResponse.VueloUsado> vuelos;
+        if (desdeNormalizado < corte && solucionBdReader != null
+                && persistencia != null && persistencia.reflejaEnBd(jobId)) {
+            vuelos = solucionBdReader.reconstruirVuelosUsados();
+        } else {
+            vuelos = job.vuelosUsadosDesde(desdeNormalizado);
+        }
 
         VuelosUsadosResponse response = new VuelosUsadosResponse();
         response.setJobId(jobId);

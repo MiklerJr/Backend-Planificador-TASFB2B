@@ -4,9 +4,12 @@ import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.VueloCancelado;
+import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.TipoEnvio;
+import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.util.SimulacionFormat;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -199,6 +202,61 @@ public class SolucionBdReader {
             }
             LocalDateTime salidaUtc = fecha.atStartOfDay().plusMinutes(depMin);
             return new VueloCancelado(origen, destino, salidaUtc, afectados);
+        });
+    }
+
+    /**
+     * Fase 3 (anti-OOM): índice {@code id_vuelo} (BD, {@code ICAO-ICAO-HHMM}) → {@code vueloId} del front
+     * ({@code ICAO-ICAO-HH:MM}). La clave se deriva con {@code normalizarIdVuelo(vueloFrontId(v))} (NO de
+     * {@code Vuelo.getIdVuelo()}, que {@code DataLoader} deja null en prod); así casa con {@code tramo_ruta.id_vuelo}.
+     */
+    private Map<String, String> indiceVueloFrontPorIdBd() {
+        Map<String, String> idx = new HashMap<>();
+        for (Vuelo v : dataLoader.getVuelos()) {
+            String front = SimulacionFormat.vueloFrontId(v);
+            if (front != null && !front.isEmpty()) {
+                idx.put(PersistenciaSolucionService.normalizarIdVuelo(front), front);
+            }
+        }
+        return idx;
+    }
+
+    /**
+     * Fase 3 (anti-OOM): reconstruye el histórico COMPLETO de {@code /vuelos/usados} desde las rutas
+     * ACTIVAS en BD, para servirlo cuando el acumulador en RAM ya purgó los bloques fuera de la ventana
+     * reciente. El {@code vueloId} se devuelve en formato front ({@code ICAO-ICAO-HH:MM}, vía
+     * {@link SimulacionFormat#vueloFrontId} = {@code Edge.id}) para que el front lo case igual que en vivo.
+     *
+     * <p><b>bloqueIdx:</b> es un índice de ORDEN temporal (por {@code hora_salida_utc}), NO el bloque de
+     * cálculo: la BD no guarda el bloque. {@code envioIds} va vacío en el histórico (peso). Los inyectados
+     * ({@code INV-…}) no están en {@code ruta_asignada} (sin FK) ⇒ no aparecen, igual que su ruta no se persiste.
+     */
+    public List<VuelosUsadosResponse.VueloUsado> reconstruirVuelosUsados() {
+        Map<String, String> idxFront = indiceVueloFrontPorIdBd();
+        String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
+                + "COUNT(DISTINCT r.id_envio) AS envios, COALESCE(SUM(e.cantidad_maletas), 0) AS maletas "
+                + "FROM tramo_ruta t "
+                + "JOIN ruta_asignada r ON r.id_ruta = t.id_ruta AND r.activa "
+                + "JOIN envio e ON e.id_envio = r.id_envio "
+                + "GROUP BY t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc "
+                + "ORDER BY t.hora_salida_utc, t.id_vuelo";
+        return jdbc.query(sql, (rs, rowNum) -> {
+            String idBD = rs.getString("id_vuelo");
+            String vueloFront = idxFront.getOrDefault(idBD, idBD);
+            String[] partes = vueloFront.split("-");   // ICAO-ICAO-HH:MM
+            String salida = rs.getTimestamp("hora_salida_utc").toLocalDateTime().toString();
+            VuelosUsadosResponse.VueloUsado u = new VuelosUsadosResponse.VueloUsado();
+            u.setVueloId(vueloFront);
+            u.setFlightKey(vueloFront + "|" + salida);
+            u.setBloqueIdx(rowNum);   // orden temporal, no el bloque de cálculo (la BD no lo guarda)
+            u.setOrigen(partes.length > 0 ? partes[0] : "");
+            u.setDestino(partes.length > 1 ? partes[1] : "");
+            u.setFechaSalida(salida);
+            u.setFechaLlegada(rs.getTimestamp("hora_llegada_utc").toLocalDateTime().toString());
+            u.setCantidadMaletas(rs.getInt("maletas"));
+            u.setCantidadEnvios(rs.getInt("envios"));
+            u.setEnvioIds(List.of());
+            return u;
         });
     }
 

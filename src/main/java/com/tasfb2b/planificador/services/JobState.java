@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -184,6 +185,9 @@ public class JobState {
     /** Ajusta la ventana de retención de asignaciones (desde el yaml). */
     public void setMaxBloquesConAsignaciones(int n) { if (n > 0) this.maxBloquesConAsignaciones = n; }
 
+    /** Fase 3 (anti-OOM): tamaño de la ventana reciente retenida en RAM (para decidir RAM vs BD). */
+    public int getMaxBloquesConAsignaciones() { return maxBloquesConAsignaciones; }
+
     public JobState(String jobId, String escenario, int k) {
         this.jobId     = jobId;
         this.escenario = escenario;
@@ -282,6 +286,24 @@ public class JobState {
         if (idx >= 0) {
             BloqueSimulacion viejo = bloquesParciales.get(idx);
             if (viejo.getAsignaciones() != null) viejo.setAsignaciones(null);
+        }
+        purgarVuelosUsadosViejos();   // Fase 3: acota vuelosUsadosAcum a la ventana (histórico → BD)
+    }
+
+    /**
+     * Fase 3 (anti-OOM): suelta del acumulador los vuelos-día de bloques fuera de la ventana reciente.
+     * El histórico de {@code /vuelos/usados} se reconstruye desde BD ({@code SolucionBdReader}). Las
+     * entradas se insertan en orden de bloqueIdx creciente (LinkedHashMap), así que las viejas están al
+     * frente: se remueven hasta encontrar una dentro de la ventana.
+     */
+    private void purgarVuelosUsadosViejos() {
+        int corte = bloquesParciales.size() - maxBloquesConAsignaciones;
+        if (corte <= 0) return;
+        synchronized (vuelosUsadosAcum) {
+            Iterator<VueloUsadoAcc> it = vuelosUsadosAcum.values().iterator();
+            while (it.hasNext()) {
+                if (it.next().bloqueIdx < corte) it.remove(); else break;
+            }
         }
     }
 
