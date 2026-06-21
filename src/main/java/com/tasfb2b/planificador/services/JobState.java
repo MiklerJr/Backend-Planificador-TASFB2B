@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.services;
 
+import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.AlertaColapso;
 import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.*;
@@ -117,6 +118,13 @@ public class JobState {
     public volatile Path auditoriaZipPath;
     /** Tamaño en filas de la auditoría (sin contar la cabecera). */
     public volatile int auditoriaFilas;
+    /**
+     * Envíos SIN ruta de esta corrida (ligeros: sin {@link com.tasfb2b.planificador.algorithm.aco.Edge}),
+     * retenidos para la auditoría ON-DEMAND: no se persisten en BD (Fase 5a solo guarda enrutados), así
+     * que sin esto el ZIP perdería los fallos. Se llena al terminar el job y lo libera
+     * {@link #liberarPesados()} cuando el job se evicciona (anti-OOM).
+     */
+    public volatile List<LuggageBatch> auditoriaSinRuta;
 
     public final LocalDateTime inicio = LocalDateTime.now();
     public volatile LocalDateTime fin;
@@ -432,9 +440,11 @@ public class JobState {
      * invocarse sobre jobs ya TERMINADOS (ver {@code JobsRegistry.purgarJobsViejos}). Idempotente.
      */
     /**
-     * Anti-OOM (disco): borra el ZIP de auditoría de este job (best-effort) y olvida su ruta. Tras esto
-     * {@code GET /jobs/{id}/auditoria.zip} responde 204. Cada ZIP de un E3 largo pesa cientos de MB y
-     * {@code deleteOnExit} solo limpia al cerrar la JVM, así que se borra activamente.
+     * Anti-OOM (disco): borra el ZIP de auditoría YA generado de este job (best-effort) y olvida su
+     * ruta. La auditoría se genera on-demand, así que tras esto un nuevo {@code GET
+     * /jobs/{id}/auditoria.zip} simplemente la vuelve a generar (si la solución sigue en BD). Cada ZIP
+     * de un E3 largo pesa cientos de MB y {@code deleteOnExit} solo limpia al cerrar la JVM, así que se
+     * borra activamente.
      */
     public void borrarZip() {
         Path z = auditoriaZipPath;
@@ -450,6 +460,7 @@ public class JobState {
         synchronized (seriesLock) { seriesAlmacenes.clear(); }
         estadoInicial = null;
         resultado = null;
+        auditoriaSinRuta = null;   // los sin-ruta retenidos para la auditoría on-demand ya no se necesitan
     }
 
     /** Vuelos usados acumulados desde el bloque {@code desde} (índice absoluto), ordenados. */

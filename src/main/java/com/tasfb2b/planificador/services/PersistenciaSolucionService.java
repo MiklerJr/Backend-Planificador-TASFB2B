@@ -93,6 +93,20 @@ public class PersistenciaSolucionService {
         }
     }
 
+    /**
+     * Toma el lock de persistencia para LEER la solución de {@code jobId} (auditoría ON-DEMAND), sin
+     * TRUNCAR. Solo lo concede si {@code jobId} es la corrida reflejada en BD ({@link #reflejaEnBd}) y
+     * nadie más tiene el lock; así un {@link #iniciarCorrida} concurrente no puede TRUNCAR la solución
+     * mientras se genera el ZIP. Liberar con {@link #finalizarCorrida} (no toca {@code corridaPersistidaEnBd}).
+     *
+     * @return {@code true} si tomó el lock para lectura; {@code false} si la solución ya fue reemplazada
+     *         o hay otra corrida activa (el llamador debe responder 409).
+     */
+    public boolean tomarParaLectura(String jobId) {
+        if (jobId == null || !jobId.equals(corridaPersistidaEnBd)) return false;
+        return corridaActiva.compareAndSet(null, jobId);
+    }
+
     /** Libera la persistencia si la tenía {@code jobId}. Llamar en {@code finally} al terminar. */
     public void finalizarCorrida(String jobId) {
         if (jobId != null && corridaActiva.compareAndSet(jobId, null)) {

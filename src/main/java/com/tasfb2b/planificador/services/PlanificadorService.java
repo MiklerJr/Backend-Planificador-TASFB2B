@@ -869,8 +869,8 @@ public class PlanificadorService {
                 // (para no perder la persistencia del último bloque al cancelar).
                 persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
                 // Parada por orden del front: el usuario llamó a /cancelar. Igual que E1/E3,
-                // así E2 termina de inmediato (aunque simularTiempoReal2=false) y llega a
-                // publicarAuditoria para preservar el ZIP de lo procesado.
+                // así E2 termina de inmediato (aunque simularTiempoReal2=false) y llega al cierre
+                // (finalizarAuditoriaDiferida) que retiene los sin-ruta y libera la persistencia.
                 if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
                     log.info("E2 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
                     break;
@@ -963,7 +963,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc, vuelosCancelados, graph);
+        finalizarAuditoriaDiferida(job, auditAcc);
         return res;
     }
 
@@ -1173,7 +1173,7 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc, vuelosCancelados, graph);
+        finalizarAuditoriaDiferida(job, auditAcc);
         return res;
     }
 
@@ -1229,7 +1229,9 @@ public class PlanificadorService {
                 fechaInicio, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio);
+        // E3 = hasta colapso: horizonte completo del dataset (max-ventanas-colapso, 0 por defecto),
+        // NO el max-ventanas general que lo cortaría a ~5 bloques. El bucle se detiene al colapsar.
+        List<TemporalContext> plan = construirPlanBloquesHastaColapso(k, fechaInicio);
         List<TemporalContext> warmupPlan = fechaInicio != null
                 ? construirPlanWarmup(k, fechaInicio, null)
                 : Collections.emptyList();
@@ -1411,75 +1413,113 @@ public class PlanificadorService {
         res.setSaMinutos(saMin);
 
         if (job != null) job.resultado = res;
-        publicarAuditoria(job, auditAcc, vuelosCancelados, graph);
+        finalizarAuditoriaDiferida(job, auditAcc);
         return res;
     }
 
     /**
-     * Genera la auditoría como un ZIP de varios CSV (hasta
-     * {@link AuditoriaService#FILAS_POR_ARCHIVO} filas por archivo) y lo cuelga del
-     * {@link JobState}. Un único CSV para millones de envíos no es práctico, por lo
-     * que cada archivo interno se nombra {@code <jobId>-<inicio>-<fin>.csv}.
+     * Cierre de auditoría DIFERIDA (la auditoría ya NO se genera al terminar el job).
      *
-     * <p>La auditoría solo se publica para ejecuciones asíncronas (con {@code job});
-     * las corridas síncronas (benchmark/comparativa) no la generan.
+     * <p>Antes, al terminar cada job se generaba el ZIP de auditoría leyéndolo de BD en streaming; esa
+     * escritura (cientos de MB en corridas grandes) corría en el hilo del executor single-thread y
+     * bloqueaba el arranque del siguiente job hasta ~25 min, además de generar auditorías que nadie
+     * pedía. Ahora aquí solo se RETIENEN los sin-ruta (ligeros, no van a BD) para poder armar el ZIP
+     * on-demand, y se libera el lock de persistencia. La solución enrutada permanece en BD
+     * ({@link PersistenciaSolucionService#reflejaEnBd}) hasta que otra corrida la reemplace; el ZIP se
+     * genera SOLO cuando el front lo pide, en {@link #generarAuditoriaZip}.
      */
-    private void publicarAuditoria(JobState job, AcumuladorAuditoria auditAcc,
-                                   List<VueloCancelado> vuelosCancelados, Graph graph) {
+    private void finalizarAuditoriaDiferida(JobState job, AcumuladorAuditoria auditAcc) {
         String jobId = job != null ? job.getJobId() : null;
-        // Fase 5b: ¿ESTE job tiene su solución en BD? (consultar ANTES de soltar el lock).
-        final boolean persistio = persistencia.persiste(jobId);
-        if (auditoria == null || job == null) {
+        try {
+            if (job != null && auditAcc != null) {
+                // Sin-ruta: no llegan a BD (Fase 5a solo persiste enrutados) ⇒ se retienen en RAM
+                // (ligeros, sin Edges) para incluirlos en el ZIP cuando se solicite.
+                job.auditoriaSinRuta = new ArrayList<>(auditAcc.sinRuta());
+            }
+        } finally {
+            // Libera el lock de persistencia. NO se toca corridaPersistidaEnBd: la solución sigue en BD
+            // para la auditoría on-demand hasta que otra corrida haga TRUNCATE.
             persistencia.finalizarCorrida(jobId);
-            return;
+        }
+    }
+
+    /** Resultado de {@link #generarAuditoriaZip}: ruta del ZIP + filas, o un {@code error} (⇒ 409). */
+    public record ResultadoAuditoria(Path path, int filas, String error) {
+        public static ResultadoAuditoria ok(Path p, int f) { return new ResultadoAuditoria(p, f, null); }
+        public static ResultadoAuditoria error(String e) { return new ResultadoAuditoria(null, 0, e); }
+        public boolean disponible() { return error == null; }
+    }
+
+    /**
+     * Genera BAJO DEMANDA el ZIP de auditoría de un job ya terminado, opcionalmente acotado al rango
+     * {@code [desde, hasta)} de {@code readyTime} UTC (si ambos son {@code null}, completo). Los
+     * enrutados se leen de BD en streaming (filtrados por rango en SQL), los sin-ruta de RAM
+     * ({@link JobState#auditoriaSinRuta}) y las cancelaciones de BD. Toma el lock de persistencia para
+     * lectura ({@link PersistenciaSolucionService#tomarParaLectura}) para que ninguna corrida nueva
+     * TRUNQUE la solución mientras se lee.
+     *
+     * <p>Devuelve {@link ResultadoAuditoria#error} (⇒ 409) si el job sigue activo, si su solución ya fue
+     * reemplazada por otra corrida, o si hay otra corrida tomando la persistencia.
+     */
+    public ResultadoAuditoria generarAuditoriaZip(String jobId, LocalDateTime desde, LocalDateTime hasta) {
+        JobState job = jobs.get(jobId);
+        if (job == null) return ResultadoAuditoria.error("job inexistente");
+        if (auditoria == null) return ResultadoAuditoria.error("auditoría no disponible (sin servicio de auditoría)");
+        if (JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) {
+            return ResultadoAuditoria.error("el job aún está activo; la auditoría estará disponible al terminar");
+        }
+        if (!persistencia.reflejaEnBd(jobId)) {
+            return ResultadoAuditoria.error(
+                    "la solución de este job ya fue reemplazada por una corrida posterior; auditoría no disponible");
+        }
+        if (!persistencia.tomarParaLectura(jobId)) {
+            return ResultadoAuditoria.error("hay otra corrida tomando la persistencia; reintenta en unos segundos");
         }
         try {
-            // Sin-ruta: no llegaron a BD (Fase 5a solo persiste enrutados) ⇒ se auditan desde RAM
-            // (son ligeros, sin Edges).
-            List<LuggageBatch> sinRuta = auditAcc != null
-                    ? new ArrayList<>(auditAcc.sinRuta()) : new ArrayList<>();
-
-            // Índice id_vuelo→Edge (solo si persistió): reconstruye enrutados Y cancelaciones desde BD.
-            Map<String, Edge> indiceVuelo = persistio
-                    ? solucionBdReader.construirIndiceVuelo(graph) : null;
-            // Cancelaciones del CSV: desde BD si este job persistió (fuente de verdad, con
-            // enviosAfectados); si no, la lista en RAM (degradado, igual que los enrutados).
-            List<VueloCancelado> cancelaciones = persistio
-                    ? solucionBdReader.leerCancelaciones(indiceVuelo)
-                    : (vuelosCancelados != null ? vuelosCancelados : new ArrayList<>());
-            boolean hayCancelados = !cancelaciones.isEmpty();
-            // Generar el ZIP si hay enrutados en BD, sin-ruta en RAM o vuelos cancelados.
-            if (!persistio && sinRuta.isEmpty() && !hayCancelados) return;
-
-            // Si el job fue cancelado vía Future.cancel(true), el thread llega aquí con el flag
-            // interrupted activo. La escritura del ZIP usa canales NIO interrumpibles que lanzarían
-            // ClosedByInterruptException; limpiamos el flag (es la última operación del job).
-            Thread.interrupted();
-
-            // Enrutados: desde BD si este job persistió. Si no (caso raro de multi-job sin lock), la
-            // Fase 5b ya no los retiene en RAM ⇒ ZIP degradado (solo sin-ruta + cancelados).
+            Graph graph = motorCache.obtenerGrafo(
+                    () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+            Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+            List<VueloCancelado> cancelaciones = solucionBdReader.leerCancelaciones(indiceVuelo);
+            List<LuggageBatch> sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, desde, hasta);
             java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados =
-                    persistio ? sink -> solucionBdReader.forEachEnrutado(indiceVuelo, sink)
-                              : sink -> { };
+                    sink -> solucionBdReader.forEachEnrutado(indiceVuelo, desde, hasta, sink);
 
-            log.info("Generando auditoria ZIP desde {} (job {})",
-                    persistio ? "BD" : "memoria(degradado, solo sin-ruta)", jobId);
+            Thread.interrupted();   // defensivo: el hilo HTTP no debería traer el flag, pero el ZIP usa NIO
+            job.borrarZip();        // descarta el ZIP anterior de este job (regeneración) antes del nuevo
             Path path = Files.createTempFile("planificador-auditoria-" + jobId + "-", ".zip");
             path.toFile().deleteOnExit();
+            log.info("Generando auditoria ZIP on-demand (job {}, desde={}, hasta={})", jobId, desde, hasta);
             int filas = auditoria.escribirZipStreaming(path, AuditoriaService.FILAS_POR_ARCHIVO, jobId,
                     fuenteEnrutados, sinRuta, cancelaciones);
             job.auditoriaZipPath = path;
             job.auditoriaCsvPath = null;
             job.auditoriaCsv = null;
             job.auditoriaFilas = filas;
-            log.info("Auditoria ZIP generada: {} filas (job {}) en {}", filas, jobId, path);
+            log.info("Auditoria ZIP on-demand generada: {} filas (job {}) en {}", filas, jobId, path);
+            return ResultadoAuditoria.ok(path, filas);
         } catch (IOException e) {
-            throw new IllegalStateException("No se pudo generar auditoria ZIP", e);
+            log.error("No se pudo generar auditoria ZIP on-demand (job {}): {}", jobId, e.getMessage());
+            return ResultadoAuditoria.error("error generando la auditoría: " + e.getMessage());
         } finally {
-            // Libera el lock SOLO tras leer el ZIP desde BD: si lo soltáramos antes, otro job podría
-            // TRUNCAR las tablas de solución mientras las leemos.
+            // Libera el lock de lectura (no toca corridaPersistidaEnBd ⇒ se puede volver a pedir).
             persistencia.finalizarCorrida(jobId);
         }
+    }
+
+    /** Filtra los sin-ruta retenidos por rango de {@code readyTime} UTC ({@code hasta} exclusivo). */
+    private static List<LuggageBatch> filtrarSinRutaPorRango(List<LuggageBatch> sinRuta,
+                                                             LocalDateTime desde, LocalDateTime hasta) {
+        if (sinRuta == null || sinRuta.isEmpty()) return List.of();
+        if (desde == null && hasta == null) return new ArrayList<>(sinRuta);
+        List<LuggageBatch> out = new ArrayList<>();
+        for (LuggageBatch b : sinRuta) {
+            LocalDateTime ready = b.getReadyTime();
+            if (ready == null) continue;
+            if (desde != null && ready.isBefore(desde)) continue;
+            if (hasta != null && !ready.isBefore(hasta)) continue;   // hasta exclusivo
+            out.add(b);
+        }
+        return out;
     }
 
     // =========================================================
@@ -1913,12 +1953,35 @@ public class PlanificadorService {
     }
 
     /**
-     * Variante con override de Sa y duración en días.
+     * Variante con override de Sa y duración en días (E1/E2). El horizonte por defecto (sin
+     * {@code dias}) es el legacy {@code max-ventanas} del yaml.
+     */
+    private List<TemporalContext> construirPlanBloques(int k,
+                                                        LocalDateTime fechaInicio,
+                                                        Integer saMinOverride,
+                                                        Integer diasOverride) {
+        return construirPlanBloques(k, fechaInicio, saMinOverride, diasOverride,
+                props.getScenario().getMaxVentanas());
+    }
+
+    /**
+     * Variante para E3 (hasta colapso): el horizonte por defecto NO es {@code max-ventanas} (que lo
+     * cortaría a 2,5 días ≈ 5 bloques con K=144) sino {@code max-ventanas-colapso} — 0 por defecto, lo
+     * que recorre TODO el dataset hasta el fin y deja que la condición de colapso detenga el bucle.
+     */
+    private List<TemporalContext> construirPlanBloquesHastaColapso(int k, LocalDateTime fechaInicio) {
+        return construirPlanBloques(k, fechaInicio, null, null,
+                props.getScenario().getMaxVentanasColapso());
+    }
+
+    /**
+     * Variante con override de Sa, duración en días y tope de ventanas de respaldo
+     * ({@code ventanasFallback}, usado cuando no se pasa {@code dias}).
      *
      * <p>Si {@code saMinOverride} es null, se usa {@code props.scenario.sa-minutos}.
-     * Si {@code diasOverride} es null, se usa el legacy {@code max-ventanas} del yaml.
-     * Si {@code diasOverride > 0}, se calcula dinámicamente:
-     * {@code ventanasTotales = (dias · 24 · 60) / sa}.
+     * Si {@code diasOverride > 0}, se calcula dinámicamente
+     * {@code ventanasTotales = (dias · 24 · 60) / sa}; si no, se usa {@code ventanasFallback}
+     * ({@code 0} = recorrer todo el dataset hasta el fin).
      *
      * <p>El inicio efectivo se alinea hacia abajo al múltiplo de Sa más cercano
      * para que el {@code subMap} del {@code DataLoader} encaje con ventanas existentes.
@@ -1926,7 +1989,8 @@ public class PlanificadorService {
     private List<TemporalContext> construirPlanBloques(int k,
                                                         LocalDateTime fechaInicio,
                                                         Integer saMinOverride,
-                                                        Integer diasOverride) {
+                                                        Integer diasOverride,
+                                                        int ventanasFallback) {
         LocalDateTime primero = dataLoader.getPrimeraVentana();
         LocalDateTime ultimo = dataLoader.getUltimaVentana();
         if (primero == null || ultimo == null) return Collections.emptyList();
@@ -1957,7 +2021,7 @@ public class PlanificadorService {
         if (diasOverride != null && diasOverride > 0) {
             ventanasTotales = (long) diasOverride * 24L * 60L / saMin;
         } else {
-            ventanasTotales = props.getScenario().getMaxVentanas();
+            ventanasTotales = ventanasFallback;
         }
 
         // Final del horizonte de simulación.

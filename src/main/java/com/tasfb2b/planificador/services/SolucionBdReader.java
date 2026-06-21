@@ -85,18 +85,33 @@ public class SolucionBdReader {
      * ZIP de auditoría sin retener nada O(envíos) en RAM.
      */
     public void forEachEnrutado(Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer) {
-        // Orden por readyTime UTC = registro − offset(origen); agrupa los tramos de cada ruta
-        // contiguos (mismo id_ruta ⇒ mismo readyTime) para poder emitir un batch a la vez.
-        String sql =
-                "SELECT r.id_ruta, r.id_envio, r.cumple_sla, "
-              + "       e.icao_origen, e.icao_destino, e.cantidad_maletas, e.fecha_hora_registro, "
-              + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
-              + "FROM ruta_asignada r "
-              + "JOIN envio e ON e.id_envio = r.id_envio "
-              + "JOIN aeropuerto a ON a.icao = e.icao_origen "
-              + "JOIN tramo_ruta t ON t.id_ruta = r.id_ruta "
-              + "WHERE r.activa "
-              + "ORDER BY (e.fecha_hora_registro - make_interval(hours => a.huso_horario)), r.id_ruta, t.numero_orden";
+        forEachEnrutado(indiceVuelo, null, null, consumer);
+    }
+
+    /**
+     * Variante con filtro por rango de {@code readyTime} UTC (auditoría on-demand por fecha). Los
+     * límites {@code desde} (inclusivo) y {@code hasta} (exclusivo) se aplican en BD sobre la misma
+     * expresión de {@code readyTime} ({@code registro − offset(origen)}) que el orden, así el ZIP por
+     * rango solo lee de BD los envíos del período pedido. Cualquiera de los dos puede ser {@code null}
+     * (sin cota por ese lado); ambos {@code null} = histórico completo.
+     */
+    public void forEachEnrutado(Map<String, Edge> indiceVuelo, LocalDateTime desde, LocalDateTime hasta,
+                                Consumer<LuggageBatch> consumer) {
+        // readyTime UTC = registro − offset(origen). Agrupa los tramos de cada ruta contiguos
+        // (mismo id_ruta ⇒ mismo readyTime) para poder emitir un batch a la vez.
+        final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
+        StringBuilder sql = new StringBuilder()
+                .append("SELECT r.id_ruta, r.id_envio, r.cumple_sla, ")
+                .append("       e.icao_origen, e.icao_destino, e.cantidad_maletas, e.fecha_hora_registro, ")
+                .append("       t.numero_orden, t.id_vuelo, t.hora_salida_utc ")
+                .append("FROM ruta_asignada r ")
+                .append("JOIN envio e ON e.id_envio = r.id_envio ")
+                .append("JOIN aeropuerto a ON a.icao = e.icao_origen ")
+                .append("JOIN tramo_ruta t ON t.id_ruta = r.id_ruta ")
+                .append("WHERE r.activa ");
+        if (desde != null) sql.append("AND ").append(readyExpr).append(" >= ? ");
+        if (hasta != null) sql.append("AND ").append(readyExpr).append(" < ? ");
+        sql.append("ORDER BY ").append(readyExpr).append(", r.id_ruta, t.numero_orden");
 
         final long[] idRutaActual = { Long.MIN_VALUE };
         final Acumulador acc = new Acumulador();
@@ -112,7 +127,10 @@ public class SolucionBdReader {
         };
         // Cursor server-side (fetchSize por-statement) dentro de una tx read-only ⇒ autoCommit=false.
         Runnable lectura = () -> jdbc.query(con -> {
-            var ps = con.prepareStatement(sql);
+            var ps = con.prepareStatement(sql.toString());
+            int idx = 1;
+            if (desde != null) ps.setObject(idx++, desde);
+            if (hasta != null) ps.setObject(idx++, hasta);
             ps.setFetchSize(2000);
             return ps;
         }, rch);

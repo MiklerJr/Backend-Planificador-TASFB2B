@@ -72,6 +72,15 @@ public class PlanificadorProperties {
         private int maxVentanas = 0;
 
         /**
+         * Tope de ventanas de Sa min SOLO para E3 (hasta colapso). {@code 0} = recorrer TODO el
+         * dataset hasta el fin (E3 se detiene por sí mismo al colapsar). Es independiente de
+         * {@link #maxVentanas} (E1/E2): E3 no debe cortarse al horizonte general — con
+         * {@code max-ventanas=720} y K=144 quedaba en ~5 bloques (2,5 días) y nunca llegaba al
+         * colapso. Subir a un valor >0 solo para acotar E3 en pruebas.
+         */
+        private int maxVentanasColapso = 0;
+
+        /**
          * Anti-OOM (Fase 1): nº de bloques RECIENTES cuyas {@code asignaciones} y series por slot se
          * retienen en RAM por job; los más viejos se purgan ({@code JobState.publicarBloque}). El front
          * consume {@code /bloques} y {@code /asignaciones} incrementalmente, así que solo necesita la

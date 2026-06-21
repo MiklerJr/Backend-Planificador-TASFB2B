@@ -1,18 +1,21 @@
 package com.tasfb2b.planificador.controller;
 
-import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.nio.file.Files;
+import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * Descarga de la auditoría de un job (Tanda 1D: extraído de {@code PlanificadorController}).
@@ -30,33 +33,49 @@ public class AuditoriaController {
     }
 
     /**
-     * Descarga la auditoría de un job completado como un ZIP de varios CSV
-     * (hasta 50000 filas por archivo; un único CSV para millones de envíos no es
-     * práctico). Cada CSV interno se llama {@code <jobId>-<inicio>-<fin>.csv} con
-     * el rango de fechaHoraInicio (registro) de su contenido, y trae 25 columnas
-     * con los datos del envío (clienteId, cantidad, tipoEnvio) y la validación formal
-     * por envío de las restricciones del cliente (cumpleSLA, sinCiclos, escalaMinOK,
-     * score 0-100) y los timestamps ISO de inicio (readyTime) y fin del envío
-     * (llegada + DEST_STORAGE_MIN).
+     * Descarga la auditoría de un job terminado como un ZIP de varios CSV (hasta 50000 filas por
+     * archivo; un único CSV para millones de envíos no es práctico). Cada CSV interno se llama
+     * {@code <jobId>-<inicio>-<fin>.csv} con el rango de fechaHoraInicio (registro) de su contenido,
+     * y trae 25 columnas con los datos del envío y la validación formal por envío (cumpleSLA,
+     * sinCiclos, escalaMinOK, score 0-100) y los timestamps ISO de inicio/fin.
      *
-     * <p>Devuelve 204 si el job aún ejecuta (ZIP no disponible), 404 si no existe.
+     * <p><b>El ZIP se genera SOLO al pedirlo</b> (ya no automáticamente al terminar el job): así no se
+     * produce una auditoría que nadie quiere ni se bloquea el motor escribiéndola. La generación puede
+     * tardar (lee la solución de BD en streaming): el front debe mostrar una pantalla de carga mientras
+     * dura la descarga.
+     *
+     * <p><b>Filtro por fecha (opcional):</b> {@code desde}/{@code hasta} son instantes UTC ISO-8601
+     * (p. ej. {@code 2027-11-01T00:00}) sobre el {@code readyTime} del envío; {@code desde} inclusivo,
+     * {@code hasta} exclusivo. Sin parámetros = auditoría COMPLETA.
+     *
+     * @return {@code 200} con el ZIP · {@code 404} si el job no existe · {@code 409} si el job aún está
+     *         activo o su solución ya fue reemplazada por otra corrida (cuerpo {@code {"error": ...}}).
      */
-    @GetMapping(value = "/jobs/{jobId}/auditoria.zip", produces = "application/zip")
-    public ResponseEntity<?> auditoriaJob(@PathVariable String jobId) {
-        JobState job = service.getJob(jobId);
-        if (job == null) return ResponseEntity.notFound().build();
+    // Sin `produces`: el 200 fija el Content-Type a application/zip por header, y el 409 devuelve JSON
+    // ({"error":...}). Si se fijara produces="application/zip", el cuerpo JSON del 409 no tendría
+    // convertidor compatible y Spring respondería 500.
+    @GetMapping(value = "/jobs/{jobId}/auditoria.zip")
+    public ResponseEntity<?> auditoriaJob(
+            @PathVariable String jobId,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta) {
 
-        if (job.auditoriaZipPath == null || !Files.exists(job.auditoriaZipPath)) {
-            return ResponseEntity.noContent().build();
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+
+        PlanificadorService.ResultadoAuditoria r = service.generarAuditoriaZip(jobId, desde, hasta);
+        if (!r.disponible()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", r.error()));
         }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("application/zip"));
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename=\"auditoria_" + jobId + ".zip\"");
-        headers.set("X-Audit-Rows", String.valueOf(job.auditoriaFilas));
+        headers.set("X-Audit-Rows", String.valueOf(r.filas()));
 
-        Resource body = new FileSystemResource(job.auditoriaZipPath.toFile());
+        Resource body = new FileSystemResource(r.path().toFile());
         return ResponseEntity.ok().headers(headers).body(body);
     }
 }

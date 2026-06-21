@@ -43,10 +43,15 @@ planificador:
     #   52560  → 365 días
     max-ventanas: 720
 
+    # E3 (hasta colapso): tope de ventanas de Sa min SOLO para el escenario 3. 0 = recorrer TODO el
+    # dataset hasta el fin (el E3 se detiene solo al colapsar). max-ventanas (arriba) NO aplica a E3:
+    # con 720 y K=144 E3 quedaba en ~5 bloques (2,5 días) sin llegar nunca al colapso.
+    max-ventanas-colapso: 0
+
     # Anti-OOM (Fase 1): nº de bloques recientes cuyas asignaciones + series por slot se retienen en
     # RAM por job (el resto se purga; el front consume /bloques y /asignaciones incrementalmente).
     # Antes era 500 hardcoded. Bajar = menos RAM; subir = más holgura si el front se atrasa.
-    max-bloques-buffer: 60
+    max-bloques-buffer: 35
 
     # Anti-OOM (Fase 2): nº de jobs TERMINADOS recientes que conservan sus bloques/acumuladores en RAM
     # (el front anima el último); de los más viejos se liberan (sus rutas están en BD, el ZIP en disco).
