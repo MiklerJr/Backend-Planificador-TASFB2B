@@ -200,9 +200,24 @@ public class SolucionBdReader {
      * {@code id_vuelo} no estuviera en el índice (defensivo), deriva origen/destino/hora del propio id.
      */
     public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo) {
-        String sql = "SELECT id_vuelo, fecha_cancelacion, envios_afectados FROM cancelacion_vuelo "
-                   + "ORDER BY fecha_cancelacion, id_vuelo";
-        return jdbc.query(sql, (rs, n) -> {
+        return leerCancelaciones(indiceVuelo, null, null);
+    }
+
+    /**
+     * Variante con filtro por rango: incluye solo las cancelaciones cuyo {@code fecha_cancelacion} cae
+     * dentro de {@code [desde, hasta)} UTC (a granularidad de DÍA — la tabla guarda solo la fecha). Así
+     * el CSV de cancelaciones de un "día"/rango trae únicamente las de ese período. Ambos {@code null}
+     * = todas. El resto del mapeo es idéntico a {@link #leerCancelaciones(Map)}.
+     */
+    public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo,
+                                                  LocalDateTime desde, LocalDateTime hasta) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT id_vuelo, fecha_cancelacion, envios_afectados FROM cancelacion_vuelo WHERE 1=1 ");
+        List<Object> args = new ArrayList<>();
+        if (desde != null) { sql.append("AND fecha_cancelacion >= ? "); args.add(desde.toLocalDate()); }
+        if (hasta != null) { sql.append("AND fecha_cancelacion < ? ");  args.add(fechaExclusivaHasta(hasta)); }
+        sql.append("ORDER BY fecha_cancelacion, id_vuelo");
+        return jdbc.query(sql.toString(), (rs, n) -> {
             String idVuelo = rs.getString("id_vuelo");
             LocalDate fecha = rs.getObject("fecha_cancelacion", LocalDate.class);
             int afectados = rs.getInt("envios_afectados");
@@ -222,7 +237,47 @@ public class SolucionBdReader {
             }
             LocalDateTime salidaUtc = fecha.atStartOfDay().plusMinutes(depMin);
             return new VueloCancelado(origen, destino, salidaUtc, afectados);
-        });
+        }, args.toArray());
+    }
+
+    /**
+     * Fecha exclusiva (límite superior) para filtrar {@code fecha_cancelacion} (DATE) por un {@code hasta}
+     * UTC con hora: si {@code hasta} cae a medianoche se usa su propia fecha (día siguiente ya excluido);
+     * si cae a media jornada, se sube al día siguiente para INCLUIR las cancelaciones de ese día.
+     */
+    private static LocalDate fechaExclusivaHasta(LocalDateTime hasta) {
+        return hasta.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+                ? hasta.toLocalDate()
+                : hasta.toLocalDate().plusDays(1);
+    }
+
+    /**
+     * Cuenta los envíos ENRUTADOS (rutas activas) que el ZIP de auditoría exportaría en el rango
+     * {@code [desde, hasta)} de {@code readyTime} UTC (mismo {@code WHERE} y expresión que
+     * {@link #forEachEnrutado}). Es el nº de FILAS de envíos del CSV (1 por envío enrutado), sin leerlos.
+     */
+    public long contarEnrutados(LocalDateTime desde, LocalDateTime hasta) {
+        final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
+        StringBuilder sql = new StringBuilder(
+                "SELECT COUNT(*) FROM ruta_asignada r "
+              + "JOIN envio e ON e.id_envio = r.id_envio "
+              + "JOIN aeropuerto a ON a.icao = e.icao_origen "
+              + "WHERE r.activa ");
+        List<Object> args = new ArrayList<>();
+        if (desde != null) { sql.append("AND ").append(readyExpr).append(" >= ? "); args.add(desde); }
+        if (hasta != null) { sql.append("AND ").append(readyExpr).append(" < ? ");  args.add(hasta); }
+        Long n = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
+        return n != null ? n : 0L;
+    }
+
+    /** Cuenta las cancelaciones de vuelo persistidas en el rango {@code [desde, hasta)} (por día, UTC). */
+    public long contarCancelaciones(LocalDateTime desde, LocalDateTime hasta) {
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM cancelacion_vuelo WHERE 1=1 ");
+        List<Object> args = new ArrayList<>();
+        if (desde != null) { sql.append("AND fecha_cancelacion >= ? "); args.add(desde.toLocalDate()); }
+        if (hasta != null) { sql.append("AND fecha_cancelacion < ? ");  args.add(fechaExclusivaHasta(hasta)); }
+        Long n = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
+        return n != null ? n : 0L;
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -42,8 +43,16 @@ public class AlertaColapso {
     /** Envío del backlog más cercano a vencer su SLA. */
     private String envioUrgente;
 
+    /**
+     * Señal que domina el {@code nivel}: {@code "almacen"} (almacén cerca de capacidad),
+     * {@code "sla"} (backlog cerca de vencer), {@code "ambos"} (las dos activas) o {@code null}
+     * (VERDE, sin riesgo). Permite al front saber el <b>cómo</b> sin parsear {@code mensaje}.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String causaDominante;
+
     /** Alerta sin riesgo (estado por defecto). */
     public static AlertaColapso verde() {
-        return new AlertaColapso(VERDE, "Sin riesgo de colapso", 0, 0.0, null, 1.0, null);
+        return new AlertaColapso(VERDE, "Sin riesgo de colapso", 0, 0.0, null, 1.0, null, null);
     }
 }

@@ -350,10 +350,14 @@ public class PlanificadorService {
         JobState job = jobs.get(jobId);
         if (job == null) return false;
         if (!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) return false;
-        job.encolarCancelacionVuelo(orden);
-        log.info("Cancelación de vuelo encolada (job {}): {}->{} salida {}", jobId,
-                orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
-        return true;
+        if (job.encolarCancelacionVuelo(orden)) {
+            log.info("Cancelación de vuelo encolada (job {}): {}->{} salida {}", jobId,
+                    orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
+        } else {
+            log.debug("Cancelación de vuelo duplicada ya pendiente (job {}): {}->{} salida {} — ignorada",
+                    jobId, orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
+        }
+        return true;   // aceptada para el front (encolada o ya pendiente)
     }
 
     /**
@@ -449,7 +453,17 @@ public class PlanificadorService {
                     edgesCancelados.add(e);
                 }
             }
-            int afectados = reencolarAfectadosPorCancelacion(matches, epochDay, backlog, indiceVuelo);
+            // Idempotencia: si NINGÚN edge-día era nuevo (cancelación DUPLICADA —p. ej. doble-click del
+            // front que igual sorteó el dedup de la cola—), el vuelo-día ya estaba marcado en
+            // cancelledFlightDays. No repetimos la consulta a BD (afectadosPorVuelo) ni reencolamos los
+            // mismos envíos otra vez: eso era el doble trabajo que disparaba el pico de CPU.
+            if (edgesCancelados.isEmpty()) {
+                log.debug("Cancelación duplicada (vuelo-día ya cancelado) {}->{} salida {}: ignorada",
+                        origen, destino, dep);
+                continue;
+            }
+            // Solo los edge-día REALMENTE nuevos (no 'matches') generan reencolado/registro/persistencia.
+            int afectados = reencolarAfectadosPorCancelacion(edgesCancelados, epochDay, backlog, indiceVuelo);
             if (registro != null) {
                 registro.add(new VueloCancelado(origen, destino, dep, afectados));
             }
@@ -460,7 +474,7 @@ public class PlanificadorService {
                         PersistenciaSolucionService.normalizarIdVuelo(e.id), dep.toLocalDate(), afectados));
             }
             log.info("Vuelo cancelado {}->{} salida {} ({} edge-día) — {} envíos devueltos al backlog",
-                    origen, destino, dep, matches.size(), afectados);
+                    origen, destino, dep, edgesCancelados.size(), afectados);
         }
         // Persistencia best-effort de los vuelo-días cancelados (no-op si este job no persiste).
         persistencia.persistirCancelaciones(jobId, aPersistir);
@@ -829,6 +843,8 @@ public class PlanificadorService {
 
         boolean colapsoAlmacenDetectado = false;   // E2 se detiene ante colapso de almacén.
         int bloqueColapsoAlmacen = -1;
+        String detalleColapsoE2 = null;            // detalle (qué/dónde) e instante UTC del colapso.
+        LocalDateTime instanteColapsoE2 = null;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
         for (TemporalContext ctx : plan) {
             bloqueActual++;
@@ -858,6 +874,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
+                job.registrarVentanaSimulada(ctx.scStart, ctx.scEnd);   // ventana realmente simulada
                 // Publicación incremental: el front lo consume con
                 // GET /jobs/{jobId}/bloques?desde=N para dibujar en tiempo real.
                 job.publicarBloque(rv.bloque);
@@ -897,6 +914,8 @@ public class PlanificadorService {
             if (rv.colapsoAlmacen()) {
                 colapsoAlmacenDetectado = true;
                 bloqueColapsoAlmacen = bloqueActual;
+                detalleColapsoE2 = rv.detalleColapso();
+                instanteColapsoE2 = ctx.scEnd;
                 log.warn("E2 COLAPSO por almacén lleno en bloque {}/{} — {}",
                         bloqueActual, totalBloques, rv.detalleColapso());
                 break;
@@ -956,7 +975,8 @@ public class PlanificadorService {
                 dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
-                colapsoAlmacenDetectado, bloqueColapsoAlmacen);
+                colapsoAlmacenDetectado, bloqueColapsoAlmacen,
+                colapsoAlmacenDetectado ? "almacen_lleno" : null, detalleColapsoE2, instanteColapsoE2);
         llenarMetricasTa(res.getMetricas(), taStats, saMs);
         llenarMetricasBacklog(res.getMetricas(), backlog);
         res.setK(k);
@@ -1048,6 +1068,8 @@ public class PlanificadorService {
 
         boolean colapsoAlmacenDetectado = false;   // E1 se detiene ante colapso de almacén.
         int bloqueColapsoAlmacen = -1;
+        String detalleColapsoE1 = null;            // detalle (qué/dónde) e instante UTC del colapso.
+        LocalDateTime instanteColapsoE1 = null;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
 
         // Warm-up (fechaInicio posterior al inicio de datos): pre-calcula el período previo
@@ -1088,6 +1110,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
+                job.registrarVentanaSimulada(ctx.scStart, ctx.scEnd);   // ventana realmente simulada
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
@@ -1120,6 +1143,8 @@ public class PlanificadorService {
             if (rv.colapsoAlmacen()) {
                 colapsoAlmacenDetectado = true;
                 bloqueColapsoAlmacen = bloqueActual;
+                detalleColapsoE1 = rv.detalleColapso();
+                instanteColapsoE1 = ctx.scEnd;
                 log.warn("E1 COLAPSO por almacén lleno en bloque {}/{} — {}",
                         bloqueActual, totalBloques, rv.detalleColapso());
                 break;
@@ -1166,7 +1191,8 @@ public class PlanificadorService {
                 dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
-                colapsoAlmacenDetectado, bloqueColapsoAlmacen);
+                colapsoAlmacenDetectado, bloqueColapsoAlmacen,
+                colapsoAlmacenDetectado ? "almacen_lleno" : null, detalleColapsoE1, instanteColapsoE1);
         llenarMetricasTa(res.getMetricas(), taStats, saMs);
         llenarMetricasBacklog(res.getMetricas(), backlog);
         res.setK(k);
@@ -1264,6 +1290,8 @@ public class PlanificadorService {
         long totalMaletas = 0L;
         boolean collapsoDetectado = false;
         int bloqueColapso = -1;
+        String detalleColapsoE3 = null;            // detalle (qué/dónde) e instante UTC del colapso.
+        LocalDateTime instanteColapsoE3 = null;
         // Motivo de parada del E3: "backlog_definitivo", "almacen_lleno", "cancelado_front" o
         // "falta_datos" (por defecto, si el bucle agota el plan).
         String motivoParada = "falta_datos";
@@ -1318,6 +1346,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
+                job.registrarVentanaSimulada(ctx.scStart, ctx.scEnd);   // ventana realmente simulada
                 // Publicación incremental para dibujo en tiempo real desde el front.
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
@@ -1359,6 +1388,8 @@ public class PlanificadorService {
                 collapsoDetectado = true;
                 bloqueColapso = bloqueActual;
                 motivoParada = "almacen_lleno";
+                detalleColapsoE3 = rv.detalleColapso();
+                instanteColapsoE3 = ctx.scEnd;
                 log.warn("E3 ALMACÉN LLENO en bloque {}/{} — envío {}", bloqueActual, totalBloques, rv.detalleColapso());
                 break;
             }
@@ -1367,6 +1398,8 @@ public class PlanificadorService {
                 collapsoDetectado = true;
                 bloqueColapso = bloqueActual;
                 motivoParada = "backlog_definitivo";
+                detalleColapsoE3 = vencidos + " envío(s) del backlog con SLA vencido";
+                instanteColapsoE3 = ctx.scEnd;
                 break;
             }
 
@@ -1406,7 +1439,8 @@ public class PlanificadorService {
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
                 dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
-                totalCumpleSLA, totalTardadas, totalMaletas, 0, collapsoDetectado, bloqueColapso);
+                totalCumpleSLA, totalTardadas, totalMaletas, 0, collapsoDetectado, bloqueColapso,
+                collapsoDetectado ? motivoParada : null, detalleColapsoE3, instanteColapsoE3);
         llenarMetricasTa(res.getMetricas(), taStats, saMs);
         llenarMetricasBacklog(res.getMetricas(), backlog);
         res.setK(k);
@@ -1443,11 +1477,64 @@ public class PlanificadorService {
         }
     }
 
-    /** Resultado de {@link #generarAuditoriaZip}: ruta del ZIP + filas, o un {@code error} (⇒ 409). */
-    public record ResultadoAuditoria(Path path, int filas, String error) {
-        public static ResultadoAuditoria ok(Path p, int f) { return new ResultadoAuditoria(p, f, null); }
-        public static ResultadoAuditoria error(String e) { return new ResultadoAuditoria(null, 0, e); }
+    /**
+     * Resultado de {@link #generarAuditoriaZip}: ruta del ZIP + filas, o un {@code error} (⇒ 409).
+     * {@code desdeEfectivo/hastaEfectivo} es el rango UTC realmente exportado (recortado a la ventana
+     * simulada) y {@code recortado} indica si se ajustó algún límite EXPLÍCITO del cliente (⇒ el
+     * controller expone el header {@code X-Audit-Range}).
+     */
+    public record ResultadoAuditoria(Path path, int filas, String error,
+                                     LocalDateTime desdeEfectivo, LocalDateTime hastaEfectivo,
+                                     boolean recortado) {
+        public static ResultadoAuditoria ok(Path p, int f, LocalDateTime d, LocalDateTime h, boolean rec) {
+            return new ResultadoAuditoria(p, f, null, d, h, rec);
+        }
+        public static ResultadoAuditoria error(String e) {
+            return new ResultadoAuditoria(null, 0, e, null, null, false);
+        }
         public boolean disponible() { return error == null; }
+    }
+
+    /** Resultado de {@link #estimarAuditoria}: estimación, o un {@code error} (⇒ 409). */
+    public record ResultadoEstimacion(EstimacionAuditoria estimacion, String error) {
+        public static ResultadoEstimacion ok(EstimacionAuditoria e) { return new ResultadoEstimacion(e, null); }
+        public static ResultadoEstimacion error(String e) { return new ResultadoEstimacion(null, e); }
+        public boolean disponible() { return error == null; }
+    }
+
+    /** Rango de auditoría resuelto contra la ventana simulada: límites efectivos + flag de recorte. */
+    public record RangoAuditoria(LocalDateTime desde, LocalDateTime hasta, boolean recortado) {}
+
+    /**
+     * Verifica el rango {@code [desde, hasta)} pedido contra la ventana UTC realmente simulada del job
+     * ({@link JobState#ventanaInicioUtc}/{@code ventanaFinUtc}) y devuelve el rango EFECTIVO:
+     * <ul>
+     *   <li>{@code desde >= hasta} (ambos dados) ⇒ {@link ParametroInvalidoException} (400).</li>
+     *   <li>Sin solapamiento con la ventana simulada ⇒ 400 (con la ventana válida en el mensaje).</li>
+     *   <li>Solapamiento parcial ⇒ se RECORTA el límite explícito fuera de rango y se marca
+     *       {@code recortado=true}.</li>
+     * </ul>
+     * Si el job aún no registró ventana (defensivo), respeta lo pedido sin verificar.
+     */
+    private RangoAuditoria resolverRangoAuditoria(JobState job, LocalDateTime desde, LocalDateTime hasta) {
+        if (desde != null && hasta != null && !desde.isBefore(hasta)) {
+            throw new ParametroInvalidoException(
+                    "rango inválido: 'desde' (" + desde + ") debe ser anterior a 'hasta' (" + hasta + ")");
+        }
+        LocalDateTime ini = job.ventanaInicioUtc;
+        LocalDateTime fin = job.ventanaFinUtc;
+        if (ini == null || fin == null) return new RangoAuditoria(desde, hasta, false);   // sin ventana: no verificar
+        boolean sinSolape = (desde != null && !desde.isBefore(fin)) || (hasta != null && !hasta.isAfter(ini));
+        if (sinSolape) {
+            throw new ParametroInvalidoException(
+                    "el rango pedido no se solapa con la ventana simulada [" + ini + ", " + fin + ")");
+        }
+        LocalDateTime d = desde;
+        LocalDateTime h = hasta;
+        boolean recortado = false;
+        if (desde != null && desde.isBefore(ini)) { d = ini; recortado = true; }
+        if (hasta != null && hasta.isAfter(fin))  { h = fin; recortado = true; }
+        return new RangoAuditoria(d, h, recortado);
     }
 
     /**
@@ -1472,6 +1559,8 @@ public class PlanificadorService {
             return ResultadoAuditoria.error(
                     "la solución de este job ya fue reemplazada por una corrida posterior; auditoría no disponible");
         }
+        // Verifica/recorta el rango contra la ventana simulada ANTES de tomar el lock (puede lanzar 400).
+        RangoAuditoria rango = resolverRangoAuditoria(job, desde, hasta);
         if (!persistencia.tomarParaLectura(jobId)) {
             return ResultadoAuditoria.error("hay otra corrida tomando la persistencia; reintenta en unos segundos");
         }
@@ -1479,16 +1568,18 @@ public class PlanificadorService {
             Graph graph = motorCache.obtenerGrafo(
                     () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
             Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
-            List<VueloCancelado> cancelaciones = solucionBdReader.leerCancelaciones(indiceVuelo);
-            List<LuggageBatch> sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, desde, hasta);
+            List<VueloCancelado> cancelaciones =
+                    solucionBdReader.leerCancelaciones(indiceVuelo, rango.desde(), rango.hasta());
+            List<LuggageBatch> sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, rango.desde(), rango.hasta());
             java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados =
-                    sink -> solucionBdReader.forEachEnrutado(indiceVuelo, desde, hasta, sink);
+                    sink -> solucionBdReader.forEachEnrutado(indiceVuelo, rango.desde(), rango.hasta(), sink);
 
             Thread.interrupted();   // defensivo: el hilo HTTP no debería traer el flag, pero el ZIP usa NIO
             job.borrarZip();        // descarta el ZIP anterior de este job (regeneración) antes del nuevo
             Path path = Files.createTempFile("planificador-auditoria-" + jobId + "-", ".zip");
             path.toFile().deleteOnExit();
-            log.info("Generando auditoria ZIP on-demand (job {}, desde={}, hasta={})", jobId, desde, hasta);
+            log.info("Generando auditoria ZIP on-demand (job {}, desde={}, hasta={}, recortado={})",
+                    jobId, rango.desde(), rango.hasta(), rango.recortado());
             int filas = auditoria.escribirZipStreaming(path, AuditoriaService.FILAS_POR_ARCHIVO, jobId,
                     fuenteEnrutados, sinRuta, cancelaciones);
             job.auditoriaZipPath = path;
@@ -1496,7 +1587,7 @@ public class PlanificadorService {
             job.auditoriaCsv = null;
             job.auditoriaFilas = filas;
             log.info("Auditoria ZIP on-demand generada: {} filas (job {}) en {}", filas, jobId, path);
-            return ResultadoAuditoria.ok(path, filas);
+            return ResultadoAuditoria.ok(path, filas, rango.desde(), rango.hasta(), rango.recortado());
         } catch (IOException e) {
             log.error("No se pudo generar auditoria ZIP on-demand (job {}): {}", jobId, e.getMessage());
             return ResultadoAuditoria.error("error generando la auditoría: " + e.getMessage());
@@ -1504,6 +1595,40 @@ public class PlanificadorService {
             // Libera el lock de lectura (no toca corridaPersistidaEnBd ⇒ se puede volver a pedir).
             persistencia.finalizarCorrida(jobId);
         }
+    }
+
+    /**
+     * Estima —SIN generar el ZIP— cuántos CSV tendría la auditoría del job en {@code [desde, hasta)}:
+     * archivos de envíos ({@code ceil(filasEnvios / 50000)}) y de cancelaciones (siempre 1). Reusa las
+     * mismas garantías y verificación de rango que {@link #generarAuditoriaZip} (404/409 vía
+     * {@link ResultadoEstimacion}; 400 si el rango no se solapa con la ventana simulada). Solo hace
+     * {@code COUNT} en BD ⇒ barato, no toma el lock de persistencia.
+     */
+    public ResultadoEstimacion estimarAuditoria(String jobId, LocalDateTime desde, LocalDateTime hasta) {
+        JobState job = jobs.get(jobId);
+        if (job == null) return ResultadoEstimacion.error("job inexistente");
+        if (JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) {
+            return ResultadoEstimacion.error("el job aún está activo; la auditoría estará disponible al terminar");
+        }
+        if (!persistencia.reflejaEnBd(jobId)) {
+            return ResultadoEstimacion.error(
+                    "la solución de este job ya fue reemplazada por una corrida posterior; auditoría no disponible");
+        }
+        RangoAuditoria rango = resolverRangoAuditoria(job, desde, hasta);   // 400 si el rango es inválido
+        long enrutados = solucionBdReader.contarEnrutados(rango.desde(), rango.hasta());
+        long sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, rango.desde(), rango.hasta()).size();
+        long filasEnvios = enrutados + sinRuta;
+        long cancelaciones = solucionBdReader.contarCancelaciones(rango.desde(), rango.hasta());
+        int filasPorArchivo = AuditoriaService.FILAS_POR_ARCHIVO;
+        int csvEnvios = (int) Math.ceil(filasEnvios / (double) filasPorArchivo);
+        int csvCancelaciones = 1;   // el CSV de cancelaciones siempre se emite, aun vacío
+        EstimacionAuditoria est = new EstimacionAuditoria(
+                filasEnvios, csvEnvios, cancelaciones, csvCancelaciones,
+                csvEnvios + csvCancelaciones, filasPorArchivo,
+                rango.desde() != null ? rango.desde().toString() : null,
+                rango.hasta() != null ? rango.hasta().toString() : null,
+                rango.recortado());
+        return ResultadoEstimacion.ok(est);
     }
 
     /** Filtra los sin-ruta retenidos por rango de {@code readyTime} UTC ({@code hasta} exclusivo). */
@@ -1909,9 +2034,18 @@ public class PlanificadorService {
         }
         if (msg.length() == 0) msg.append("Sin riesgo de colapso");
 
+        // Causa dominante: qué señal levantó el nivel (para que el front no parsee el mensaje).
+        boolean almacenActivo = !com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelAlmacen);
+        boolean backlogActivo = !com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelBacklog);
+        String causaDominante = almacenActivo && backlogActivo ? "ambos"
+                : almacenActivo ? "almacen"
+                : backlogActivo ? "sla"
+                : null;
+
         return new com.tasfb2b.planificador.dto.AlertaColapso(
                 nivel, msg.toString(), bloque,
-                pre.utilAlmacenMax(), pre.almacenCritico(), pre.holguraSlaMin(), pre.envioUrgente());
+                pre.utilAlmacenMax(), pre.almacenCritico(), pre.holguraSlaMin(), pre.envioUrgente(),
+                causaDominante);
     }
 
     /**
@@ -2568,7 +2702,9 @@ public class PlanificadorService {
                                        int envios, int enrutadas, int sinRuta,
                                        int cumpleSLA, int tardadas, long maletas,
                                        int vuelosCancelados,
-                                       boolean collapso, int bloqueCollapso) {
+                                       boolean collapso, int bloqueCollapso,
+                                       String motivoColapso, String detalleColapso,
+                                       LocalDateTime instanteColapso) {
         m.setProcesadas(envios);
         m.setEnrutadas(enrutadas);
         m.setSinRuta(sinRuta);
@@ -2578,6 +2714,10 @@ public class PlanificadorService {
         m.setVuelosCancelados(vuelosCancelados);
         m.setCollapsoDetectado(collapso);
         m.setBloqueColapso(bloqueCollapso);
+        // Detalle del colapso real (null si no hubo): causa, dónde/qué e instante UTC.
+        m.setMotivoColapso(motivoColapso);
+        m.setDetalleColapso(detalleColapso);
+        m.setInstanteColapsoUtc(instanteColapso != null ? instanteColapso.toString() : null);
     }
 
     /**

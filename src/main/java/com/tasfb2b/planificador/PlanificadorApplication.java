@@ -31,7 +31,7 @@ public class PlanificadorApplication {
         // Headers que el front necesita leer desde fetch (CSV row count y
         // nombre de archivo del attachment). Sin esto el navegador los oculta.
         config.setExposedHeaders(Arrays.asList(
-                "X-Audit-Rows", "Content-Disposition"));
+                "X-Audit-Rows", "X-Audit-Range", "Content-Disposition"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

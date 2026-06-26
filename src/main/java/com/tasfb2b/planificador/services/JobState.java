@@ -145,6 +145,21 @@ public class JobState {
      */
     public volatile LocalDateTime fechaInicio;
 
+    /**
+     * Ventana UTC realmente SIMULADA en la fase visible (no warm-up): {@code ventanaInicioUtc} es el
+     * {@code scStart} del primer bloque visible y {@code ventanaFinUtc} el {@code scEnd} del último.
+     * Es la verdad contra la que se valida el rango {@code desde/hasta} de la auditoría (la solución
+     * en BD solo cubre este intervalo). Null hasta procesar el primer bloque visible.
+     */
+    public volatile LocalDateTime ventanaInicioUtc;
+    public volatile LocalDateTime ventanaFinUtc;
+
+    /** Registra la ventana simulada: fija el inicio una vez y avanza el fin en cada bloque visible. */
+    public void registrarVentanaSimulada(LocalDateTime scStart, LocalDateTime scEnd) {
+        if (ventanaInicioUtc == null) ventanaInicioUtc = scStart;
+        ventanaFinUtc = scEnd;
+    }
+
     // ── Parámetros reproducibles para el reinicio (ver PlanificadorService.reiniciarJob) ──
     // Junto con escenario/k/algoritmo/seed/fechaInicio permiten re-lanzar una corrida idéntica.
     // Los overrides de E2 y el umbral de E3 antes solo vivían en el EjecucionParams del arranque.
@@ -225,9 +240,18 @@ public class JobState {
     private final Queue<CancelacionVueloRequest> cancelacionesVueloPendientes =
             new ConcurrentLinkedQueue<>();
 
-    /** Encola una orden de cancelación de vuelo para que el worker la aplique en el próximo bloque. */
-    public void encolarCancelacionVuelo(CancelacionVueloRequest orden) {
-        if (orden != null) cancelacionesVueloPendientes.add(orden);
+    /**
+     * Encola una orden de cancelación de vuelo para que el worker la aplique en el próximo bloque.
+     * Idempotente ante doble-click: si una orden IDÉNTICA (mismo origen/destino/fechaHoraSalida —
+     * {@code CancelacionVueloRequest} es {@code @Data}, equals por todos los campos) ya está
+     * pendiente, no se vuelve a encolar (evita repetir el trabajo de aplicarla).
+     *
+     * @return {@code true} si se encoló; {@code false} si era un duplicado de una ya pendiente.
+     */
+    public boolean encolarCancelacionVuelo(CancelacionVueloRequest orden) {
+        if (orden == null) return false;
+        if (cancelacionesVueloPendientes.contains(orden)) return false;   // anti doble-click
+        return cancelacionesVueloPendientes.add(orden);
     }
 
     /**

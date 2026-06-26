@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Map;
 
@@ -74,8 +75,55 @@ public class AuditoriaController {
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename=\"auditoria_" + jobId + ".zip\"");
         headers.set("X-Audit-Rows", String.valueOf(r.filas()));
+        // Si el rango pedido se recortó a la ventana realmente simulada, se informa el rango efectivo.
+        if (r.recortado()) {
+            headers.set("X-Audit-Range", r.desdeEfectivo() + "/" + r.hastaEfectivo());
+        }
 
         Resource body = new FileSystemResource(r.path().toFile());
         return ResponseEntity.ok().headers(headers).body(body);
+    }
+
+    /**
+     * Auditoría de UN DÍA concreto (atajo cómodo sobre {@link #auditoriaJob}): el {@code fecha}
+     * (ISO {@code YYYY-MM-DD}) se interpreta en <b>UTC</b> y se traduce a {@code desde = fecha T00:00},
+     * {@code hasta = fecha+1 T00:00}. Hereda la verificación contra la ventana simulada (400 si el día
+     * queda fuera, header {@code X-Audit-Range} si se recorta) y trae las cancelaciones de ESE día.
+     *
+     * @return mismo contrato que {@code auditoria.zip} (200 ZIP · 404 · 409 · 400 si el día no se solapa).
+     */
+    @GetMapping(value = "/jobs/{jobId}/auditoria/dia")
+    public ResponseEntity<?> auditoriaDia(
+            @PathVariable String jobId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha) {
+        LocalDateTime desde = fecha.atStartOfDay();
+        LocalDateTime hasta = fecha.plusDays(1).atStartOfDay();
+        return auditoriaJob(jobId, desde, hasta);   // reusa validación + clamp + headers
+    }
+
+    /**
+     * Estima —SIN generar el ZIP— cuántos CSV tendría la auditoría del job en el rango opcional
+     * {@code desde}/{@code hasta} (UTC, mismo eje que {@code auditoria.zip}): archivos de envíos y de
+     * cancelaciones, con sus filas. Pensado para que el front avise del tamaño antes de descargar.
+     *
+     * @return {@code 200} con {@link com.tasfb2b.planificador.dto.EstimacionAuditoria} · {@code 404} si
+     *         el job no existe · {@code 409} si aún activo o su solución fue reemplazada · {@code 400}
+     *         si el rango no se solapa con la ventana simulada.
+     */
+    @GetMapping(value = "/jobs/{jobId}/auditoria/estimacion")
+    public ResponseEntity<?> estimacionAuditoria(
+            @PathVariable String jobId,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta) {
+
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+
+        PlanificadorService.ResultadoEstimacion r = service.estimarAuditoria(jobId, desde, hasta);
+        if (!r.disponible()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", r.error()));
+        }
+        return ResponseEntity.ok(r.estimacion());
     }
 }
