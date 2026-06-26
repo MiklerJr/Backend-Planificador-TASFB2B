@@ -120,9 +120,17 @@ public class JobQueryController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * Carga de vuelos por bloque, PAGINADA (anti-OOM). El front empieza en {@code desde=0} y, mientras
+     * la respuesta traiga {@code hayMas=true}, vuelve a pedir con {@code desde=proximoDesde}. {@code limit}
+     * (filas por página) se clampea al tope del servidor; {@code limit<=0} usa el default de config.
+     */
     @GetMapping("/jobs/{jobId}/vuelos/carga")
-    public ResponseEntity<CargaVuelosResponse> cargaVuelosJob(@PathVariable String jobId) {
-        CargaVuelosResponse body = jobQuery.getCargaVuelosJob(jobId);
+    public ResponseEntity<CargaVuelosResponse> cargaVuelosJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde,
+            @RequestParam(defaultValue = "0") int limit) {
+        CargaVuelosResponse body = jobQuery.getCargaVuelosJob(jobId, desde, limit);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
@@ -136,9 +144,16 @@ public class JobQueryController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * Ocupación de almacenes por bloque, PAGINADA (anti-OOM; mismo contrato de cursor que
+     * {@code /vuelos/carga}). El front pagina con {@code desde}/{@code proximoDesde} mientras {@code hayMas}.
+     */
     @GetMapping("/jobs/{jobId}/almacenes/ocupacion")
-    public ResponseEntity<OcupacionAlmacenesResponse> ocupacionAlmacenesJob(@PathVariable String jobId) {
-        OcupacionAlmacenesResponse body = jobQuery.getOcupacionAlmacenesJob(jobId);
+    public ResponseEntity<OcupacionAlmacenesResponse> ocupacionAlmacenesJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "0") int desde,
+            @RequestParam(defaultValue = "0") int limit) {
+        OcupacionAlmacenesResponse body = jobQuery.getOcupacionAlmacenesJob(jobId, desde, limit);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }

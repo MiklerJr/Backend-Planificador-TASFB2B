@@ -283,22 +283,30 @@ public class SolucionBdReader {
     }
 
     /**
-     * Fase 3 (anti-OOM): reconstruye el histórico COMPLETO de {@code /vuelos/carga} desde las rutas
-     * ACTIVAS en BD, para servirlo cuando el buffer deslizante ya soltó los bloques viejos. Misma
-     * agregación por vuelo-día que {@link #reconstruirVuelosUsados}; {@code cargaAsignada = SUM(cantidad)},
-     * capacidad/%/semáforo del {@link Vuelo} del dataset. {@code bloqueIdx} = orden temporal;
-     * {@code horaInicio/horaFin} quedan null (no hay bloque en BD).
+     * Fase 3 (anti-OOM): reconstruye el histórico de {@code /vuelos/carga} desde las rutas ACTIVAS en
+     * BD, para servirlo cuando el buffer deslizante ya soltó los bloques viejos. Misma agregación por
+     * vuelo-día que {@link #reconstruirVuelosUsados}; {@code cargaAsignada = SUM(cantidad)},
+     * capacidad/%/semáforo del {@link Vuelo} del dataset. {@code bloqueIdx} = orden temporal global
+     * ({@code desde + rowNum}); {@code horaInicio/horaFin} quedan null (no hay bloque en BD).
+     *
+     * <p>Anti-OOM: PAGINADO ({@code OFFSET desde LIMIT limit}) y leído con cursor server-side
+     * ({@code fetchSize} en una tx read-only ⇒ {@code autoCommit=false}, igual que
+     * {@link #forEachEnrutado}), para no materializar TODO el histórico de golpe. El llamador pide
+     * {@code limit+1} para detectar si quedan más páginas.
      */
-    public List<CargaVueloRow> reconstruirCargasVuelos() {
+    public List<CargaVueloRow> reconstruirCargasVuelos(int desde, int limit) {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
+        final int offset = Math.max(0, desde);
+        final int lim = Math.max(1, limit);
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
                 + "COALESCE(SUM(e.cantidad_maletas), 0) AS carga "
                 + "FROM tramo_ruta t "
                 + "JOIN ruta_asignada r ON r.id_ruta = t.id_ruta AND r.activa "
                 + "JOIN envio e ON e.id_envio = r.id_envio "
                 + "GROUP BY t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc "
-                + "ORDER BY t.hora_salida_utc, t.id_vuelo";
-        return jdbc.query(sql, (rs, rowNum) -> {
+                + "ORDER BY t.hora_salida_utc, t.id_vuelo "
+                + "LIMIT ? OFFSET ?";
+        org.springframework.jdbc.core.RowMapper<CargaVueloRow> mapper = (rs, rowNum) -> {
             String idBD = rs.getString("id_vuelo");
             Vuelo v = idx.get(idBD);
             String vueloFront = v != null ? SimulacionFormat.vueloFrontId(v) : idBD;
@@ -323,9 +331,20 @@ public class SolucionBdReader {
             row.setCargaAsignada(c.getCargaAsignada());
             row.setPorcentajeCarga(c.getPorcentajeCarga());
             row.setSemaforo(c.getSemaforo());
-            row.setBloqueIdx(rowNum);   // orden temporal, no el bloque de cálculo
+            row.setBloqueIdx(offset + rowNum);   // orden temporal global, no el bloque de cálculo
             return row;
-        });
+        };
+        org.springframework.jdbc.core.PreparedStatementCreator psc = con -> {
+            var ps = con.prepareStatement(sql);
+            ps.setInt(1, lim);
+            ps.setInt(2, offset);
+            ps.setFetchSize(2000);
+            return ps;
+        };
+        if (txReadOnly != null) {
+            return txReadOnly.execute(st -> jdbc.query(psc, mapper));
+        }
+        return jdbc.query(psc, mapper);
     }
 
     /** {@code "HHMM"} → minutos del día; 0 si no parsea (fallback de {@link #leerCancelaciones}). */

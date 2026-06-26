@@ -1,10 +1,11 @@
 package com.tasfb2b.planificador.services;
 
+import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Envio;
 import com.tasfb2b.planificador.model.Vuelo;
 import com.tasfb2b.planificador.util.DataLoader;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -25,10 +26,25 @@ import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
 @Service
 public class DatasetMetadataService {
 
-    private final DataLoader dataLoader;
+    /** Default del span máximo (días) de {@code /demanda/resumen} si no hay config (constructor de tests). */
+    static final int DEFAULT_DEMANDA_MAX_DIAS = 31;
 
-    public DatasetMetadataService(DataLoader dataLoader) {
+    private final DataLoader dataLoader;
+    /** Anti-OOM: span máximo admitido por {@code /demanda/resumen} (de {@code planificador.consulta}). */
+    private final int demandaMaxDias;
+
+    @Autowired
+    public DatasetMetadataService(DataLoader dataLoader, PlanificadorProperties props) {
         this.dataLoader = dataLoader;
+        this.demandaMaxDias = (props != null && props.getConsulta() != null
+                && props.getConsulta().getDemandaMaxDias() > 0)
+                ? props.getConsulta().getDemandaMaxDias()
+                : DEFAULT_DEMANDA_MAX_DIAS;
+    }
+
+    /** Constructor sin config para tests (usa el default de span). */
+    public DatasetMetadataService(DataLoader dataLoader) {
+        this(dataLoader, null);
     }
 
     /**
@@ -108,7 +124,16 @@ public class DatasetMetadataService {
         LocalDateTime primera = dataLoader.getPrimeraVentana();
         LocalDateTime ultima = dataLoader.getUltimaVentana();
         LocalDateTime inicio = desde != null ? desde : primera;
-        LocalDateTime fin = hasta != null ? hasta : (ultima != null ? ultima.plusMinutes(1) : null);
+        // Anti-OOM (guarda de rango): si falta `hasta` o el span supera demanda-max-dias, se acota a
+        // inicio + demanda-max-dias (y se reporta el rango efectivo). Con la agregación en SQL el peor
+        // caso ya no agota el heap; la guarda acota el escaneo de BD. Se respeta el fin del dataset.
+        LocalDateTime fin = hasta;
+        if (inicio != null) {
+            LocalDateTime topeSpan = inicio.plusDays(demandaMaxDias);
+            LocalDateTime topeDataset = ultima != null ? ultima.plusMinutes(1) : null;
+            if (fin == null) fin = topeDataset != null ? topeDataset : topeSpan;
+            if (fin.isAfter(topeSpan)) fin = topeSpan;
+        }
         int limite = Math.max(1, Math.min(top <= 0 ? 20 : top, 200));
 
         DemandaResumenResponse body = new DemandaResumenResponse();
@@ -129,20 +154,20 @@ public class DatasetMetadataService {
         Map<String, long[]> porDestino = new HashMap<>();
         Map<String, long[]> porOd = new HashMap<>();
         long totalMaletas = 0L;
-        int totalEnvios = 0;
+        long totalEnvios = 0L;
 
-        for (Envio maleta : dataLoader.getMaletasEnRango(inicio, fin)) {
-            String origen = maleta.getAeropuertoOrigen() != null ? maleta.getAeropuertoOrigen().getCodigo() : "";
-            String destino = maleta.getAeropuertoDestino() != null ? maleta.getAeropuertoDestino().getCodigo() : "";
-            long cantidad = maleta.getCantidad() != null ? maleta.getCantidad() : 0L;
-            totalEnvios++;
-            totalMaletas += cantidad;
-            acumularDemanda(porOrigen, origen, cantidad);
-            acumularDemanda(porDestino, destino, cantidad);
-            acumularDemanda(porOd, origen + "->" + destino, cantidad);
+        // Agregación en BD por par O→D (≤ ~900 filas): no materializa los envíos del rango en RAM.
+        for (DataLoader.DemandaAgrupada fila : dataLoader.agregarDemandaEnRango(inicio, fin)) {
+            String origen = safe(fila.origen());
+            String destino = safe(fila.destino());
+            totalEnvios += fila.envios();
+            totalMaletas += fila.maletas();
+            acumularDemanda(porOrigen, origen, fila.envios(), fila.maletas());
+            acumularDemanda(porDestino, destino, fila.envios(), fila.maletas());
+            acumularDemanda(porOd, origen + "->" + destino, fila.envios(), fila.maletas());
         }
 
-        body.setTotalEnvios(totalEnvios);
+        body.setTotalEnvios((int) Math.min(totalEnvios, Integer.MAX_VALUE));
         body.setTotalMaletas(totalMaletas);
         body.setPorOrigen(demandaRows(porOrigen, limite));
         body.setPorDestino(demandaRows(porDestino, limite));
@@ -150,10 +175,10 @@ public class DatasetMetadataService {
         return body;
     }
 
-    private static void acumularDemanda(Map<String, long[]> acc, String key, long cantidad) {
+    private static void acumularDemanda(Map<String, long[]> acc, String key, long envios, long maletas) {
         long[] stats = acc.computeIfAbsent(safe(key), k -> new long[2]);
-        stats[0]++;
-        stats[1] += cantidad;
+        stats[0] += envios;
+        stats[1] += maletas;
     }
 
     private static List<DemandaResumenResponse.DemandaRow> demandaRows(Map<String, long[]> acc, int limite) {

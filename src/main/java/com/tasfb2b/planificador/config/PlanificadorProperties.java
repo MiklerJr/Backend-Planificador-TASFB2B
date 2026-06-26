@@ -22,6 +22,7 @@ public class PlanificadorProperties {
     private Backlog      backlog      = new Backlog();
     private StorageAware storageAware = new StorageAware();
     private AlertaColapso alertaColapso = new AlertaColapso();
+    private Consulta     consulta     = new Consulta();
 
     /** Parámetros de planificación programada fija (Sa, Ta, K, umbrales globales). */
     @Data
@@ -177,6 +178,30 @@ public class PlanificadorProperties {
         private double slaRestanteAmbar = 0.25;
         /** Holgura SLA restante (fracción 0..1) por debajo de la cual la alerta es ROJO. */
         private double slaRestanteRojo = 0.10;
+    }
+
+    /**
+     * Anti-OOM — perillas de los endpoints de CONSULTA (read models de telemetría). Acotan cuánta
+     * memoria puede pedir una sola request mientras un job pesado corre en paralelo, evitando que
+     * la respuesta materializada en RAM sea la gota que agote el heap (ver los endpoints paginados
+     * {@code /jobs/{id}/vuelos/carga}, {@code /almacenes/ocupacion} y la agregación de
+     * {@code /demanda/resumen}).
+     */
+    @Data
+    public static class Consulta {
+        /**
+         * Tope de filas por página en {@code /vuelos/carga} y {@code /almacenes/ocupacion} (valor de
+         * {@code limit} por defecto cuando el cliente pasa {@code limit<=0}). Acota el pico de RAM de
+         * una sola request: el front pagina con {@code desde}/{@code proximoDesde} hasta {@code hayMas=false}.
+         */
+        private int maxFilasPagina = 5000;
+        /**
+         * Span máximo (en días) admitido por {@code /demanda/resumen}. Si el cliente pide un rango
+         * mayor (o sin {@code hasta}), se acota a {@code desde + demandaMaxDias} y se reporta el rango
+         * efectivo en la respuesta. Protege la carga del DB: la agregación ya es en SQL (resultado
+         * diminuto), así que no es un riesgo de heap, pero acota el escaneo.
+         */
+        private int demandaMaxDias = 31;
     }
 
     /**

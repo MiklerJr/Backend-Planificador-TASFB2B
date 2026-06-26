@@ -119,3 +119,11 @@ planificador:
     # urgentes por deadline; el resto se difiere sin perderse). 0 = sin tope. Acota que el
     # backlog le robe Ta a la demanda nueva y dispare violaciones de Ta. Tunear con la medición.
     max-reproceso-por-bloque: 3000
+
+  # Anti-OOM (endpoints de consulta): acotan cuánta memoria pide una sola request de telemetría
+  # mientras un job pesado corre en paralelo, para que la respuesta materializada en RAM no agote
+  # el heap. /vuelos/carga y /almacenes/ocupacion paginan por desde/limit; /demanda/resumen agrega
+  # en SQL y acota el span del rango.
+  consulta:
+    max-filas-pagina: 5000      # tope de filas por página (limit por defecto) en /vuelos/carga y /almacenes/ocupacion
+    demanda-max-dias: 31        # span máximo (días) de /demanda/resumen (acota el escaneo de BD)

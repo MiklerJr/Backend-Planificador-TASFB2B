@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.algorithm.aco.CostFunction;
+import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.model.Vuelo;
@@ -30,24 +31,47 @@ import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
 @Service
 public class JobQueryService {
 
+    /** Default de filas por página cuando no hay {@link PlanificadorProperties} (constructor de tests). */
+    static final int DEFAULT_MAX_FILAS_PAGINA = 5000;
+
     private final JobsRegistry jobs;
     private final DataLoader dataLoader;
     /** Fase 3 (anti-OOM): reconstruye agregados desde BD cuando se pide histórico fuera de la ventana RAM. */
     private final SolucionBdReader solucionBdReader;
     private final PersistenciaSolucionService persistencia;
+    /** Anti-OOM: tope de filas por página de los read models paginados (de {@code planificador.consulta}). */
+    private final int maxFilasPagina;
 
     @Autowired
     public JobQueryService(JobsRegistry jobs, DataLoader dataLoader,
-                           SolucionBdReader solucionBdReader, PersistenciaSolucionService persistencia) {
+                           SolucionBdReader solucionBdReader, PersistenciaSolucionService persistencia,
+                           PlanificadorProperties props) {
         this.jobs = jobs;
         this.dataLoader = dataLoader;
         this.solucionBdReader = solucionBdReader;
         this.persistencia = persistencia;
+        this.maxFilasPagina = (props != null && props.getConsulta() != null
+                && props.getConsulta().getMaxFilasPagina() > 0)
+                ? props.getConsulta().getMaxFilasPagina()
+                : DEFAULT_MAX_FILAS_PAGINA;
     }
 
-    /** Constructor sin acceso a BD para tests (la reconstrucción desde BD queda deshabilitada). */
+    /** Constructor sin acceso a BD ni config para tests (BD deshabilitada; usa el default de filas). */
     public JobQueryService(JobsRegistry jobs, DataLoader dataLoader) {
-        this(jobs, dataLoader, null, null);
+        this(jobs, dataLoader, null, null, null);
+    }
+
+    /** Clampea el {@code limit} pedido a {@code [1, maxFilasPagina]}; {@code <=0} ⇒ default configurado. */
+    private int limitEfectivo(int limit) {
+        if (limit <= 0) return maxFilasPagina;
+        return Math.min(limit, maxFilasPagina);
+    }
+
+    /** ¿Servir el histórico desde BD? (la ventana RAM ya soltó bloques y la solución del job está en BD). */
+    private boolean usarHistoricoBd(JobState job) {
+        return job.bloquesPublicados() > job.getMaxBloquesConAsignaciones()
+                && solucionBdReader != null && persistencia != null
+                && persistencia.reflejaEnBd(job.getJobId());
     }
 
     private JobState getJob(String jobId) {
@@ -94,6 +118,12 @@ public class JobQueryService {
         return body;
     }
 
+    /**
+     * Snapshot del semáforo "ahora": umbrales + carga de vuelos y ocupación de almacenes de los bloques
+     * MÁS RECIENTES de la ventana RAM. Anti-OOM: acotado de forma dura a {@link #maxFilasPagina} filas
+     * por sección (no es un volcado histórico) y tomando el tail (lo reciente), no el frente (lo viejo).
+     * Para el histórico completo el front pagina {@code /vuelos/carga} y {@code /almacenes/ocupacion}.
+     */
     public IndicadoresResponse getIndicadoresJob(String jobId) {
         JobState job = getJob(jobId);
         if (job == null) return null;
@@ -102,32 +132,89 @@ public class JobQueryService {
         body.setJobId(jobId);
         body.setUmbrales(new IndicadoresResponse.Umbrales(
                 CostFunction.UMBRAL_VERDE, CostFunction.UMBRAL_AMBAR));
-        body.setVuelos(getCargaVuelosJob(jobId).getVuelos());
-        body.setAlmacenes(getOcupacionAlmacenesJob(jobId).getAlmacenes());
+        body.setVuelos(cargaVuelosRecientes(job, maxFilasPagina));
+        body.setAlmacenes(ocupacionRecientes(job, maxFilasPagina));
         return body;
     }
 
-    public CargaVuelosResponse getCargaVuelosJob(String jobId) {
+    /**
+     * Carga de vuelos de los bloques MÁS RECIENTES de la ventana RAM, acotada a {@code limit} filas
+     * (snapshot del semáforo). Recorre la ventana desde el final e incluye bloques COMPLETOS hasta
+     * alcanzar {@code limit}, devolviéndolos en orden cronológico. Memoria O(limit + 1 bloque).
+     */
+    private List<CargaVueloRow> cargaVuelosRecientes(JobState job, int limit) {
+        List<BloqueSimulacion> ventana = job.bloquesDesde(0);
+        List<CargaVueloRow> acc = new ArrayList<>();
+        for (int i = ventana.size() - 1; i >= 0; i--) {
+            if (!acc.isEmpty() && acc.size() >= limit) break;
+            BloqueSimulacion bloque = ventana.get(i);
+            List<CargaVueloRow> filas = new ArrayList<>();
+            for (CargaVuelo carga : cargasDelBloque(bloque)) filas.add(cargaVueloRow(carga, bloque));
+            acc.addAll(0, filas);   // prepende para mantener el orden cronológico
+        }
+        return acc;
+    }
+
+    /** Análogo a {@link #cargaVuelosRecientes} para la ocupación de almacenes (tail reciente, acotado). */
+    private List<OcupacionAlmacenRow> ocupacionRecientes(JobState job, int limit) {
+        List<BloqueSimulacion> ventana = job.bloquesDesde(0);
+        List<OcupacionAlmacenRow> acc = new ArrayList<>();
+        for (int i = ventana.size() - 1; i >= 0; i--) {
+            if (!acc.isEmpty() && acc.size() >= limit) break;
+            BloqueSimulacion bloque = ventana.get(i);
+            List<OcupacionAlmacenRow> filas = new ArrayList<>();
+            for (OcupacionAlmacen oc : ocupacionesDelBloque(bloque)) filas.add(ocupacionAlmacenRow(oc, bloque));
+            acc.addAll(0, filas);
+        }
+        return acc;
+    }
+
+    /**
+     * Carga de vuelos por bloque, PAGINADA (anti-OOM). {@code desde} = cursor de reanudación opaco
+     * ({@code 0} para empezar); {@code limit} = tope de filas (clampeado a {@link #maxFilasPagina}).
+     * El front recorre páginas reusando {@code proximoDesde} mientras {@code hayMas}; para refrescar,
+     * reinicia en {@code desde=0}. El cursor es válido DENTRO de un mismo recorrido.
+     */
+    public CargaVuelosResponse getCargaVuelosJob(String jobId, int desde, int limit) {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
+        int desdeNorm = Math.max(0, desde);
+        int limitEf = limitEfectivo(limit);
+
         List<CargaVueloRow> vuelos;
+        int proximoDesde;
+        boolean hayMas;
         // Fase 3 (anti-OOM): si el buffer deslizante ya soltó bloques (hay histórico fuera de RAM) y el
-        // job tiene su solución en BD, se reconstruye el histórico COMPLETO desde BD; si no, la ventana RAM.
-        if (job.bloquesPublicados() > job.getMaxBloquesConAsignaciones()
-                && solucionBdReader != null && persistencia != null && persistencia.reflejaEnBd(jobId)) {
-            vuelos = solucionBdReader.reconstruirCargasVuelos();
+        // job tiene su solución en BD, se pagina el histórico desde BD; si no, la ventana RAM.
+        if (usarHistoricoBd(job)) {
+            // Ruta BD: cursor = filas (OFFSET/LIMIT). Pide limit+1 para detectar si quedan más páginas.
+            List<CargaVueloRow> pagina = solucionBdReader.reconstruirCargasVuelos(desdeNorm, limitEf + 1);
+            hayMas = pagina.size() > limitEf;
+            vuelos = hayMas ? new ArrayList<>(pagina.subList(0, limitEf)) : pagina;
+            proximoDesde = desdeNorm + vuelos.size();
         } else {
+            // Ruta RAM: cursor = bloque. Incluye bloques COMPLETOS desde `desde` hasta acumular ≥ limit
+            // filas (no parte las filas de un bloque entre páginas).
             vuelos = new ArrayList<>();
-            for (BloqueSimulacion bloque : job.bloquesDesde(0)) {
+            proximoDesde = desdeNorm;
+            hayMas = false;
+            for (BloqueSimulacion bloque : job.bloquesDesde(desdeNorm)) {
+                if (!vuelos.isEmpty() && vuelos.size() >= limitEf) { hayMas = true; break; }
                 for (CargaVuelo carga : cargasDelBloque(bloque)) {
                     vuelos.add(cargaVueloRow(carga, bloque));
                 }
+                proximoDesde = bloque.getBloqueIdx() + 1;
             }
         }
 
         CargaVuelosResponse body = new CargaVuelosResponse();
         body.setJobId(jobId);
+        body.setDesde(desdeNorm);
+        body.setProximoDesde(proximoDesde);
+        body.setHayMas(hayMas);
+        body.setBloquesPublicados(job.bloquesPublicados());
+        body.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
         body.setTotal(vuelos.size());
         body.setVuelos(vuelos);
         return body;
@@ -167,21 +254,38 @@ public class JobQueryService {
         return response;
     }
 
-    public OcupacionAlmacenesResponse getOcupacionAlmacenesJob(String jobId) {
+    /**
+     * Ocupación de almacenes por bloque, PAGINADA (anti-OOM; mismo contrato de cursor que
+     * {@link #getCargaVuelosJob}). La ocupación concurrente por slot NO se deriva directo de BD ⇒
+     * siempre se sirve desde la VENTANA reciente en RAM (cursor = bloque). El front pagina con
+     * {@code desde}/{@code proximoDesde} mientras {@code hayMas}.
+     */
+    public OcupacionAlmacenesResponse getOcupacionAlmacenesJob(String jobId, int desde, int limit) {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
-        // Fase 3 (anti-OOM): la ocupación concurrente por slot NO se deriva directo de BD ⇒ se acota a
-        // la VENTANA reciente (bloquesDesde(0) tras el buffer deslizante). El front la consume incremental.
+        int desdeNorm = Math.max(0, desde);
+        int limitEf = limitEfectivo(limit);
+
+        // Ruta RAM (única): incluye bloques COMPLETOS desde `desde` hasta acumular ≥ limit filas.
         List<OcupacionAlmacenRow> almacenes = new ArrayList<>();
-        for (BloqueSimulacion bloque : job.bloquesDesde(0)) {
+        int proximoDesde = desdeNorm;
+        boolean hayMas = false;
+        for (BloqueSimulacion bloque : job.bloquesDesde(desdeNorm)) {
+            if (!almacenes.isEmpty() && almacenes.size() >= limitEf) { hayMas = true; break; }
             for (OcupacionAlmacen ocupacion : ocupacionesDelBloque(bloque)) {
                 almacenes.add(ocupacionAlmacenRow(ocupacion, bloque));
             }
+            proximoDesde = bloque.getBloqueIdx() + 1;
         }
 
         OcupacionAlmacenesResponse body = new OcupacionAlmacenesResponse();
         body.setJobId(jobId);
+        body.setDesde(desdeNorm);
+        body.setProximoDesde(proximoDesde);
+        body.setHayMas(hayMas);
+        body.setBloquesPublicados(job.bloquesPublicados());
+        body.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
         body.setTotal(almacenes.size());
         body.setAlmacenes(almacenes);
         return body;

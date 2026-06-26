@@ -1,8 +1,13 @@
 package com.tasfb2b.planificador.services;
 
+import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.dto.BloqueSimulacion;
+import com.tasfb2b.planificador.dto.CargaVuelo;
 import com.tasfb2b.planificador.dto.IndicadoresResponse;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -34,7 +39,44 @@ class IndicadoresEndpointTest {
         assertTrue(body.getAlmacenes().isEmpty());
     }
 
+    @Test
+    void tomaLosBloquesMasRecientesAcotadoPorElLimite() {
+        JobsRegistry jobs = new JobsRegistry();
+        // Config con tope de 1 fila ⇒ el snapshot debe quedarse con el bloque más reciente (tail).
+        PlanificadorProperties props = new PlanificadorProperties();
+        props.getConsulta().setMaxFilasPagina(1);
+        JobQueryService jobQuery = new JobQueryService(jobs, null, null, null, props);
+        JobQueryController controller = new JobQueryController(
+                new PlanificadorService(null, null, null, jobs, null, null), jobQuery);
+
+        JobState job = jobs.crear("2", 14);
+        job.publicarBloque(bloqueConCarga(0, "viejo"));
+        job.publicarBloque(bloqueConCarga(1, "reciente"));
+
+        IndicadoresResponse body = controller.indicadoresJob(job.getJobId()).getBody();
+        assertEquals(1, body.getVuelos().size(), "acotado al tope de filas");
+        assertEquals(1, body.getVuelos().get(0).getBloqueIdx(), "es el bloque MÁS reciente, no el viejo");
+        assertEquals("reciente", body.getVuelos().get(0).getVueloId());
+    }
+
     // ----------------------------------------------------------------------- helpers
+
+    private static BloqueSimulacion bloqueConCarga(int idx, String vueloId) {
+        BloqueSimulacion b = new BloqueSimulacion();
+        b.setBloqueIdx(idx);
+        b.setHoraInicio("2026-01-02T0" + idx + ":00");
+        b.setHoraFin("2026-01-02T0" + (idx + 1) + ":00");
+        CargaVuelo c = new CargaVuelo();
+        c.setVueloId(vueloId);
+        c.setOrigen("SKBO");
+        c.setDestino("SEQM");
+        c.setCapacidadMaxima(300);
+        c.setCargaAsignada(100);
+        c.setPorcentajeCarga(33.3);
+        c.setSemaforo("VERDE");
+        b.setCargasVuelos(List.of(c));
+        return b;
+    }
 
     private static JobQueryController controllerCon(JobsRegistry jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,

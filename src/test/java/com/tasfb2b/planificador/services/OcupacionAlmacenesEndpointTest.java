@@ -22,7 +22,7 @@ class OcupacionAlmacenesEndpointTest {
     @Test
     void jobInexistenteDevuelve404() {
         JobQueryController controller = controllerCon(new JobsRegistry());
-        assertEquals(404, controller.ocupacionAlmacenesJob("no-existe").getStatusCode().value());
+        assertEquals(404, controller.ocupacionAlmacenesJob("no-existe", 0, 0).getStatusCode().value());
     }
 
     @Test
@@ -31,7 +31,7 @@ class OcupacionAlmacenesEndpointTest {
         JobQueryController controller = controllerCon(jobs);
         JobState job = jobs.crear("3", 75);
 
-        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId()).getBody();
+        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId(), 0, 0).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals(0, body.getTotal());
         assertTrue(body.getAlmacenes().isEmpty());
@@ -44,7 +44,7 @@ class OcupacionAlmacenesEndpointTest {
         JobState job = jobs.crear("3", 75);
         job.publicarBloque(bloqueConOcupacion(2, "2026-01-02T05:00", "2026-01-02T06:00"));
 
-        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId()).getBody();
+        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId(), 0, 0).getBody();
         assertEquals(1, body.getTotal());
         OcupacionAlmacenRow row = body.getAlmacenes().get(0);
         assertEquals("SEQM", row.getAeropuerto());
