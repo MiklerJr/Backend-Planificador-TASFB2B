@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.services;
 
+import com.tasfb2b.planificador.dto.InyeccionEnviosRequest;
 import com.tasfb2b.planificador.model.Aeropuerto;
 import com.tasfb2b.planificador.util.EnvioValidator;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +13,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -177,5 +179,50 @@ public class MigradorEnviosDb {
             insertados += batchArgs.size();
         }
         return new int[]{ insertados, descartados };
+    }
+
+    /**
+     * E1 — Operación día a día EN VIVO: parsea envíos de un {@link Reader} a
+     * {@link InyeccionEnviosRequest.Item} <b>SIN tocar la BD</b> (a diferencia de
+     * {@link #migrarEnviosDesde}). Mismo formato del dataset
+     * {@code id-YYYYMMDD-HH-MM-DESTINO-cantidad-idCliente}; el {@code origenIcao} viene del nombre del
+     * archivo ({@link #origenIcaoDeNombre}) o del form. Los tiempos del TXT se interpretan en <b>UTC</b>
+     * (el backend es 100% UTC; el front ya convierte). Descarta líneas inválidas (RF03) sin abortar y
+     * aplica {@code registrador}/{@code sede} a todos los ítems. La validación de negocio (ICAO
+     * existente, origen≠destino, cantidad>0) la hace después {@code solicitarInyeccionEnvios}.
+     */
+    public static List<InyeccionEnviosRequest.Item> parsearEnviosParaInyeccion(
+            Reader reader, String origenIcao, String registrador, String sede) throws IOException {
+        BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
+        List<InyeccionEnviosRequest.Item> items = new ArrayList<>();
+        String linea;
+        while ((linea = br.readLine()) != null) {
+            String[] parts = linea.split("-");
+            if (parts.length < 7) continue;
+            String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
+                   destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
+            if (!EnvioValidator.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr))
+                continue;
+            try {
+                int hh = Integer.parseInt(horaStr), mm = Integer.parseInt(minStr);
+                int maletas = Integer.parseInt(maletasStr), idCliente = Integer.parseInt(clienteStr);
+                LocalDateTime registroUtc = LocalDateTime.of(
+                        Integer.parseInt(fechaRaw.substring(0, 4)),
+                        Integer.parseInt(fechaRaw.substring(4, 6)),
+                        Integer.parseInt(fechaRaw.substring(6, 8)), hh, mm);
+                InyeccionEnviosRequest.Item it = new InyeccionEnviosRequest.Item();
+                it.setOrigen(origenIcao);
+                it.setDestino(destino);
+                it.setCantidad(maletas);
+                it.setFechaHoraRegistro(registroUtc);
+                it.setClienteId(idCliente);
+                it.setRegistrador(registrador);
+                it.setSede(sede);
+                items.add(it);
+            } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
+                // línea malformada → descartar sin abortar
+            }
+        }
+        return items;
     }
 }

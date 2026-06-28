@@ -180,11 +180,12 @@ public class PersistenciaSolucionService {
                 args.add(new Object[]{
                         it.getIdEnvio(), it.getOrigen(), it.getDestino(), it.getCantidad(),
                         it.getClienteId(), LocalDateTime.parse(it.getReadyTimeUtc()),
-                        it.getSlaHoras(), it.getBloqueIdx() });
+                        it.getSlaHoras(), it.getBloqueIdx(), it.getRegistrador(), it.getSede() });
             }
             jdbc.batchUpdate("INSERT INTO envio_inyectado (id_envio, icao_origen, icao_destino, "
-                    + "cantidad_maletas, id_cliente, ready_time_utc, sla_horas, bloque_idx) "
-                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", args);
+                    + "cantidad_maletas, id_cliente, ready_time_utc, sla_horas, bloque_idx, "
+                    + "registrador, sede) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", args);
         } catch (Exception e) {
             log.error("Persistencia de inyecciones falló (corrida {}): {}", jobId, e.getMessage());
         }

@@ -185,6 +185,17 @@ public class PlanificadorService {
 
     /** Variante con {@code fechaInicio}: warm-up (Ta sin sleep) hasta esa fecha y E1 desde ahí. */
     public JobState iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio) {
+        return iniciarEscenario1Async(motor, seed, fechaInicio, false);
+    }
+
+    /**
+     * Variante con {@code enVivo}: si es {@code true} arranca la OPERACIÓN día a día ("caja
+     * registradora") — demanda 100% EN VIVO (no lee el dataset {@code ENVIO}), cursor anclado a
+     * {@code now()} UTC, sin warm-up; se detiene con {@code /cancelar}. Si es {@code false}, E1
+     * simulación clásica (con {@code fechaInicio}: warm-up Ta sin sleep hasta esa fecha y E1 desde ahí).
+     */
+    public JobState iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio,
+                                           boolean enVivo) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1();
@@ -192,9 +203,12 @@ public class PlanificadorService {
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
-        job.fechaInicio = fechaInicio;
+        // En operación EN VIVO el cursor es now() UTC: fechaInicio no aplica (se ignora).
+        job.fechaInicio = enVivo ? null : fechaInicio;
+        job.enVivo = enVivo;
+        final LocalDateTime fechaEff = job.fechaInicio;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaInicio);
+            SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaEff, enVivo);
             job.resultado = res;
         });
         return job;
@@ -271,7 +285,7 @@ public class PlanificadorService {
             cancelarJob(jobId);
         }
         return switch (viejo.getEscenario()) {
-            case "1" -> iniciarEscenario1Async(viejo.algoritmo, viejo.seed, viejo.fechaInicio);
+            case "1" -> iniciarEscenario1Async(viejo.algoritmo, viejo.seed, viejo.fechaInicio, viejo.enVivo);
             case "2" -> {
                 EjecucionParams p = new EjecucionParams();
                 p.setMotor(viejo.algoritmo);
@@ -520,7 +534,8 @@ public class PlanificadorService {
             if (x.getClienteId() != null) b.setClienteId(x.getClienteId());
             backlog.addSinRuta(b);                                       // el flujo estándar lo recoge
             EnvioInyectadoInfo info = new EnvioInyectadoInfo(id, o.getCodigo(), d.getCodigo(),
-                    x.getCantidad(), x.getClienteId(), sla, readyEff.toString(), ctx.bloqueIdx);
+                    x.getCantidad(), x.getClienteId(), sla, readyEff.toString(), ctx.bloqueIdx,
+                    x.getRegistrador(), x.getSede());
             job.getEnviosInyectados().add(info);                         // siempre (para /estado, en RAM)
             liberados.add(info);
             itr.remove();
@@ -1000,28 +1015,39 @@ public class PlanificadorService {
      * arma un {@link SimulacionResponse} agregado al final.
      */
     public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed) {
-        return ejecutarEscenario1(job, motor, seed, null);
+        return ejecutarEscenario1(job, motor, seed, null, false);
+    }
+
+    public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed,
+                                                 LocalDateTime fechaInicio) {
+        return ejecutarEscenario1(job, motor, seed, fechaInicio, false);
     }
 
     /**
-     * Variante con {@code fechaInicio}: si es posterior a la primera ventana del dataset, se
-     * pre-calcula el período previo como warm-up (Ta como cota dura, SIN el sleep de Sa) y la
-     * fase visible arranca en fechaInicio respetando Sa. El estado inicial (aviones aún en el
-     * aire al llegar a fechaInicio) queda en {@code job.estadoInicial}.
+     * Variante con {@code enVivo}: si es {@code true} ejecuta la OPERACIÓN día a día ("caja
+     * registradora") — el plan se ancla a {@code now()} UTC ({@link #construirPlanOperacionE1}), la
+     * demanda NO se lee del dataset (entra 100% por la cola de inyecciones / registro en vivo) y no hay
+     * warm-up; el ritmo de reloj real (sleep Sa−Ta) queda forzado. Si es {@code false}, E1 simulación
+     * clásica: con {@code fechaInicio} posterior a la primera ventana se pre-calcula el período previo
+     * como warm-up (Ta como cota dura, SIN el sleep de Sa) y la fase visible arranca en fechaInicio
+     * respetando Sa. El estado inicial (aviones aún en el aire al llegar a fechaInicio) queda en
+     * {@code job.estadoInicial}.
      */
     public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed,
-                                                 LocalDateTime fechaInicio) {
+                                                 LocalDateTime fechaInicio, boolean enVivo) {
         String motorRes = resolverMotor(motor);
         int k = props.getScenario().getKDefault1();
         int saMin = props.getScenario().getSaMinutos();
         long taFijoMs = props.getScenario().getTaSegundos() * 1000L;
         int scMin = Math.max(saMin, k * saMin);
-        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, fechaInicio={}, async={}) ...",
-                motorRes, seed, k, saMin, scMin, fechaInicio, job != null);
+        log.info("Escenario 1 — motor={} seed={} (K={}, Sa={}min, Sc={}min, fechaInicio={}, enVivo={}, async={}) ...",
+                motorRes, seed, k, saMin, scMin, fechaInicio, enVivo, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio);
-        List<TemporalContext> warmupPlan = fechaInicio != null
+        List<TemporalContext> plan = enVivo
+                ? construirPlanOperacionE1(k)
+                : construirPlanBloques(k, fechaInicio);
+        List<TemporalContext> warmupPlan = (!enVivo && fechaInicio != null)
                 ? construirPlanWarmup(k, fechaInicio, null)
                 : Collections.emptyList();
         if (plan.isEmpty()) {
@@ -1056,7 +1082,8 @@ public class PlanificadorService {
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
         long totalMaletas = 0L;
         TaStats taStats = new TaStats();
-        boolean simularTiempoReal = props.getScenario().isSimularTiempoReal1();
+        // En operación EN VIVO el reloj DEBE avanzar a tiempo real (sleep Sa−Ta), pase lo que pase el yaml.
+        boolean simularTiempoReal = enVivo || props.getScenario().isSimularTiempoReal1();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
         // G2: purga activa para acotar el backlog (los vencidos dejan de reintentarse).
@@ -1088,7 +1115,8 @@ public class PlanificadorService {
             // Envíos inyectados en vivo: drenar y liberar los que ya entran en esta ventana (al backlog).
             if (job != null) aplicarInyeccionesEnvio(job, bufferInyecciones, ctx, backlog);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs);
+            // demandaEnVivo=enVivo: en operación NO se lee el dataset (la demanda entra por inyección).
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs, false, enVivo);
 
             rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
@@ -1712,7 +1740,7 @@ public class PlanificadorService {
                                             Random rngSim,
                                             long taFijoMsOverride) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
-                auditAcc, motor, rngSim, taFijoMsOverride, false);
+                auditAcc, motor, rngSim, taFijoMsOverride, false, false);
     }
 
     /**
@@ -1722,6 +1750,11 @@ public class PlanificadorService {
      * posible. El motor sigue corriendo con su presupuesto Ta como deadline,
      * pero su tiempo real de cómputo (≪ Ta en la mayoría de bloques) marca
      * la cadencia.
+     *
+     * <p>{@code demandaEnVivo}: si es true (operación día a día EN VIVO), NO se lee la demanda del
+     * dataset maestro {@code ENVIO} — la demanda del bloque entra solo por la cola de inyecciones
+     * (registro manual / carga TXT) vía {@code aplicarInyeccionesEnvio}. El backlog se sigue procesando
+     * con normalidad.
      */
     private ResultadoVentana procesarBloque(TemporalContext ctx,
                                             Graph graph,
@@ -1733,11 +1766,15 @@ public class PlanificadorService {
                                             String motor,
                                             Random rngSim,
                                             long taFijoMsOverride,
-                                            boolean fastForward) {
+                                            boolean fastForward,
+                                            boolean demandaEnVivo) {
         ctx.marcarInicio();
 
         // 1. Eje de datos: consumir [scStart, scEnd) → todo lo registrado en ese rango.
-        List<Envio> maletasVentana = dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
+        //    En operación EN VIVO la demanda NO sale del dataset: entra por inyección (registro/TXT).
+        List<Envio> maletasVentana = demandaEnVivo
+                ? Collections.emptyList()
+                : dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
         List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
         // 2. Backlog: traer pendientes de bloques anteriores sin descarte definitivo.
@@ -2084,6 +2121,40 @@ public class PlanificadorService {
      */
     private List<TemporalContext> construirPlanBloques(int k, LocalDateTime fechaInicio) {
         return construirPlanBloques(k, fechaInicio, null, null);
+    }
+
+    /**
+     * E1 — Operación día a día EN VIVO ("caja registradora"): plan anclado al TIEMPO REAL. El primer
+     * bloque arranca en {@code now()} (UTC) alineado hacia abajo a un múltiplo de Sa, y avanza en
+     * ventanas de {@code Sc = K*Sa} minutos hasta cubrir {@code operacion-horas} (tope; en la práctica
+     * la corrida se detiene con {@code /cancelar}). NO depende del dataset ({@code getPrimeraVentana}):
+     * la demanda entra 100% por la cola de inyecciones (registro manual / carga TXT), por eso aquí no
+     * se lee {@code ENVIO} y la tabla maestra puede seguir poblada para E2/E3.
+     */
+    private List<TemporalContext> construirPlanOperacionE1(int k) {
+        int saMin = props.getScenario().getSaMinutos();
+        int scMin = Math.max(saMin, k * saMin);
+        int horas = Math.max(1, props.getScenario().getOperacionHoras());
+
+        LocalDateTime ahora = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        // Alinear el arranque a un múltiplo de Sa contado desde el inicio del día UTC (bloques limpios).
+        LocalDateTime inicio = alinearASa(ahora, ahora.toLocalDate().atStartOfDay(), saMin);
+        long ventanas = Math.max(1L, (long) horas * 60L / saMin);
+        LocalDateTime fin = inicio.plusMinutes(ventanas * saMin);
+
+        log.info("Plan operación E1 (EN VIVO): inicio={} fin={} K={} Sa={}min Sc={}min horizonte={}h",
+                inicio, fin, k, saMin, scMin, horas);
+
+        List<TemporalContext> plan = new ArrayList<>();
+        LocalDateTime scStart = inicio;
+        int idx = 0;
+        while (scStart.isBefore(fin)) {
+            LocalDateTime scEnd = scStart.plusMinutes(scMin);
+            if (scEnd.isAfter(fin)) scEnd = fin;
+            plan.add(new TemporalContext(scStart, scEnd, scMin, saMin, k, idx++));
+            scStart = scEnd;
+        }
+        return plan;
     }
 
     /**
@@ -2778,7 +2849,7 @@ public class PlanificadorService {
             wIdx++;
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
-                    auditWarmup, motorRes, rngBloque, taFijoMs, true);
+                    auditWarmup, motorRes, rngBloque, taFijoMs, true, false);
             if (job != null) {
                 job.bloqueWarmup = wIdx;
                 if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;

@@ -60,4 +60,16 @@ public class EnvioInyectado {
     /** Índice del bloque en que el envío entró a la simulación. */
     @Column(name = "bloque_idx")
     private Integer bloqueIdx;
+
+    /**
+     * E1 — Operación día a día: empleado registrador que dio de alta el envío (opcional). Columna
+     * añadida por migración (ver docs/db/schema.sql): {@code ALTER TABLE envio_inyectado ADD COLUMN
+     * registrador VARCHAR}.
+     */
+    @Column(name = "registrador")
+    private String registrador;
+
+    /** E1 — Operación día a día: sede del registrador (opcional, p. ej. "Lima"). */
+    @Column(name = "sede")
+    private String sede;
 }

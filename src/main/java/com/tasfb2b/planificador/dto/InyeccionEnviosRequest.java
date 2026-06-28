@@ -39,5 +39,16 @@ public class InyeccionEnviosRequest {
         private LocalDateTime fechaHoraRegistro;
         /** Identificador del cliente (opcional). */
         private Integer clienteId;
+        /**
+         * E1 — Operación día a día: nombre/identificador del empleado registrador que dio de alta el
+         * envío (opcional). Atribución para la prueba (uno por sede). Solo informativo: no afecta el
+         * ruteo.
+         */
+        private String registrador;
+        /**
+         * E1 — Operación día a día: sede del registrador (p. ej. "Lima", "Buenos Aires", "Copenhague",
+         * "Delhi"), opcional. Solo informativo.
+         */
+        private String sede;
     }
 }

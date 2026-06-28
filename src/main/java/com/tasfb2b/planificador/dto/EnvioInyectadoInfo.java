@@ -33,4 +33,8 @@ public class EnvioInyectadoInfo {
     private String readyTimeUtc;
     /** Índice del bloque en que el envío entró a la simulación. */
     private int bloqueIdx;
+    /** E1 operación: empleado registrador que dio de alta el envío (opcional). */
+    private String registrador;
+    /** E1 operación: sede del registrador (opcional, p. ej. "Lima"). */
+    private String sede;
 }

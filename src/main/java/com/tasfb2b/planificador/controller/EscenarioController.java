@@ -7,10 +7,13 @@ import com.tasfb2b.planificador.dto.*;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
 import com.tasfb2b.planificador.services.IngestaService;
 import com.tasfb2b.planificador.services.JobState;
+import com.tasfb2b.planificador.services.MigradorEnviosDb;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,8 +23,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -104,23 +113,33 @@ public class EscenarioController {
      * (día a día). El front consume bloques vía
      * {@code GET /jobs/{jobId}/bloques?desde=N} igual que en E2/E3.
      *
-     * <p>{@code fechaInicio} (opcional): si es posterior al inicio del dataset, el período
-     * previo se PRE-CALCULA como warm-up — respeta el presupuesto Ta por bloque pero ignora
-     * el sleep de Sa — y la fase visible arranca en fechaInicio respetando Sa. Mientras dura,
-     * el job está en estado "calentando"; el snapshot de aviones aún en el aire queda en
-     * {@code GET /jobs/{jobId}/estado-inicial}. 400 si fechaInicio está fuera del dataset.
+     * <p>{@code enVivo=true} arranca la OPERACIÓN día a día ("caja registradora"): NO es simulación —
+     * la demanda NO sale del dataset {@code ENVIO} sino 100% EN VIVO (registro manual
+     * {@code POST /jobs/{id}/inyectar-envios} y carga {@code POST /jobs/{id}/cargar-envios-txt}). El
+     * cursor se ancla a {@code now()} UTC y avanza en tiempo real; la operación se detiene con
+     * {@code POST /jobs/{id}/cancelar}. En este modo {@code fechaInicio} se ignora.
+     *
+     * <p>{@code enVivo=false} (default): E1 simulación clásica. {@code fechaInicio} (opcional): si es
+     * posterior al inicio del dataset, el período previo se PRE-CALCULA como warm-up — respeta el
+     * presupuesto Ta por bloque pero ignora el sleep de Sa — y la fase visible arranca en fechaInicio
+     * respetando Sa. Mientras dura, el job está en estado "calentando"; el snapshot de aviones aún en el
+     * aire queda en {@code GET /jobs/{jobId}/estado-inicial}. 400 si fechaInicio está fuera del dataset.
      */
     @PostMapping("/escenario1/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc1Async(
             @RequestParam(defaultValue = "alns") String algoritmo,
             @RequestParam(required = false)      Long   seed,
             @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio) {
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
+            @RequestParam(defaultValue = "false") boolean enVivo) {
         rechazarSiIngestaEnCurso();
-        String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
-        if (error != null) throw new ParametroInvalidoException(error);
+        // En operación EN VIVO el cursor es now() UTC: fechaInicio no aplica (no se valida vs dataset).
+        if (!enVivo) {
+            String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
+            if (error != null) throw new ParametroInvalidoException(error);
+        }
 
-        JobState job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio);
+        JobState job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio, enVivo);
         Map<String, Object> body = new HashMap<>();
         body.put("jobId",     job.getJobId());
         body.put("escenario", "1");
@@ -128,6 +147,7 @@ public class EscenarioController {
         body.put("k",         job.getK());
         body.put("seed",      job.seed);
         body.put("estado",    job.estado);
+        body.put("enVivo",    job.enVivo);
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }
@@ -309,11 +329,67 @@ public class EscenarioController {
      * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó, 400 si el input es
      *         inválido (ICAO desconocido, origen=destino, cantidad ≤ 0, lista vacía).
      */
-    @PostMapping("/jobs/{jobId}/inyectar-envios")
+    @PostMapping({"/jobs/{jobId}/inyectar-envios", "/jobs/{jobId}/registrar-envios"})
     public ResponseEntity<Map<String, Object>> inyectarEnvios(
             @PathVariable String jobId,
             @RequestBody InyeccionEnviosRequest req) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
+        if (encolados < 0) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "jobId", jobId, "encolado", false,
+                    "motivo", "el job no está activo (ya terminó o fue cancelado)"));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId", jobId, "encolado", true, "encolados", encolados));
+    }
+
+    /**
+     * E1 — Operación día a día: carga de un archivo TXT de envíos adicionales (multipart). Cada archivo
+     * sigue el formato del dataset {@code id-YYYYMMDD-HH-MM-DESTINO-cantidad-idCliente}; el ICAO de
+     * origen sale del nombre ({@code _envios_<ICAO>_.txt}) o del parámetro {@code origen}. Los tiempos
+     * se interpretan en <b>UTC</b>. Se parsea SIN tocar la BD ({@link MigradorEnviosDb#parsearEnviosParaInyeccion})
+     * y se delega en la MISMA cola/validación/persistencia que el registro manual
+     * ({@code solicitarInyeccionEnvios} → {@code envio_inyectado}). Requiere job activo (operación E1 en
+     * marcha).
+     *
+     * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó, 400 si faltan
+     *         archivos / no hay ICAO derivable / ningún envío válido / algún envío inválido.
+     */
+    @PostMapping(value = "/jobs/{jobId}/cargar-envios-txt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Map<String, Object>> cargarEnviosTxt(
+            @PathVariable String jobId,
+            @RequestParam("archivos") MultipartFile[] archivos,
+            @RequestParam(required = false) String origen,
+            @RequestParam(required = false) String registrador,
+            @RequestParam(required = false) String sede) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (archivos == null || archivos.length == 0)
+            throw new ParametroInvalidoException("Se requiere al menos un archivo de envíos.");
+
+        List<InyeccionEnviosRequest.Item> items = new ArrayList<>();
+        for (MultipartFile f : archivos) {
+            if (f == null || f.isEmpty()) continue;
+            String icao = (origen != null && !origen.isBlank())
+                    ? origen.trim()
+                    : MigradorEnviosDb.origenIcaoDeNombre(f.getOriginalFilename());
+            if (icao == null)
+                throw new ParametroInvalidoException(
+                        "Archivo sin ICAO de origen derivable del nombre: " + f.getOriginalFilename()
+                      + " (use _envios_<ICAO>_.txt o el parámetro 'origen').");
+            try (Reader r = new InputStreamReader(f.getInputStream(), StandardCharsets.UTF_8)) {
+                items.addAll(MigradorEnviosDb.parsearEnviosParaInyeccion(r, icao, registrador, sede));
+            } catch (IOException ex) {
+                throw new ParametroInvalidoException(
+                        "No se pudo leer " + f.getOriginalFilename() + ": " + ex.getMessage());
+            }
+        }
+        if (items.isEmpty())
+            throw new ParametroInvalidoException("Ningún envío válido en los archivos "
+                    + "(formato esperado: id-YYYYMMDD-HH-MM-DESTINO-cantidad-idCliente).");
+
+        InyeccionEnviosRequest req = new InyeccionEnviosRequest();
+        req.setEnvios(items);
         int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(

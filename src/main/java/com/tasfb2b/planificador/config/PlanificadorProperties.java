@@ -53,6 +53,14 @@ public class PlanificadorProperties {
         private int umbralColapsoBacklog = 8000;
         /** Si true, escenario 1 duerme (Sa - Ta) entre bloques. Por diseño (día a día). */
         private boolean simularTiempoReal1 = true;
+
+        /**
+         * E1 — Operación día a día EN VIVO ({@code enVivo=true}): horizonte en HORAS de la corrida. El
+         * cursor arranca en {@code now()} UTC y avanza en tiempo real (sleep Sa−Ta), así que estas horas
+         * son el tope de duración de una operación; en la práctica el operador la detiene con
+         * {@code /cancelar}. Solo aplica al modo operación (no al E1 simulación clásico).
+         */
+        private int operacionHoras = 24;
         /** Si true, escenario 2 duerme (Sa - Ta) entre bloques para simular tiempo real. */
         private boolean simularTiempoReal2 = true;
         /** Si true, escenario 3 también duerme entre bloques (no recomendado). */

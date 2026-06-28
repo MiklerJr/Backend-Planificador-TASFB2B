@@ -146,6 +146,15 @@ public class JobState {
     public volatile LocalDateTime fechaInicio;
 
     /**
+     * E1 — Operación día a día EN VIVO ("caja registradora"): si es {@code true}, el job NO lee la
+     * demanda del dataset maestro {@code ENVIO}; su demanda es 100% en vivo (registro manual + carga
+     * TXT vía la cola de inyecciones). El cursor se ancla a {@code now()} UTC y avanza en tiempo real
+     * hasta {@code /cancelar}. {@code false} = E1 simulación clásica (lee el dataset). Lo preserva
+     * {@code reiniciarJob} para re-lanzar la misma clase de corrida.
+     */
+    public volatile boolean enVivo = false;
+
+    /**
      * Ventana UTC realmente SIMULADA en la fase visible (no warm-up): {@code ventanaInicioUtc} es el
      * {@code scStart} del primer bloque visible y {@code ventanaFinUtc} el {@code scEnd} del último.
      * Es la verdad contra la que se valida el rango {@code desde/hasta} de la auditoría (la solución
