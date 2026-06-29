@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.dto.DemandaResumenResponse;
+import com.tasfb2b.planificador.dto.dataset.DemandaResumenResponse;
 import com.tasfb2b.planificador.util.DataLoader;
 import org.junit.jupiter.api.Test;
 

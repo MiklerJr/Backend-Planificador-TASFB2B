@@ -1,8 +1,11 @@
 package com.tasfb2b.planificador.controller;
 
-import com.tasfb2b.planificador.dto.AlertaColapso;
-import com.tasfb2b.planificador.dto.*;
-import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
+import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
+import com.tasfb2b.planificador.dto.almacenes.*;
+import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
+import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
 import com.tasfb2b.planificador.services.JobQueryService;
 import com.tasfb2b.planificador.services.JobState;
 import com.tasfb2b.planificador.services.PlanificadorService;

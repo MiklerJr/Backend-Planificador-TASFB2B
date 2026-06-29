@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.dto.AsignacionMaleta;
-import com.tasfb2b.planificador.dto.EnvioEstadoResponse;
-import com.tasfb2b.planificador.dto.TramoRuta;
+import com.tasfb2b.planificador.dto.simulacion.AsignacionMaleta;
+import com.tasfb2b.planificador.dto.simulacion.EnvioEstadoResponse;
+import com.tasfb2b.planificador.dto.simulacion.TramoRuta;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;

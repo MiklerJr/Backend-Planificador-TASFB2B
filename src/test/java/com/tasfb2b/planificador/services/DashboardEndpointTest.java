@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.DashboardResponse;
+import com.tasfb2b.planificador.dto.jobs.DashboardResponse;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

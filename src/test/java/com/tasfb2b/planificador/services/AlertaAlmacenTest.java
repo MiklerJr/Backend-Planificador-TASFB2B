@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.almacenes.*;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

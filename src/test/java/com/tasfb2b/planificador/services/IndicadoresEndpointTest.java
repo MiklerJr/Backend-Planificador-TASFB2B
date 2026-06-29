@@ -2,9 +2,9 @@ package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.BloqueSimulacion;
-import com.tasfb2b.planificador.dto.CargaVuelo;
-import com.tasfb2b.planificador.dto.IndicadoresResponse;
+import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
+import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
+import com.tasfb2b.planificador.dto.jobs.IndicadoresResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

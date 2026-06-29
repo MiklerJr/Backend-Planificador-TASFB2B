@@ -1,9 +1,9 @@
 package com.tasfb2b.planificador.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tasfb2b.planificador.dto.AeropuertoDTO;
-import com.tasfb2b.planificador.dto.DashboardResponse;
-import com.tasfb2b.planificador.dto.EstadoJobResponse;
+import com.tasfb2b.planificador.dto.dataset.AeropuertoDTO;
+import com.tasfb2b.planificador.dto.jobs.DashboardResponse;
+import com.tasfb2b.planificador.dto.jobs.EstadoJobResponse;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;

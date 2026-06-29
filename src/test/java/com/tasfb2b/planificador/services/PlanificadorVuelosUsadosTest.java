@@ -1,7 +1,8 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.dto.*;
-import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
+import com.tasfb2b.planificador.dto.simulacion.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
+import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;

@@ -1,10 +1,10 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.BloqueSimulacion;
-import com.tasfb2b.planificador.dto.OcupacionAlmacen;
-import com.tasfb2b.planificador.dto.OcupacionAlmacenRow;
-import com.tasfb2b.planificador.dto.OcupacionAlmacenesResponse;
+import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
+import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacen;
+import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenRow;
+import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenesResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

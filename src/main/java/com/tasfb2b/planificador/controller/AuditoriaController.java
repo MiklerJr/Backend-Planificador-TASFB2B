@@ -106,7 +106,7 @@ public class AuditoriaController {
      * {@code desde}/{@code hasta} (UTC, mismo eje que {@code auditoria.zip}): archivos de envíos y de
      * cancelaciones, con sus filas. Pensado para que el front avise del tamaño antes de descargar.
      *
-     * @return {@code 200} con {@link com.tasfb2b.planificador.dto.EstimacionAuditoria} · {@code 404} si
+     * @return {@code 200} con {@link com.tasfb2b.planificador.dto.auditoria.EstimacionAuditoria} · {@code 404} si
      *         el job no existe · {@code 409} si aún activo o su solución fue reemplazada · {@code 400}
      *         si el rango no se solapa con la ventana simulada.
      */

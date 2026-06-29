@@ -5,7 +5,9 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.almacenes.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

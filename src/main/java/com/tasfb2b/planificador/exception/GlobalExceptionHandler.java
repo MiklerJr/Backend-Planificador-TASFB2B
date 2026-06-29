@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.exception;
 
-import com.tasfb2b.planificador.dto.ErrorResponse;
+import com.tasfb2b.planificador.dto.comun.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

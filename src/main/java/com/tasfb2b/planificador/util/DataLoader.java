@@ -4,6 +4,8 @@ import com.tasfb2b.planificador.model.dataset.Aeropuerto;
 import com.tasfb2b.planificador.model.dataset.Envio;
 import com.tasfb2b.planificador.model.dataset.TipoEnvio;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
+import com.tasfb2b.planificador.util.parser.FlightParser;
+import com.tasfb2b.planificador.util.validator.VueloValidator;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;

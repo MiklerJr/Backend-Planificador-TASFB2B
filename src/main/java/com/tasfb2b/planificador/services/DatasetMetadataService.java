@@ -1,7 +1,8 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.dataset.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
 import com.tasfb2b.planificador.util.DataLoader;

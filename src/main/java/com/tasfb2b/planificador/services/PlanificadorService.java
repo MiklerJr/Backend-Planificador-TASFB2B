@@ -3,23 +3,28 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.*;
 import com.tasfb2b.planificador.algorithm.alns.*;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.AlertaColapso;
-import com.tasfb2b.planificador.dto.AuditoriaEnvio;
-import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
-import com.tasfb2b.planificador.dto.EjecucionParams;
-import com.tasfb2b.planificador.dto.*;
-import com.tasfb2b.planificador.dto.VueloCancelado;
+import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
+import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
+import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
+import com.tasfb2b.planificador.dto.simulacion.EjecucionParams;
+import com.tasfb2b.planificador.dto.almacenes.*;
+import com.tasfb2b.planificador.dto.auditoria.*;
+import com.tasfb2b.planificador.dto.dataset.*;
+import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
+import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;
 import com.tasfb2b.planificador.model.dataset.Envio;
 import com.tasfb2b.planificador.model.dataset.TipoEnvio;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.EnvioValidator;
-import com.tasfb2b.planificador.dto.VuelosUsadosResponse;
+import com.tasfb2b.planificador.util.validator.EnvioValidator;
+import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
 import com.tasfb2b.planificador.util.AlgorithmMapper;
 import com.tasfb2b.planificador.util.DataLoader;
 import com.tasfb2b.planificador.util.EnvioEstadoCalculator;
-import com.tasfb2b.planificador.util.FlightParser;
+import com.tasfb2b.planificador.util.parser.FlightParser;
 import com.tasfb2b.planificador.util.SimulacionFormat;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -2020,7 +2025,7 @@ public class PlanificadorService {
         // Alerta de colapso INMINENTE (pre-colapso): precursores de los 2 criterios reales.
         var pre = enrutador.evaluarPreColapso(
                 telemetryAirport, backlog != null ? backlog.peekPendientes() : java.util.List.of());
-        com.tasfb2b.planificador.dto.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
+        com.tasfb2b.planificador.dto.jobs.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
 
         // Desborde DURO: ocupación real > 100% en algún slot de almacén tocado este bloque. No
         // debería ocurrir (toda ruta valida su estadía completa antes de aplicarse al bloque),
@@ -2042,30 +2047,30 @@ public class PlanificadorService {
     }
 
     /**
-     * Traduce las señales crudas de pre-colapso a una {@link com.tasfb2b.planificador.dto.AlertaColapso}
+     * Traduce las señales crudas de pre-colapso a una {@link com.tasfb2b.planificador.dto.jobs.AlertaColapso}
      * (nivel = máximo entre la señal de almacén y la de backlog) aplicando los umbrales configurables.
      */
-    private com.tasfb2b.planificador.dto.AlertaColapso construirAlertaColapso(
+    private com.tasfb2b.planificador.dto.jobs.AlertaColapso construirAlertaColapso(
             GreedyRepairOperator.PreColapso pre, int bloque) {
         var cfg = props.getAlertaColapso();
         // Nivel por almacén.
-        String nivelAlmacen = com.tasfb2b.planificador.dto.AlertaColapso.VERDE;
-        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.AlertaColapso.ROJO;
-        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.AlertaColapso.AMBAR;
+        String nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
+        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
+        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
         // Nivel por backlog (holgura SLA restante baja = urgente).
-        String nivelBacklog = com.tasfb2b.planificador.dto.AlertaColapso.VERDE;
+        String nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
         if (pre.envioUrgente() != null) {
-            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.AlertaColapso.ROJO;
-            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.AlertaColapso.AMBAR;
+            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
+            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
         }
         String nivel = nivelMax(nivelAlmacen, nivelBacklog);
 
         StringBuilder msg = new StringBuilder();
-        if (!com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelAlmacen)) {
+        if (!com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelAlmacen)) {
             msg.append(String.format("almacén %s al %.0f%% de capacidad",
                     pre.almacenCritico(), pre.utilAlmacenMax() * 100));
         }
-        if (!com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelBacklog)) {
+        if (!com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelBacklog)) {
             if (msg.length() > 0) msg.append(" | ");
             msg.append(String.format("envío %s al %.0f%% de su SLA en backlog",
                     pre.envioUrgente(), Math.max(0, pre.holguraSlaMin()) * 100));
@@ -2073,14 +2078,14 @@ public class PlanificadorService {
         if (msg.length() == 0) msg.append("Sin riesgo de colapso");
 
         // Causa dominante: qué señal levantó el nivel (para que el front no parsee el mensaje).
-        boolean almacenActivo = !com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelAlmacen);
-        boolean backlogActivo = !com.tasfb2b.planificador.dto.AlertaColapso.VERDE.equals(nivelBacklog);
+        boolean almacenActivo = !com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelAlmacen);
+        boolean backlogActivo = !com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelBacklog);
         String causaDominante = almacenActivo && backlogActivo ? "ambos"
                 : almacenActivo ? "almacen"
                 : backlogActivo ? "sla"
                 : null;
 
-        return new com.tasfb2b.planificador.dto.AlertaColapso(
+        return new com.tasfb2b.planificador.dto.jobs.AlertaColapso(
                 nivel, msg.toString(), bloque,
                 pre.utilAlmacenMax(), pre.almacenCritico(), pre.holguraSlaMin(), pre.envioUrgente(),
                 causaDominante);
@@ -2100,13 +2105,13 @@ public class PlanificadorService {
     }
 
     private static String nivelMax(String a, String b) {
-        if (com.tasfb2b.planificador.dto.AlertaColapso.ROJO.equals(a)
-                || com.tasfb2b.planificador.dto.AlertaColapso.ROJO.equals(b))
-            return com.tasfb2b.planificador.dto.AlertaColapso.ROJO;
-        if (com.tasfb2b.planificador.dto.AlertaColapso.AMBAR.equals(a)
-                || com.tasfb2b.planificador.dto.AlertaColapso.AMBAR.equals(b))
-            return com.tasfb2b.planificador.dto.AlertaColapso.AMBAR;
-        return com.tasfb2b.planificador.dto.AlertaColapso.VERDE;
+        if (com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO.equals(a)
+                || com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO.equals(b))
+            return com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
+        if (com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR.equals(a)
+                || com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR.equals(b))
+            return com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
+        return com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
     }
 
     /**
@@ -3031,8 +3036,8 @@ public class PlanificadorService {
 
     /** Fase 5b-2: snapshot de métricas por bloque para el /dashboard mientras el job corre (las
      *  asignaciones de bloques viejos se purgan, así que no se pueden recontar). */
-    private static com.tasfb2b.planificador.dto.Metricas metricasSnapshotDe(TotalesUnicos t, long taPromedioMs) {
-        com.tasfb2b.planificador.dto.Metricas m = new com.tasfb2b.planificador.dto.Metricas();
+    private static com.tasfb2b.planificador.dto.simulacion.Metricas metricasSnapshotDe(TotalesUnicos t, long taPromedioMs) {
+        com.tasfb2b.planificador.dto.simulacion.Metricas m = new com.tasfb2b.planificador.dto.simulacion.Metricas();
         m.setProcesadas(t.envios());
         m.setEnrutadas(t.enrutadas());
         m.setSinRuta(t.sinRuta());
@@ -3160,7 +3165,7 @@ public class PlanificadorService {
             BloqueSimulacion bloque,
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
             boolean colapsoAlmacen, String detalleColapso,
-            com.tasfb2b.planificador.dto.AlertaColapso alerta,
+            com.tasfb2b.planificador.dto.jobs.AlertaColapso alerta,
             List<OcupacionAlmacenSlot> serieAlmacenes,
             List<LuggageBatch> finalBatches) {
     }

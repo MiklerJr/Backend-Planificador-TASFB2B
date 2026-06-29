@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.controller;
 
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.dataset.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.services.DatasetMetadataService;
 import com.tasfb2b.planificador.services.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;

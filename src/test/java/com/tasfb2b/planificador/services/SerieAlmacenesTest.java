@@ -6,7 +6,7 @@ import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.almacenes.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

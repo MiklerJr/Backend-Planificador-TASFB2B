@@ -1,9 +1,11 @@
 package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
-import com.tasfb2b.planificador.dto.EjecucionParams;
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
+import com.tasfb2b.planificador.dto.simulacion.EjecucionParams;
+import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
 import com.tasfb2b.planificador.services.IngestaService;
 import com.tasfb2b.planificador.services.JobState;

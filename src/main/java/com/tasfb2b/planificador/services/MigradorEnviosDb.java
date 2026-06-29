@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.dto.InyeccionEnviosRequest;
+import com.tasfb2b.planificador.dto.jobs.InyeccionEnviosRequest;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.util.EnvioValidator;
+import com.tasfb2b.planificador.util.validator.EnvioValidator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;

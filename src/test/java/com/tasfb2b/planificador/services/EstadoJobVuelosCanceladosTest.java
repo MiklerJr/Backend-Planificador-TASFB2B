@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.EstadoJobResponse;
-import com.tasfb2b.planificador.dto.VueloCancelado;
+import com.tasfb2b.planificador.dto.jobs.EstadoJobResponse;
+import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 

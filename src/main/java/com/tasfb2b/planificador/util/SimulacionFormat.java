@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.util;
 
 import com.tasfb2b.planificador.algorithm.aco.CostFunction;
-import com.tasfb2b.planificador.dto.CargaVuelo;
-import com.tasfb2b.planificador.dto.OcupacionAlmacen;
+import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
+import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacen;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
 
 /**

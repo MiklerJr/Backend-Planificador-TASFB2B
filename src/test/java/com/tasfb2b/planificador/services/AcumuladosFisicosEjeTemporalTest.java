@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;

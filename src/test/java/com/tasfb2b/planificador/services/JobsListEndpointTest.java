@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.JobsListResponse;
+import com.tasfb2b.planificador.dto.jobs.JobsListResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

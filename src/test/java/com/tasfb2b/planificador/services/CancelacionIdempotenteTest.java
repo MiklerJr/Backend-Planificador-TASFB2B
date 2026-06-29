@@ -5,7 +5,7 @@ import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
+import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

@@ -1,10 +1,13 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.AlertaColapso;
-import com.tasfb2b.planificador.dto.CancelacionVueloRequest;
-import com.tasfb2b.planificador.dto.*;
-import com.tasfb2b.planificador.dto.VueloCancelado;
+import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
+import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
+import com.tasfb2b.planificador.dto.almacenes.*;
+import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
+import com.tasfb2b.planificador.dto.vuelos.*;
+import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 import lombok.Data;
 
 import java.nio.file.Files;

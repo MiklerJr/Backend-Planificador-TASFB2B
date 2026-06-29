@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.*;
+import com.tasfb2b.planificador.dto.simulacion.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 

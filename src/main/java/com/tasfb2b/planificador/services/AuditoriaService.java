@@ -3,8 +3,8 @@ package com.tasfb2b.planificador.services;
 import com.tasfb2b.planificador.algorithm.aco.CostFunction;
 import com.tasfb2b.planificador.algorithm.aco.Edge;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.AuditoriaEnvio;
-import com.tasfb2b.planificador.dto.VueloCancelado;
+import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
+import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedOutputStream;
