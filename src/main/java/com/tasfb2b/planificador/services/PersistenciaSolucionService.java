@@ -82,7 +82,8 @@ public class PersistenciaSolucionService {
             return false;
         }
         try {
-            jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo, envio_inyectado RESTART IDENTITY CASCADE");
+            jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo, envio_inyectado, "
+                    + "ruta_inyectada, tramo_inyectado RESTART IDENTITY CASCADE");
             corridaPersistidaEnBd = jobId;   // a partir de aquí la BD refleja la solución de este job
             log.info("Persistencia iniciada para la corrida {} (tablas de solución limpias).", jobId);
             return true;
@@ -139,31 +140,47 @@ public class PersistenciaSolucionService {
         // Fase 2: persiste cualquier batch con ruta COMPLETA (prefijo+sufijo) no vacía. Incluye los
         // varados (solo prefijo): su prefijo se guarda como ruta activa incompleta para que el
         // endpoint de estado lo muestre EN_ESCALA esperando.
+        // Se PARTEN en dos carriles: los del dataset van a ruta_asignada/tramo_ruta (FK a envio); los
+        // inyectados en vivo (id sintético "INV-...", que NO existen en la tabla envio) van a las tablas
+        // paralelas ruta_inyectada/tramo_inyectado (sin FK a envio; metadatos en envio_inyectado).
         List<LuggageBatch> enrutados = new ArrayList<>();
+        List<LuggageBatch> inyectados = new ArrayList<>();
         for (LuggageBatch b : batches) {
-            // Los inyectados en vivo (id sintético "INV-...") NO existen en la tabla envio: persistir su
-            // ruta rompería la FK ruta_asignada→envio y revertiría el bloque entero. Su hecho va aparte
-            // en envio_inyectado (ver persistirInyecciones).
-            if (b == null || b.getId() == null || b.isSintetico()) continue;
+            if (b == null || b.getId() == null) continue;
             List<Edge> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();
-            if (ruta != null && !ruta.isEmpty() && deps != null && deps.size() == ruta.size()) {
-                enrutados.add(b);
-            }
+            if (ruta == null || ruta.isEmpty() || deps == null || deps.size() != ruta.size()) continue;
+            (b.isSintetico() ? inyectados : enrutados).add(b);
         }
-        if (enrutados.isEmpty()) return;
+        if (enrutados.isEmpty() && inyectados.isEmpty()) return;
 
         try {
-            // Los 3 pasos del bloque se escriben como unidad atómica: si los tramos fallan (p. ej. FK),
+            // Los pasos del bloque se escriben como unidad atómica: si los tramos fallan (p. ej. FK),
             // se revierten también las rutas, evitando rutas activas sin tramos.
+            Runnable escribir = () -> {
+                if (!enrutados.isEmpty()) escribirBloque(enrutados, TablasSolucion.DATASET);
+                if (!inyectados.isEmpty()) escribirBloque(inyectados, TablasSolucion.INYECTADO);
+            };
             if (tx != null) {
-                tx.executeWithoutResult(status -> escribirBloque(enrutados));
+                tx.executeWithoutResult(status -> escribir.run());
             } else {
-                escribirBloque(enrutados);
+                escribir.run();
             }
         } catch (Exception e) {
             log.error("Persistencia del bloque falló (corrida {}): {}", jobId, e.getMessage());
         }
+    }
+
+    /**
+     * Identifica el juego de tablas de solución a escribir: el del dataset ({@code ruta_asignada}/
+     * {@code tramo_ruta}, FK a {@code envio}) o el paralelo de los inyectados EN VIVO
+     * ({@code ruta_inyectada}/{@code tramo_inyectado}, sin FK a {@code envio}). Mismas columnas salvo el
+     * nombre de la PK de ruta ({@code id_ruta} vs {@code id_ruta_iny}), así {@link #escribirBloque} e
+     * {@link #insertarRutasLote} sirven a ambos sin duplicar la lógica.
+     */
+    private record TablasSolucion(String rutaTabla, String tramoTabla, String idRutaCol) {
+        static final TablasSolucion DATASET   = new TablasSolucion("ruta_asignada", "tramo_ruta", "id_ruta");
+        static final TablasSolucion INYECTADO = new TablasSolucion("ruta_inyectada", "tramo_inyectado", "id_ruta_iny");
     }
 
     /**
@@ -221,16 +238,16 @@ public class PersistenciaSolucionService {
     public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
     /** Escribe el bloque (debe correr dentro de una transacción): desactiva previa → rutas → tramos. */
-    private void escribirBloque(List<LuggageBatch> enrutados) {
+    private void escribirBloque(List<LuggageBatch> enrutados, TablasSolucion t) {
         // 1. Desactivar la ruta activa previa de estos envíos (no-op para los nuevos).
         List<Object[]> desactivar = new ArrayList<>(enrutados.size());
         for (LuggageBatch b : enrutados) desactivar.add(new Object[]{ b.getId() });
-        jdbc.batchUpdate("UPDATE ruta_asignada SET activa = FALSE WHERE id_envio = ? AND activa", desactivar);
+        jdbc.batchUpdate("UPDATE " + t.rutaTabla() + " SET activa = FALSE WHERE id_envio = ? AND activa", desactivar);
 
         // 2. Insertar las rutas nuevas (activa=true) por lotes, recuperando id_ruta por id_envio.
         Map<String, Long> idRutaPorEnvio = new HashMap<>();
         for (int i = 0; i < enrutados.size(); i += LOTE_RUTAS) {
-            insertarRutasLote(enrutados.subList(i, Math.min(i + LOTE_RUTAS, enrutados.size())), idRutaPorEnvio);
+            insertarRutasLote(enrutados.subList(i, Math.min(i + LOTE_RUTAS, enrutados.size())), idRutaPorEnvio, t);
         }
 
         // 3. Insertar todos los tramos del bloque en un único batch.
@@ -250,14 +267,15 @@ public class PersistenciaSolucionService {
                 });
             }
         }
-        jdbc.batchUpdate("INSERT INTO tramo_ruta (id_ruta, numero_orden, id_vuelo, hora_salida_utc, hora_llegada_utc) "
+        jdbc.batchUpdate("INSERT INTO " + t.tramoTabla() + " (" + t.idRutaCol()
+                + ", numero_orden, id_vuelo, hora_salida_utc, hora_llegada_utc) "
                 + "VALUES (?, ?, ?, ?, ?)", tramos);
     }
 
     /** INSERT multi-fila de un lote de rutas con {@code RETURNING} para mapear id_envio → id_ruta. */
-    private void insertarRutasLote(List<LuggageBatch> lote, Map<String, Long> idRutaPorEnvio) {
+    private void insertarRutasLote(List<LuggageBatch> lote, Map<String, Long> idRutaPorEnvio, TablasSolucion t) {
         StringBuilder sql = new StringBuilder(
-                "INSERT INTO ruta_asignada (id_envio, activa, costo_total, duracion_horas, cumple_sla, slack_sla_min, llegada_utc) VALUES ");
+                "INSERT INTO " + t.rutaTabla() + " (id_envio, activa, costo_total, duracion_horas, cumple_sla, slack_sla_min, llegada_utc) VALUES ");
         List<Object> args = new ArrayList<>(lote.size() * 6);
         for (int i = 0; i < lote.size(); i++) {
             LuggageBatch b = lote.get(i);
@@ -280,7 +298,7 @@ public class PersistenciaSolucionService {
             args.add((int) Math.round(slackMin));
             args.add(epochMinToLdt(llegadaMin));
         }
-        sql.append(" RETURNING id_ruta, id_envio");
+        sql.append(" RETURNING ").append(t.idRutaCol()).append(" AS id_ruta, id_envio");
         jdbc.query(sql.toString(),
                 (RowCallbackHandler) rs -> idRutaPorEnvio.put(rs.getString("id_envio"), rs.getLong("id_ruta")),
                 args.toArray());

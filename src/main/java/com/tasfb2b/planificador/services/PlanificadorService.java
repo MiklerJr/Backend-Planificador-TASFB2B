@@ -329,6 +329,7 @@ public class PlanificadorService {
             item.setEscenario(j.getEscenario());
             item.setAlgoritmo(j.algoritmo);
             item.setEstado(j.estado);
+            item.setEnVivo(j.enVivo);
             item.setK(j.getK());
             item.setSeed(j.seed);
             if (j.fechaInicio != null) item.setFechaInicio(j.fechaInicio.toString());
@@ -2329,21 +2330,52 @@ public class PlanificadorService {
      * {@code /bloques} y {@code /asignaciones}, y le añade el estado "en ruta" (qué tramos completó y
      * cuáles faltan) clasificando cada tramo contra un instante de referencia.
      *
+     * <p>Los envíos inyectados/registrados EN VIVO (id sintético {@code INV-*}) NO se persisten en BD
+     * (rompería la FK {@code ruta_asignada→envio}), así que el camino BD no los resuelve: se cae al
+     * índice en RAM de {@link JobState} ({@code rutasSinteticas}, ver {@link #construirAsignacionSintetica}).
+     *
      * <p>El instante es {@code instante} si viene; si es null, se usa el {@code horaFin} del último
      * bloque publicado del job (el "ahora" de la simulación).
      *
      * <p>Devuelve {@code null} (⇒ 404 en el controller) si la solución en BD no corresponde a
      * {@code jobId} (otra corrida la sobrescribió, o este job nunca tomó la persistencia —p. ej.
      * perfil smoke—; ver {@link PersistenciaSolucionService#reflejaEnBd}), o si el envío no tiene
-     * ruta activa persistida (no existe, o quedó en backlog/sin ruta).
+     * ruta activa persistida (no existe, o quedó en backlog/sin ruta); para los {@code INV-*}, si aún
+     * no se enrutó (no está en el índice en RAM).
      */
     public EnvioEstadoResponse buscarEstadoEnvio(String jobId, String idEnvio, LocalDateTime instante) {
         AsignacionMaleta asig = construirAsignacionDesdeBd(jobId, idEnvio);
+        if (asig == null) asig = construirAsignacionSintetica(jobId, idEnvio);   // inyectados/registrados EN VIVO
         if (asig == null) return null;
         LocalDateTime ahora = (instante != null) ? instante : ahoraDelJob(jobId);
         EnvioEstadoResponse resp = EnvioEstadoCalculator.calcular(asig, ahora);
         resp.setInstanteDerivadoDelJob(instante == null && ahora != null);
         return resp;
+    }
+
+    /**
+     * Rastreo de los envíos inyectados/registrados EN VIVO (id sintético {@code INV-*}): su ruta NO
+     * se persiste en BD (no existen en {@code envio}), así que {@link #construirAsignacionDesdeBd} no
+     * los resuelve. Cae al índice en RAM de {@link JobState} ({@code rutasSinteticas}), poblado al
+     * publicar cada bloque. Devuelve null si el id no es sintético, el job no existe, o aún no se enrutó.
+     */
+    private AsignacionMaleta construirAsignacionSintetica(String jobId, String idEnvio) {
+        if (idEnvio == null || !idEnvio.startsWith("INV-")) return null;
+        // 1) Camino vivo/rápido: índice en RAM del job (poblado al publicar cada bloque).
+        JobState job = getJob(jobId);
+        if (job != null) {
+            AsignacionMaleta enRam = job.getRutaSintetica(idEnvio);
+            if (enRam != null) return enRam;
+        }
+        // 2) Fuente durable: la ruta del INV-* se persiste en ruta_inyectada/tramo_inyectado, así que
+        //    sobrevive a la purga del índice RAM (job evictado), igual que los del dataset.
+        if (!persistencia.reflejaEnBd(jobId)) return null;
+        Graph graph = motorCache.obtenerGrafo(
+                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+        Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+        return solucionBdReader.buscarPorEnvioInyectado(idEnvio, indiceVuelo)
+                .map(b -> buildAsignaciones(List.of(b)).get(0))
+                .orElse(null);
     }
 
     /** Reconstruye el {@link AsignacionMaleta} de la ruta activa del envío desde BD, o null. */
@@ -3081,6 +3113,8 @@ public class PlanificadorService {
             dto.setLatitud(a.getLatitud());
             dto.setLongitud(a.getLongitud());
             dto.setCapacidadAlmacen(a.getCapacidad());
+            // Mismo gmt que /aeropuertos: el front recibe el offset por cualquiera de los dos caminos.
+            dto.setGmt(a.getOffsetHorario() != null ? a.getOffsetHorario().doubleValue() : 0.0);
             map.put(cod, dto);
         }
     }

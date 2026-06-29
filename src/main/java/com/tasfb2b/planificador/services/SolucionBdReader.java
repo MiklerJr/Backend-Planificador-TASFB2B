@@ -137,6 +137,57 @@ public class SolucionBdReader {
         if (txReadOnly != null) txReadOnly.executeWithoutResult(st -> lectura.run());
         else lectura.run();
         emitir(acc, indiceVuelo, consumer);            // último batch pendiente
+
+        // Tras los del dataset, emitir también los inyectados EN VIVO (INV-*): su ruta vive en
+        // ruta_inyectada/tramo_inyectado (sin FK a envio), con metadatos en envio_inyectado.
+        forEachEnrutadoInyectado(indiceVuelo, desde, hasta, consumer);
+    }
+
+    /**
+     * Variante de {@link #forEachEnrutado} para los inyectados EN VIVO ({@code INV-*}). Lee de las
+     * tablas paralelas {@code ruta_inyectada}/{@code tramo_inyectado} + {@code envio_inyectado} (sin FK
+     * a {@code envio}). El {@code readyTime} ya es UTC ({@code ready_time_utc}, no {@code registro −
+     * offset}), así que la emisión usa {@code readyYaEsUtc=true}. Mismo cursor/streaming y filtro por
+     * rango que la fuente del dataset.
+     */
+    private void forEachEnrutadoInyectado(Map<String, Edge> indiceVuelo, LocalDateTime desde,
+                                          LocalDateTime hasta, Consumer<LuggageBatch> consumer) {
+        StringBuilder sql = new StringBuilder()
+                .append("SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, ")
+                .append("       i.icao_origen, i.icao_destino, i.cantidad_maletas, ")
+                .append("       i.ready_time_utc AS fecha_hora_registro, ")
+                .append("       t.numero_orden, t.id_vuelo, t.hora_salida_utc ")
+                .append("FROM ruta_inyectada r ")
+                .append("JOIN envio_inyectado i ON i.id_envio = r.id_envio ")
+                .append("JOIN tramo_inyectado t ON t.id_ruta_iny = r.id_ruta_iny ")
+                .append("WHERE r.activa ");
+        if (desde != null) sql.append("AND i.ready_time_utc >= ? ");
+        if (hasta != null) sql.append("AND i.ready_time_utc < ? ");
+        sql.append("ORDER BY i.ready_time_utc, r.id_ruta_iny, t.numero_orden");
+
+        final long[] idRutaActual = { Long.MIN_VALUE };
+        final Acumulador acc = new Acumulador();
+        org.springframework.jdbc.core.RowCallbackHandler rch = rs -> {
+            long idRuta = rs.getLong("id_ruta");
+            if (idRuta != idRutaActual[0]) {
+                emitir(acc, indiceVuelo, consumer, true);   // readyTime ya UTC
+                idRutaActual[0] = idRuta;
+                acc.reset(rs);
+            }
+            acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
+                    rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
+        };
+        Runnable lectura = () -> jdbc.query(con -> {
+            var ps = con.prepareStatement(sql.toString());
+            int idx = 1;
+            if (desde != null) ps.setObject(idx++, desde);
+            if (hasta != null) ps.setObject(idx++, hasta);
+            ps.setFetchSize(2000);
+            return ps;
+        }, rch);
+        if (txReadOnly != null) txReadOnly.executeWithoutResult(st -> lectura.run());
+        else lectura.run();
+        emitir(acc, indiceVuelo, consumer, true);      // último batch pendiente
     }
 
     /**
@@ -267,7 +318,18 @@ public class SolucionBdReader {
         if (desde != null) { sql.append("AND ").append(readyExpr).append(" >= ? "); args.add(desde); }
         if (hasta != null) { sql.append("AND ").append(readyExpr).append(" < ? ");  args.add(hasta); }
         Long n = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
-        return n != null ? n : 0L;
+
+        // + inyectados EN VIVO (INV-*): mismo rango, pero su readyTime ya es UTC (ready_time_utc).
+        StringBuilder sqlIny = new StringBuilder(
+                "SELECT COUNT(*) FROM ruta_inyectada r "
+              + "JOIN envio_inyectado i ON i.id_envio = r.id_envio "
+              + "WHERE r.activa ");
+        List<Object> argsIny = new ArrayList<>();
+        if (desde != null) { sqlIny.append("AND i.ready_time_utc >= ? "); argsIny.add(desde); }
+        if (hasta != null) { sqlIny.append("AND i.ready_time_utc < ? ");  argsIny.add(hasta); }
+        Long nIny = jdbc.queryForObject(sqlIny.toString(), Long.class, argsIny.toArray());
+
+        return (n != null ? n : 0L) + (nIny != null ? nIny : 0L);
     }
 
     /** Cuenta las cancelaciones de vuelo persistidas en el rango {@code [desde, hasta)} (por día, UTC). */
@@ -445,25 +507,74 @@ public class SolucionBdReader {
         return Optional.ofNullable(reconstruir(acc, indiceVuelo));
     }
 
+    /**
+     * Como {@link #buscarPorEnvio} pero para un inyectado EN VIVO ({@code INV-*}): su ruta activa vive
+     * en {@code ruta_inyectada}/{@code tramo_inyectado} (sin FK a {@code envio}), con metadatos en
+     * {@code envio_inyectado}. El {@code readyTime} ya es UTC ({@code readyYaEsUtc=true}). Fuente durable
+     * del rastreo {@code /envios/{id}} de los inyectados cuando el índice en RAM del job ya no está.
+     */
+    public Optional<LuggageBatch> buscarPorEnvioInyectado(String idEnvio, Map<String, Edge> indiceVuelo) {
+        if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
+        String sql =
+                "SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, "
+              + "       i.icao_origen, i.icao_destino, i.cantidad_maletas, "
+              + "       i.ready_time_utc AS fecha_hora_registro, "
+              + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
+              + "FROM ruta_inyectada r "
+              + "JOIN envio_inyectado i ON i.id_envio = r.id_envio "
+              + "JOIN tramo_inyectado t ON t.id_ruta_iny = r.id_ruta_iny "
+              + "WHERE r.id_envio = ? AND r.activa "
+              + "ORDER BY t.numero_orden";
+        final Acumulador acc = new Acumulador();
+        jdbc.query(con -> {
+            var ps = con.prepareStatement(sql);
+            ps.setString(1, idEnvio);
+            return ps;
+        }, rs -> {
+            if (acc.idEnvio == null) acc.reset(rs);   // datos del envío: del primer tramo
+            acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
+                    rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
+        });
+        if (acc.idEnvio == null || acc.tramos.isEmpty()) return Optional.empty();
+        return Optional.ofNullable(reconstruir(acc, indiceVuelo, true));
+    }
+
     // ── Reconstrucción ──────────────────────────────────────────────────────
 
     /** Cierra el batch acumulado (si hay) y lo entrega al consumidor. */
     private void emitir(Acumulador acc, Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer) {
+        emitir(acc, indiceVuelo, consumer, false);
+    }
+
+    /** Variante con {@code readyYaEsUtc} para la fuente de inyectados (su readyTime ya está en UTC). */
+    private void emitir(Acumulador acc, Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer,
+                        boolean readyYaEsUtc) {
         if (acc.idEnvio == null || acc.tramos.isEmpty()) return;
-        LuggageBatch b = reconstruir(acc, indiceVuelo);
+        LuggageBatch b = reconstruir(acc, indiceVuelo, readyYaEsUtc);
         if (b != null) consumer.accept(b);
         acc.idEnvio = null;
         acc.tramos.clear();
     }
 
     private LuggageBatch reconstruir(Acumulador acc, Map<String, Edge> indiceVuelo) {
+        return reconstruir(acc, indiceVuelo, false);
+    }
+
+    /**
+     * Reconstruye el {@link LuggageBatch} del envío acumulado. {@code readyYaEsUtc=false} (dataset): el
+     * registro viene en hora local del origen y el readyTime UTC = registro − offset. {@code true}
+     * (inyectados EN VIVO): la columna {@code ready_time_utc} ya es UTC, no se le resta el offset.
+     */
+    private LuggageBatch reconstruir(Acumulador acc, Map<String, Edge> indiceVuelo, boolean readyYaEsUtc) {
         Aeropuerto origen = dataLoader.getAeropuerto(acc.origen);
         Aeropuerto destino = dataLoader.getAeropuerto(acc.destino);
         if (origen == null || destino == null || origen.getOffsetHorario() == null) {
             log.warn("No se pudo reconstruir el envío {} (aeropuerto/offset ausente)", acc.idEnvio);
             return null;
         }
-        LocalDateTime readyUtc = acc.registroLocal.minusHours(origen.getOffsetHorario());
+        LocalDateTime readyUtc = readyYaEsUtc
+                ? acc.registroLocal
+                : acc.registroLocal.minusHours(origen.getOffsetHorario());
         int sla = TipoEnvio.derivar(origen, destino) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
 
         LuggageBatch b = new LuggageBatch(acc.idEnvio, acc.cantidad, sla,

@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
@@ -311,6 +312,16 @@ public class JobState {
     private final List<EnvioInyectadoInfo> enviosInyectados = new CopyOnWriteArrayList<>();
 
     /**
+     * Índice durable de la última asignación ENRUTADA de cada envío inyectado/registrado EN VIVO
+     * (id sintético {@code INV-<bloque>-<n>}), poblado al publicar cada bloque ANTES de purgar sus
+     * asignaciones. Es la fuente de {@code GET /jobs/{id}/envios/{idEnvio}} para los sintéticos: su
+     * ruta NO se persiste en {@code ruta_asignada}/{@code tramo_ruta} (no existen en {@code envio},
+     * rompería la FK), así que el camino BD no los resuelve. Acotado por la entrada del operador
+     * (registro manual / TXT), no por el dataset; el worker escribe y el front lee: ConcurrentHashMap.
+     */
+    private final Map<String, AsignacionMaleta> rutasSinteticas = new ConcurrentHashMap<>();
+
+    /**
      * Series de ocupación de almacén por SLOT de 60 min, una entrada por bloque publicado (mismo
      * orden e índices que {@link #bloquesParciales}). El front las consume con
      * {@code GET /jobs/{id}/almacenes/serie?desde=N} para actualizar EN VIVO las maletas de cada
@@ -325,6 +336,7 @@ public class JobState {
     public void publicarBloque(BloqueSimulacion bloque) {
         if (bloque == null) return;
         acumularVuelosUsados(bloque);          // extraer el agregado ANTES de purgar
+        indexarRutasSinteticas(bloque);        // idem: rastreo de los INV-* ANTES de purgar
         synchronized (bloquesLock) {
             bloquesParciales.add(bloque);
             // Fase 3 (anti-OOM): buffer deslizante. Suelta los bloques fuera de la ventana reciente
@@ -461,6 +473,27 @@ public class JobState {
         }
     }
 
+    /**
+     * Indexa la última asignación ENRUTADA de cada envío sintético ({@code INV-*}) del bloque en
+     * {@link #rutasSinteticas} (debe llamarse con las asignaciones aún presentes, antes de purgar).
+     * Last-write-wins: si el envío se re-enruta, queda la ruta vigente. Solo los enrutados se
+     * indexan ⇒ un sintético aún sin ruta sigue devolviendo 404 en {@code /envios/{id}}.
+     */
+    private void indexarRutasSinteticas(BloqueSimulacion bloque) {
+        if (bloque.getAsignaciones() == null) return;
+        for (AsignacionMaleta a : bloque.getAsignaciones()) {
+            if (a == null || !a.isEnrutada()) continue;
+            String id = a.getBatchId();
+            if (id != null && id.startsWith("INV-")) rutasSinteticas.put(id, a);
+        }
+    }
+
+    /** Rastreo de {@code /envios/{id}} para los inyectados/registrados en vivo: última asignación
+     *  enrutada del envío sintético {@code idEnvio} ({@code INV-*}), o null si no existe/no enrutado. */
+    public AsignacionMaleta getRutaSintetica(String idEnvio) {
+        return idEnvio == null ? null : rutasSinteticas.get(idEnvio);
+    }
+
     /** Fase 0 (medición anti-OOM): nº de vuelos-día acumulados en {@link #vuelosUsadosAcum}. */
     public int vuelosUsadosAcumSize() {
         synchronized (vuelosUsadosAcum) { return vuelosUsadosAcum.size(); }
@@ -491,6 +524,7 @@ public class JobState {
         synchronized (bloquesLock) { bloquesParciales.clear(); }
         synchronized (vuelosUsadosAcum) { vuelosUsadosAcum.clear(); }
         synchronized (seriesLock) { seriesAlmacenes.clear(); }
+        rutasSinteticas.clear();   // el job evictado ya no rastrea sus INV-* (nunca estuvieron en BD)
         estadoInicial = null;
         resultado = null;
         auditoriaSinRuta = null;   // los sin-ruta retenidos para la auditoría on-demand ya no se necesitan

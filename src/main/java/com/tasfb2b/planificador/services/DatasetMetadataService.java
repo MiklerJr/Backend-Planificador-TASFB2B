@@ -60,6 +60,9 @@ public class DatasetMetadataService {
             dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
             dto.setLongitud(a.getLongitud() != null ? a.getLongitud() : 0.0);
             dto.setCapacidadAlmacen(a.getCapacidad());
+            // gmt = el MISMO offset que usa el motor (horas enteras del dataset); el front lo emplea
+            // para el reloj local y la conversión local→UTC, así comparten exactamente el mismo huso.
+            dto.setGmt(a.getOffsetHorario() != null ? a.getOffsetHorario().doubleValue() : 0.0);
             info.put(a.getCodigo(), dto);
         }
         return info;

@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tasfb2b.planificador.dto.AeropuertoDTO;
 import com.tasfb2b.planificador.dto.DashboardResponse;
 import com.tasfb2b.planificador.dto.EstadoJobResponse;
 import org.junit.jupiter.api.Test;
@@ -51,6 +52,26 @@ class JsonContratoTest {
         assertFalse(json.contains("\"fechaInicio\""), "fechaInicio null debe omitirse");
         assertTrue(json.contains("\"metricas\""));
         assertTrue(json.contains("\"tasas\""));
+    }
+
+    /**
+     * {@code GET /aeropuertos}: cada {@link AeropuertoDTO} debe emitir {@code gmt} (offset horario que
+     * el front usa para el reloj local y la conversión local→UTC). El dataset trae husos enteros, así
+     * que se serializa como número con signo (p. ej. {@code -5.0}).
+     */
+    @Test
+    void aeropuertoEmiteGmt() throws Exception {
+        AeropuertoDTO dto = new AeropuertoDTO();
+        dto.setCodigo("SPIM");
+        dto.setLatitud(-12.02);
+        dto.setLongitud(-77.11);
+        dto.setCapacidadAlmacen(440);
+        dto.setGmt(-5.0);
+
+        String json = mapper.writeValueAsString(dto);
+
+        assertTrue(json.contains("\"gmt\":-5.0"), "gmt debe serializarse con su valor y signo");
+        assertTrue(json.contains("\"capacidadAlmacen\":440"), "los campos previos del DTO se conservan");
     }
 
     // ----------------------------------------------------------------------- helpers

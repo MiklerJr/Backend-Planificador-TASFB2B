@@ -24,6 +24,12 @@ public class JobsListResponse {
         private String escenario;
         private String algoritmo;
         private String estado;
+        /**
+         * E1 — Operación día a día: {@code true} si el job es la "caja registradora" en vivo (cursor
+         * anclado a now() UTC, demanda solo por registro). El front lo usa para auto-detectar la
+         * operación tras un refresh sin caer al filtro ambiguo por {@code escenario=="1"}.
+         */
+        private boolean enVivo;
         private int k;
         private long seed;
         @JsonInclude(JsonInclude.Include.NON_NULL)
