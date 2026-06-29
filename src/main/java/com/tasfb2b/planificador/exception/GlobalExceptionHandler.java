@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.exception;
 
 import com.tasfb2b.planificador.dto.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;

@@ -9,7 +9,7 @@ import lombok.NoArgsConstructor;
  * acumula a lo largo de la corrida y se expone EN VIVO al front ({@code enviosInyectados} de
  * {@code GET /jobs/{id}/estado}) para que sepa qué envíos adicionales entraron y en qué bloque.
  *
- * <p>Distinto de la entidad persistida {@code model.db.EnvioInyectado} (tabla {@code envio_inyectado})
+ * <p>Distinto de la entidad persistida {@code model.solucion.EnvioInyectado} (tabla {@code envio_inyectado})
  * y del request {@code dto.InyeccionEnviosRequest}. {@code idEnvio} es sintético ({@code "INV-..."})
  * y {@code readyTimeUtc} está en <b>UTC</b>.
  */

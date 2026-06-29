@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.model.dataset.Aeropuerto;
+import com.tasfb2b.planificador.model.dataset.Vuelo;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;

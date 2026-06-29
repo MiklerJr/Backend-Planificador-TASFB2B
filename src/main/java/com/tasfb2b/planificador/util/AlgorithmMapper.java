@@ -6,9 +6,9 @@ import java.time.LocalDateTime;
 import com.tasfb2b.planificador.algorithm.aco.Graph;
 import com.tasfb2b.planificador.algorithm.aco.Node;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Envio;
-import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.model.dataset.Aeropuerto;
+import com.tasfb2b.planificador.model.dataset.Envio;
+import com.tasfb2b.planificador.model.dataset.Vuelo;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;

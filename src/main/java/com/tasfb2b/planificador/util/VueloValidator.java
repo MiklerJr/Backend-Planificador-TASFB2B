@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.model.dataset.Vuelo;
 
 /**
  * Validación de coherencia de un {@link Vuelo} al cargarlo desde la fuente de datos.

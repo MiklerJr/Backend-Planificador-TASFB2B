@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.controller;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.ErrorResponse;
+import com.tasfb2b.planificador.exception.GlobalExceptionHandler;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
 import com.tasfb2b.planificador.services.IngestaService;
 import org.junit.jupiter.api.Test;

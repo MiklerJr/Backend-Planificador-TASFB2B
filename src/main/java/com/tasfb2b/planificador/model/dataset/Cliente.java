@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.model;
+package com.tasfb2b.planificador.model.dataset;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

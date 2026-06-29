@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador; // Ajusta esto a tu paquete real si es necesario
+package com.tasfb2b.planificador.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

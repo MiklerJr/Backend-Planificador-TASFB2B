@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.model.dataset.Vuelo;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;

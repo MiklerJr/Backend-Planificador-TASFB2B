@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.model.db;
+package com.tasfb2b.planificador.model.solucion;
 
 import java.time.LocalDate;
 

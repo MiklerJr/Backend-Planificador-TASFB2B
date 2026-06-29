@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.util;
 import com.tasfb2b.planificador.algorithm.aco.CostFunction;
 import com.tasfb2b.planificador.dto.CargaVuelo;
 import com.tasfb2b.planificador.dto.OcupacionAlmacen;
-import com.tasfb2b.planificador.model.Vuelo;
+import com.tasfb2b.planificador.model.dataset.Vuelo;
 
 /**
  * Utilidades de formato/semáforo compartidas por la capa de simulación

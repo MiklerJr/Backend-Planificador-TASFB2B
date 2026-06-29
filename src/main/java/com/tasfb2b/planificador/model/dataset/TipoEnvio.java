@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.model;
+package com.tasfb2b.planificador.model.dataset;
 
 /**
  * Clasificador del envío según los continentes de origen y destino (RF01).

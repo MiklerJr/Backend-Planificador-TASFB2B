@@ -1,9 +1,9 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.model.Cliente;
-import com.tasfb2b.planificador.model.Envio;
-import com.tasfb2b.planificador.model.TipoEnvio;
+import com.tasfb2b.planificador.model.dataset.Aeropuerto;
+import com.tasfb2b.planificador.model.dataset.Cliente;
+import com.tasfb2b.planificador.model.dataset.Envio;
+import com.tasfb2b.planificador.model.dataset.TipoEnvio;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 

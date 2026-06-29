@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.repository;
 
-import com.tasfb2b.planificador.model.db.EnvioInyectado;
+import com.tasfb2b.planificador.model.solucion.EnvioInyectado;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
