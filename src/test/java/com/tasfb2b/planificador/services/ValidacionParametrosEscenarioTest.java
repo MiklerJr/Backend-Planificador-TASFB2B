@@ -1,4 +1,6 @@
 package com.tasfb2b.planificador.services;
+import com.tasfb2b.planificador.services.ingesta.IngestaService;
+import com.tasfb2b.planificador.services.jobs.JobsRegistry;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.controller.EscenarioController;

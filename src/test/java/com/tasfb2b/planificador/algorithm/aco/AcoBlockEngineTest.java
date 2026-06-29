@@ -1,4 +1,7 @@
 package com.tasfb2b.planificador.algorithm.aco;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Node;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
 
 import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;

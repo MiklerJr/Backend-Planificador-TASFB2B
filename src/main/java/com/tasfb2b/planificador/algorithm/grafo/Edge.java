@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algorithm.grafo;
 
 import java.time.Duration;
 import java.time.LocalDateTime;

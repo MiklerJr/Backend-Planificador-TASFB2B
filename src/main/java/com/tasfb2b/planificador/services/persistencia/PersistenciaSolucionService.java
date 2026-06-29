@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.persistencia;
 
-import com.tasfb2b.planificador.algorithm.aco.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.jobs.EnvioInyectadoInfo;
@@ -305,7 +305,7 @@ public class PersistenciaSolucionService {
     }
 
     /** El motor genera el id como {@code ICAO-ICAO-HH:MM}; {@code vuelo.id_vuelo} es {@code ICAO-ICAO-HHMM}. */
-    static String normalizarIdVuelo(String edgeId) {
+    public static String normalizarIdVuelo(String edgeId) {
         return edgeId == null ? null : edgeId.replace(":", "");
     }
 

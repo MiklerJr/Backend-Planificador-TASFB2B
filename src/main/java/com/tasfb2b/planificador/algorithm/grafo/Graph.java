@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algorithm.grafo;
 
 import jakarta.validation.constraints.NotBlank;
 import java.util.*;

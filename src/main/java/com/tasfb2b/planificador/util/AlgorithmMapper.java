@@ -1,10 +1,10 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.algorithm.aco.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import com.tasfb2b.planificador.algorithm.aco.Graph;
-import com.tasfb2b.planificador.algorithm.aco.Node;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Node;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;
 import com.tasfb2b.planificador.model.dataset.Envio;

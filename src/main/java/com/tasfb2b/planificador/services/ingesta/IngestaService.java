@@ -1,6 +1,8 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.ingesta;
 
 import com.tasfb2b.planificador.dto.dataset.IngestaEstado;
+import com.tasfb2b.planificador.services.MotorGrafoCache;
+import com.tasfb2b.planificador.services.jobs.JobsRegistry;
 import com.tasfb2b.planificador.util.parser.AeropuertoParser;
 import com.tasfb2b.planificador.util.DataLoader;
 import lombok.extern.slf4j.Slf4j;

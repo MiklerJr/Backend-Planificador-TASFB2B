@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.ingesta;
 
 import com.tasfb2b.planificador.dto.jobs.InyeccionEnviosRequest;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;

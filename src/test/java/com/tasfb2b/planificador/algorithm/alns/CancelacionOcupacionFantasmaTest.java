@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-import com.tasfb2b.planificador.algorithm.aco.Edge;
-import com.tasfb2b.planificador.algorithm.aco.Graph;
-import com.tasfb2b.planificador.algorithm.aco.Node;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Node;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
 import org.junit.jupiter.api.Test;
 

@@ -1,4 +1,7 @@
 package com.tasfb2b.planificador.services;
+import com.tasfb2b.planificador.services.jobs.JobQueryService;
+import com.tasfb2b.planificador.services.jobs.JobState;
+import com.tasfb2b.planificador.services.jobs.JobsRegistry;
 
 import com.tasfb2b.planificador.controller.JobQueryController;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;

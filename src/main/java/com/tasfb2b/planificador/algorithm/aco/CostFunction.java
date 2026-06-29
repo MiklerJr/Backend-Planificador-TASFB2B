@@ -1,5 +1,8 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Node;
+
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;

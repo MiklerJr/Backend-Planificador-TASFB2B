@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.algorithm.aco;
 
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
 
 import java.util.HashMap;
 import java.util.List;

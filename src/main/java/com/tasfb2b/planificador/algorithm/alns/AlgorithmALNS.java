@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 

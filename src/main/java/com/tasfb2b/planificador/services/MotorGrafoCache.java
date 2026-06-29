@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 

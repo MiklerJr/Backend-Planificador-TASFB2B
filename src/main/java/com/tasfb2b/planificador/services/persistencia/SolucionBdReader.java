@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.persistencia;
 
-import com.tasfb2b.planificador.algorithm.aco.Edge;
-import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
 import com.tasfb2b.planificador.dto.vuelos.CargaVueloRow;

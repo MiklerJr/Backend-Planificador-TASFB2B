@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.services;
 
 import com.tasfb2b.planificador.algorithm.aco.CostFunction;
-import com.tasfb2b.planificador.algorithm.aco.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;

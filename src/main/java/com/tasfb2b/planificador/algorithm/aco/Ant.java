@@ -1,5 +1,8 @@
 package com.tasfb2b.planificador.algorithm.aco;
 
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Node;
+
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.HashSet;

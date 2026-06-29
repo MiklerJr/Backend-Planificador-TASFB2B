@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.jobs;
 
 import com.tasfb2b.planificador.algorithm.aco.CostFunction;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
@@ -8,6 +8,8 @@ import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
+import com.tasfb2b.planificador.services.persistencia.PersistenciaSolucionService;
+import com.tasfb2b.planificador.services.persistencia.SolucionBdReader;
 import com.tasfb2b.planificador.util.DataLoader;
 import com.tasfb2b.planificador.util.SimulacionFormat;
 import org.springframework.beans.factory.annotation.Autowired;

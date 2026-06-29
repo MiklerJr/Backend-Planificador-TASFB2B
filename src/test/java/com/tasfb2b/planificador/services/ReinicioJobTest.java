@@ -1,4 +1,6 @@
 package com.tasfb2b.planificador.services;
+import com.tasfb2b.planificador.services.jobs.JobState;
+import com.tasfb2b.planificador.services.jobs.JobsRegistry;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import org.junit.jupiter.api.Test;

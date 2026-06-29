@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.jobs;
 
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
@@ -123,7 +123,7 @@ public class JobState {
     /** Tamaño en filas de la auditoría (sin contar la cabecera). */
     public volatile int auditoriaFilas;
     /**
-     * Envíos SIN ruta de esta corrida (ligeros: sin {@link com.tasfb2b.planificador.algorithm.aco.Edge}),
+     * Envíos SIN ruta de esta corrida (ligeros: sin {@link com.tasfb2b.planificador.algorithm.grafo.Edge}),
      * retenidos para la auditoría ON-DEMAND: no se persisten en BD (Fase 5a solo guarda enrutados), así
      * que sin esto el ZIP perdería los fallos. Se llena al terminar el job y lo libera
      * {@link #liberarPesados()} cuando el job se evicciona (anti-OOM).

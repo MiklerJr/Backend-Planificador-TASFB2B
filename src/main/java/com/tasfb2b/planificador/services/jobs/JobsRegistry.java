@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.services.jobs;
 
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;

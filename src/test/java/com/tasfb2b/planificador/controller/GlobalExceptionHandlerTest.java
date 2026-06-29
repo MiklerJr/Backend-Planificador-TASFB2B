@@ -4,7 +4,7 @@ import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.comun.ErrorResponse;
 import com.tasfb2b.planificador.exception.GlobalExceptionHandler;
 import com.tasfb2b.planificador.exception.ParametroInvalidoException;
-import com.tasfb2b.planificador.services.IngestaService;
+import com.tasfb2b.planificador.services.ingesta.IngestaService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;

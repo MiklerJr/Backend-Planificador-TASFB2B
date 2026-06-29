@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.algorithm.aco.Edge;
-import com.tasfb2b.planificador.algorithm.aco.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
 import com.tasfb2b.planificador.model.dataset.Aeropuerto;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
 import org.junit.jupiter.api.Test;

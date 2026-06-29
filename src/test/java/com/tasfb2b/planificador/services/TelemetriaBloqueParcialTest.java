@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.algorithm.aco.Edge;
-import com.tasfb2b.planificador.algorithm.aco.Graph;
-import com.tasfb2b.planificador.algorithm.aco.Node;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algorithm.grafo.Node;
 import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.dto.almacenes.*;

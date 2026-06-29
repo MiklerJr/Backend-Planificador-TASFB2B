@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.algorithm.alns;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import com.tasfb2b.planificador.algorithm.aco.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
 
 public class LuggageBatch {
     private String id;

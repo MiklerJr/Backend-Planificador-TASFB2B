@@ -3,6 +3,8 @@ package com.tasfb2b.planificador.algorithm.aco;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
 import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algorithm.grafo.Graph;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
