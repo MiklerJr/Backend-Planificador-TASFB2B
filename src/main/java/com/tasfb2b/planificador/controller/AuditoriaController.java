@@ -19,9 +19,9 @@ import java.time.LocalDateTime;
 import java.util.Map;
 
 /**
- * Descarga de la auditoría de un job (Tanda 1D: extraído de {@code PlanificadorController}).
- * Ruta inalterada ({@code /api/planificador/jobs/{jobId}/auditoria.zip}); CORS lo aporta el
- * {@code CorsFilter} global, que ya expone {@code X-Audit-Rows} y {@code Content-Disposition}.
+ * Descarga de la auditoría de un job. Ruta {@code /api/planificador/jobs/{jobId}/auditoria.zip};
+ * CORS lo aporta el {@code CorsFilter} global, que ya expone {@code X-Audit-Rows} y
+ * {@code Content-Disposition}.
  */
 @RestController
 @RequestMapping("/api/planificador")

@@ -17,8 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Metadatos estáticos del dataset y catálogos para el front (Tanda 1D: extraído de
- * {@code PlanificadorController}). Rutas inalteradas: todas cuelgan de
+ * Metadatos estáticos del dataset y catálogos para el front. Todas las rutas cuelgan de
  * {@code /api/planificador}. CORS lo aporta el {@code CorsFilter} global de
  * {@code PlanificadorApplication} (sin {@code @CrossOrigin} por controller).
  */
@@ -26,8 +25,8 @@ import java.util.Map;
 @RequestMapping("/api/planificador")
 public class MetadataController {
 
-    // Tanda 2B: los metadatos del dataset (info/aeropuertos/vuelos/demanda) los sirve el servicio
-    // cohesivo DatasetMetadataService; PlanificadorService solo queda para el catálogo de escenarios.
+    // Los metadatos del dataset (info/aeropuertos/vuelos/demanda) los sirve DatasetMetadataService;
+    // PlanificadorService solo queda para el catálogo de escenarios.
     private final DatasetMetadataService datasetMetadata;
     private final PlanificadorService service;
 

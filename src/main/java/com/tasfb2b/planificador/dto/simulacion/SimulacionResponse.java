@@ -8,12 +8,11 @@ import com.tasfb2b.planificador.dto.dataset.AeropuertoDTO;
 import com.tasfb2b.planificador.dto.vuelos.VueloBackend;
 
 /**
- * Wrapper raíz de la respuesta de una simulación. Las clases que antes vivían anidadas aquí
- * ({@link Metricas}, {@link BloqueSimulacion}, {@link AsignacionMaleta}, {@link TramoRuta},
- * {@link CargaVuelo}, {@link OcupacionAlmacen}, {@link OcupacionAlmacenSlot},
- * {@link AlertaAlmacen}, {@link VueloBackend}, {@link AeropuertoDTO}) se extrajeron a archivos
- * propios del mismo paquete {@code com.tasfb2b.planificador.dto} (Tanda 1A de modularización).
- * El contrato JSON serializado no cambia: nombres y forma de los campos son idénticos.
+ * Wrapper raíz de la respuesta de una simulación. Agrupa los read models del paquete
+ * {@code com.tasfb2b.planificador.dto} ({@link Metricas}, {@link BloqueSimulacion},
+ * {@link AsignacionMaleta}, {@link TramoRuta}, {@link CargaVuelo}, {@link OcupacionAlmacen},
+ * {@link OcupacionAlmacenSlot}, {@link AlertaAlmacen}, {@link VueloBackend}, {@link AeropuertoDTO}).
+ * El JSON expone los nombres y la forma de campo del contrato del front.
  */
 @Data
 public class SimulacionResponse {

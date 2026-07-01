@@ -15,9 +15,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.Map;
 
 /**
- * Fase 6B — Ingesta de dataset por la página de carga del front. Reemplazo total y asíncrono.
+ * Ingesta de dataset por la página de carga del front. Reemplazo total y asíncrono.
  * Rutas bajo {@code /api/planificador}; CORS lo aporta el {@code CorsFilter} global; sin auth
- * (igual que el resto; deuda de la Fase 7).
+ * (igual que el resto).
  */
 @RestController
 @RequestMapping("/api/planificador")

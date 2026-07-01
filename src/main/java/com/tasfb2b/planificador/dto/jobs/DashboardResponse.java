@@ -6,11 +6,11 @@ import lombok.Data;
 import com.tasfb2b.planificador.dto.simulacion.Metricas;
 
 /**
- * Read model agregado para el panel operativo (Tanda 1B), expuesto por
+ * Read model agregado para el panel operativo, expuesto por
  * {@code GET /jobs/{id}/dashboard}. No modifica el job: toma las métricas del resultado final si
  * existe, o las deriva de los bloques publicados si sigue corriendo.
  *
- * <p>Byte-compatible con el mapa anterior: {@code fechaInicio}, {@code fin} y {@code error} se
+ * <p>Serialización: {@code fechaInicio}, {@code fin} y {@code error} se
  * omiten cuando son {@code null} ({@link JsonInclude.Include#NON_NULL}); {@code ultimoBloque} se
  * emite siempre (incluso {@code null} si aún no hay bloques publicados).
  */

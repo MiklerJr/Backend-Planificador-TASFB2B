@@ -16,13 +16,9 @@ import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
 import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
 
 /**
- * Metadatos estáticos del dataset cargado en RAM (Tanda 2B: extraído de {@code PlanificadorService}).
- * Solo lectura sobre {@link DataLoader}: catálogo de aeropuertos y vuelos, rango temporal disponible
- * y resumen de demanda por ventana. Alimenta los endpoints de {@code MetadataController} sin tocar el
- * bucle de simulación.
- *
- * <p>El JSON de salida es idéntico al que producía {@code PlanificadorService}: estos métodos y sus
- * helpers se movieron tal cual.
+ * Metadatos estáticos del dataset cargado en RAM. Solo lectura sobre {@link DataLoader}: catálogo
+ * de aeropuertos y vuelos, rango temporal disponible y resumen de demanda por ventana. Alimenta los
+ * endpoints de {@code MetadataController} sin tocar el bucle de simulación.
  */
 @Service
 public class DatasetMetadataService {

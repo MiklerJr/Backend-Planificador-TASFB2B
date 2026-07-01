@@ -8,7 +8,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * Demanda agregada del dataset en una ventana (Tanda 1B), expuesta por {@code GET /demanda/resumen}.
+ * Demanda agregada del dataset en una ventana, expuesta por {@code GET /demanda/resumen}.
  * No requiere job. {@code desde}/{@code hasta} se emiten siempre (incluso {@code null} si el dataset
  * está vacío). Las listas top-N van vacías ({@code []}) cuando la ventana es inválida.
  */

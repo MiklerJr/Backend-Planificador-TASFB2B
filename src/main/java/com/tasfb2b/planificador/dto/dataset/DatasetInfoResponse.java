@@ -3,12 +3,11 @@ package com.tasfb2b.planificador.dto.dataset;
 import lombok.Data;
 
 /**
- * Metadatos del dataset cargado (Tanda 1B): rango temporal disponible y conteos. Lo devuelve
+ * Metadatos del dataset cargado: rango temporal disponible y conteos. Lo devuelve
  * {@code GET /dataset/info} para que el front valide {@code fechaInicio} antes de lanzar un job.
  *
  * <p>{@code primeraVentana}/{@code ultimaVentana} se emiten SIEMPRE, incluso {@code null} cuando el
- * dataset está vacío (mismo comportamiento que el mapa anterior). {@code totalMaletas} se mantiene
- * por compatibilidad: históricamente equivale al número de envíos/filas.
+ * dataset está vacío. {@code totalMaletas} equivale al número de envíos/filas.
  *
  * <p><b>Eje de {@code primeraVentana}/{@code ultimaVentana}: hora LOCAL del dataset</b>, no UTC.
  * Son el {@code MIN}/{@code MAX} de {@code fecha_hora_registro} (que la BD guarda en la hora local

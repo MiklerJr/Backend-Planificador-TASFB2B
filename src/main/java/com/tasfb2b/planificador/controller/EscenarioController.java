@@ -36,10 +36,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Arranque y control del ciclo de vida de los escenarios de simulación (Tanda 1D: extraído de
- * {@code PlanificadorController}): lanzamiento de E1/E2/E3, cancelación/reinicio de jobs,
- * cancelación de vuelos en vivo y los endpoints legacy síncronos ({@code /ejecutar},
- * {@code /ejecutar-colapso}, {@code /bloque/{index}}). Rutas inalteradas bajo
+ * Arranque y control del ciclo de vida de los escenarios de simulación: lanzamiento de E1/E2/E3,
+ * cancelación/reinicio de jobs, cancelación de vuelos en vivo y los endpoints legacy síncronos
+ * ({@code /ejecutar}, {@code /ejecutar-colapso}, {@code /bloque/{index}}). Rutas bajo
  * {@code /api/planificador}. CORS lo aporta el {@code CorsFilter} global.
  */
 @RestController
@@ -58,7 +57,7 @@ public class EscenarioController {
     }
 
     /**
-     * Fase 6B: rechaza arrancar una simulación mientras una ingesta está reemplazando el dataset
+     * Rechaza arrancar una simulación mientras una ingesta está reemplazando el dataset
      * (la ingesta hace TRUNCATE + recarga el DataLoader que el motor usa). 409.
      */
     private void rechazarSiIngestaEnCurso() {

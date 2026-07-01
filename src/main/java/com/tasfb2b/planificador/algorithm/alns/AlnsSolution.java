@@ -7,11 +7,11 @@ public class AlnsSolution {
 
     private List<LuggageBatch> batches;
 
-    // Pesos de la función objetivo. Defaults coinciden con los valores hardcoded heredados.
+    // Pesos de la función objetivo. Valores por defecto del modelo.
     // Se sobreescriben con setPesos() desde AlgorithmALNS cuando hay PlanificadorProperties.
     private double pesoTransit    = 1.0;
     private double pesoTarde      = 5000.0;
-    private double pesoUsoAlmacen = 0.0;   // 0 = desactivado (compat fase 1-4)
+    private double pesoUsoAlmacen = 0.0;   // 0 = desactivado
 
     public AlnsSolution(List<LuggageBatch> batches) {
         this.batches = batches;

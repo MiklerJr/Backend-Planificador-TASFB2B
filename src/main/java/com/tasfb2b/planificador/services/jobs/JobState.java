@@ -124,7 +124,7 @@ public class JobState {
     public volatile int auditoriaFilas;
     /**
      * Envíos SIN ruta de esta corrida (ligeros: sin {@link com.tasfb2b.planificador.algorithm.grafo.Edge}),
-     * retenidos para la auditoría ON-DEMAND: no se persisten en BD (Fase 5a solo guarda enrutados), así
+     * retenidos para la auditoría ON-DEMAND: no se persisten en BD (solo se guardan los enrutados), así
      * que sin esto el ZIP perdería los fallos. Se llena al terminar el job y lo libera
      * {@link #liberarPesados()} cuando el job se evicciona (anti-OOM).
      */
@@ -198,12 +198,12 @@ public class JobState {
     private final List<BloqueSimulacion> bloquesParciales =
             new CopyOnWriteArrayList<>();
 
-    /** Fase 3 (anti-OOM): nº de bloques ya purgados del frente (offset base para índices absolutos). */
+    /** Anti-OOM: nº de bloques ya purgados del frente (offset base para índices absolutos). */
     private volatile int baseBloquesPurgados = 0;
     private final Object bloquesLock = new Object();
 
     /**
-     * Fase 5b-2: nº de bloques RECIENTES cuyas {@code asignaciones} se mantienen en RAM. Las de
+     * Anti-OOM: nº de bloques RECIENTES cuyas {@code asignaciones} se mantienen en RAM. Las de
      * bloques más viejos se purgan (el peso O(envíos)); sus agregados ya viven en
      * {@link #vuelosUsadosAcum} y en los campos {@code cargasVuelos}/{@code ocupacionAlmacenes} del
      * propio bloque. El front consume {@code /bloques} y {@code /asignaciones} incrementalmente.
@@ -211,14 +211,14 @@ public class JobState {
     private volatile int maxBloquesConAsignaciones = 500;
 
     /**
-     * Fase 5b-2: acumulador incremental de vuelos usados (clave {@code bloqueIdx|vueloId|salidaUtc}),
+     * Acumulador incremental de vuelos usados (clave {@code bloqueIdx|vueloId|salidaUtc}),
      * actualizado al publicar cada bloque ANTES de purgar sus asignaciones. Preserva el histórico de
      * {@code /vuelos/usados?desde=N} sin retener las asignaciones. Acotado a O(vuelos-día).
      */
     private final Map<String, VueloUsadoAcc> vuelosUsadosAcum = new LinkedHashMap<>();
 
     /**
-     * Fase 5b-2: métricas vigentes (snapshot por bloque) para {@code /dashboard} mientras el job
+     * Métricas vigentes (snapshot por bloque) para {@code /dashboard} mientras el job
      * corre, sin recalcular desde las asignaciones (que se purgan). Null hasta el primer bloque.
      */
     public volatile Metricas metricasSnapshot;
@@ -226,7 +226,7 @@ public class JobState {
     /** Ajusta la ventana de retención de asignaciones (desde el yaml). */
     public void setMaxBloquesConAsignaciones(int n) { if (n > 0) this.maxBloquesConAsignaciones = n; }
 
-    /** Fase 3 (anti-OOM): tamaño de la ventana reciente retenida en RAM (para decidir RAM vs BD). */
+    /** Anti-OOM: tamaño de la ventana reciente retenida en RAM (para decidir RAM vs BD). */
     public int getMaxBloquesConAsignaciones() { return maxBloquesConAsignaciones; }
 
     public JobState(String jobId, String escenario, int k) {
@@ -331,7 +331,7 @@ public class JobState {
      * almacén mientras su reloj de animación recorre el bloque.
      */
     private final List<List<OcupacionAlmacenSlot>> seriesAlmacenes = new ArrayList<>();
-    /** Fase 5b-2: nº de series ya purgadas del frente (offset base para preservar índices absolutos). */
+    /** Anti-OOM: nº de series ya purgadas del frente (offset base para preservar índices absolutos). */
     private int baseSeriesPurgadas = 0;
     private final Object seriesLock = new Object();
 
@@ -342,7 +342,7 @@ public class JobState {
         indexarRutasSinteticas(bloque);        // idem: rastreo de los INV-* ANTES de purgar
         synchronized (bloquesLock) {
             bloquesParciales.add(bloque);
-            // Fase 3 (anti-OOM): buffer deslizante. Suelta los bloques fuera de la ventana reciente
+            // Anti-OOM: buffer deslizante. Suelta los bloques fuera de la ventana reciente
             // (con sus cargasVuelos/ocupacionAlmacenes). El histórico de /vuelos/carga se reconstruye
             // desde BD; /almacenes/ocupacion queda acotado a la ventana. El front consume /bloques y
             // /asignaciones incrementalmente.
@@ -355,7 +355,7 @@ public class JobState {
     }
 
     /**
-     * Fase 3 (anti-OOM): suelta del acumulador los vuelos-día de bloques fuera de la ventana reciente.
+     * Anti-OOM: suelta del acumulador los vuelos-día de bloques fuera de la ventana reciente.
      * El histórico de {@code /vuelos/usados} se reconstruye desde BD ({@code SolucionBdReader}). Las
      * entradas se insertan en orden de bloqueIdx creciente (LinkedHashMap), así que las viejas están al
      * frente: se remueven hasta encontrar una dentro de la ventana.
@@ -399,7 +399,7 @@ public class JobState {
     }
 
     /**
-     * Devuelve los bloques publicados desde {@code desde} (índice ABSOLUTO, inclusive). Fase 3: si
+     * Devuelve los bloques publicados desde {@code desde} (índice ABSOLUTO, inclusive). Si
      * {@code desde} ya fue purgado del buffer deslizante, arranca en la base (el front consume
      * incrementalmente; el histórico de los agregados se reconstruye desde BD).
      */
@@ -430,8 +430,8 @@ public class JobState {
         }
     }
 
-    // ── Fase 5b-2: acumulador incremental de vuelos usados (reemplaza la reconstrucción desde
-    //    bloquesDesde(0) de JobQueryService, que dependía de las asignaciones ya purgadas) ──────────
+    // ── Acumulador incremental de vuelos usados: se actualiza al publicar cada bloque y NO depende
+    //    de las asignaciones (que se purgan), así el histórico de /vuelos/usados sigue disponible. ──
 
     /** Acumula los vuelos usados del bloque (debe llamarse con las asignaciones aún presentes). */
     private void acumularVuelosUsados(BloqueSimulacion bloque) {
@@ -497,13 +497,13 @@ public class JobState {
         return idEnvio == null ? null : rutasSinteticas.get(idEnvio);
     }
 
-    /** Fase 0 (medición anti-OOM): nº de vuelos-día acumulados en {@link #vuelosUsadosAcum}. */
+    /** Anti-OOM: nº de vuelos-día acumulados en {@link #vuelosUsadosAcum}. */
     public int vuelosUsadosAcumSize() {
         synchronized (vuelosUsadosAcum) { return vuelosUsadosAcum.size(); }
     }
 
     /**
-     * Anti-OOM (Fase 2): suelta las estructuras pesadas de este job (bloques publicados, acumulador de
+     * Anti-OOM: suelta las estructuras pesadas de este job (bloques publicados, acumulador de
      * vuelos usados, series de almacén, estado inicial y el resultado cacheado), conservando metadatos
      * ligeros + {@link #metricasSnapshot} + {@link #auditoriaZipPath} (el ZIP vive en disco). Solo debe
      * invocarse sobre jobs ya TERMINADOS (ver {@code JobsRegistry.purgarJobsViejos}). Idempotente.

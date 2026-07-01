@@ -5,10 +5,9 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * Read model de asignaciones por envío con filtros opcionales (Tanda 1B), expuesto por
+ * Read model de asignaciones por envío con filtros opcionales, expuesto por
  * {@code GET /jobs/{id}/asignaciones}. {@code aeropuerto} y {@code vueloId} reflejan los filtros
- * aplicados (normalizados) y se emiten SIEMPRE, incluso {@code null} cuando no se filtró — igual que
- * el mapa anterior.
+ * aplicados (normalizados) y se emiten SIEMPRE, incluso {@code null} cuando no se filtró.
  */
 @Data
 public class AsignacionesResponse {

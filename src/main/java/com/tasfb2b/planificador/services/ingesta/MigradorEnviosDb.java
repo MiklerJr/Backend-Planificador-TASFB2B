@@ -19,8 +19,8 @@ import java.util.List;
 
 /**
  * Carga de datos crudos (aeropuertos, vuelos, envíos) a la BD. Originalmente una migración one-shot
- * desde archivos locales; la Fase 6B reusa los métodos {@code *Desde(Reader)} para la ingesta por
- * endpoint (subida multipart), sin depender de rutas en disco del servidor.
+ * desde archivos locales; la ingesta por endpoint reusa los métodos {@code *Desde(Reader)}
+ * (subida multipart), sin depender de rutas en disco del servidor.
  *
  * <p>El parseo de envíos descarta líneas inválidas (RF03 vía {@link EnvioValidator}) sin abortar el
  * archivo. El INSERT usa {@code ON CONFLICT DO NOTHING} (idempotente); con reemplazo total las

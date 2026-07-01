@@ -51,19 +51,17 @@ public class AcoBlockEngine {
     private static final double BASE_PHEROMONE_BOOST = 2.0;
     private static final double PHEROMONE_MIN = 0.10;
     private static final double PHEROMONE_MAX = 20.0;
-    // Fase J — política congestión/holgura.
-    private static final double RESERVA_BASE = 0.15;              // J4: colchón en vuelos para flexibles
-    // L2/P: la reserva de almacén-día de hub (escalas overnight) ahora es configurable
+    // Política congestión/holgura.
+    private static final double RESERVA_BASE = 0.15;              // colchón en vuelos para flexibles
+    // La reserva de almacén-día de hub (escalas overnight) es configurable
     // (planificador.storage-aware.reserva-almacen-base) → se lee de props en seleccionarRuta.
-    private static final double UMBRAL_CONGESTION_DEFER = 2.0;    // J3: ruta "cara" en congestión
-    private static final long   MARGEN_DEFER_MIN = 1440L;         // J3: solo diferir si slack > 24h (urgentes nunca)
-    private static final int    GROUP_ROUTE_CANDIDATES = 5;       // J2: más candidatos por grupo → más diversidad de congestión
-    // J3 (admisión just-in-time) DESACTIVADO tras medición 500 días: diferir envíos
-    // flexibles inflaba el backlog y FUGABA los 48h — los fallos arrancaban en ago-2026,
-    // 100% SLA-48h, con backlog≈5 y Ta sin saturar (no era capacidad sino la política).
-    // Diferir bajo congestión creciente = nunca readmitir a tiempo. Se conserva el código
-    // gateado por si se ata a una garantía de readmisión. J1 (selección) + J4 (reserva,
-    // que nunca causa sinRuta por su 2ª pasada sin colchón) se mantienen.
+    private static final double UMBRAL_CONGESTION_DEFER = 2.0;    // ruta "cara" en congestión
+    private static final long   MARGEN_DEFER_MIN = 1440L;         // solo diferir si slack > 24h (urgentes nunca)
+    private static final int    GROUP_ROUTE_CANDIDATES = 5;       // más candidatos por grupo → más diversidad de congestión
+    // Admisión just-in-time (diferir envíos flexibles bajo congestión) DESACTIVADA: diferir bajo
+    // congestión creciente acaba no readmitiendo a tiempo (infla el backlog y fuga los SLA de 48h
+    // sin que falte capacidad). Se conserva el código gateado por si se ata a una garantía de
+    // readmisión. La selección y la reserva en vuelos sí se mantienen.
     private static final boolean ENABLE_J3_DEFER = false;
 
     private final PlanificadorProperties props;
@@ -115,7 +113,7 @@ public class AcoBlockEngine {
         ConfigACO cfg = configurar(batches.size());
         List<LuggageBatch> base = ordenarPorUrgencia(batches);
 
-        // Fase A: la clave de feromona por batch es invariante durante toda la
+        // La clave de feromona por batch es invariante durante toda la
         // corrida; la calculamos una sola vez y la reusamos en el bucle caliente.
         Map<LuggageBatch, String> batchKeys = new IdentityHashMap<>(base.size() * 2);
         for (LuggageBatch b : base) batchKeys.put(b, batchKey(b));
@@ -196,10 +194,10 @@ public class AcoBlockEngine {
 
         long elapsedMs = (System.nanoTime() - inicio) / 1_000_000L;
         int sinRuta = batches.size() - enrutados;
-        // N1 (medición del cuello throughput/Ta): diagnóstico a DEBUG por bloque (Fase E:
-        // la consola muestra una sola línea, la del servicio), PERO promovido a INFO cada
-        // 50 bloques para ver en el onset si dominan los Dijkstra (dijkstraCalls) vs los
-        // hits de caché (cacheHits) y el t=ms. Decide si el pre-warm (N3) sube el techo.
+        // Diagnóstico del cuello throughput/Ta: a DEBUG por bloque (la consola ya muestra la
+        // línea del servicio), promovido a INFO cada 50 bloques para ver en el onset si dominan
+        // los Dijkstra (dijkstraCalls) vs los hits de caché (cacheHits) y el t=ms. Ayuda a
+        // decidir si el pre-warm sube el techo.
         if (log.isInfoEnabled() && ++diagSeq % 50 == 0) {
             log.info("ACO padre bloque batches={} enrutados={} onTime={} sinRuta={} soluciones={} completas={} cacheHits={} cacheRejects={} dijkstraCalls={} t={}ms",
                     batches.size(), enrutados, onTime, sinRuta, solucionesEvaluadas, stats.solucionesCompletas,
@@ -241,7 +239,7 @@ public class AcoBlockEngine {
 
     private ConfigACO configurar(int batchCount) {
         ConfigACO cfg = new ConfigACO();
-        // Fase C: con las hormigas ya abaratadas (Fases A/B), el límite real de
+        // Con las hormigas ya abaratadas, el límite real de
         // búsqueda debe ser el deadline Ta, no el tope de iteraciones. Subimos los
         // topes (≈×3) para aprovechar el presupuesto sobrante en bloques con
         // holgura; maxNoImprovement sigue cortando temprano cuando ya convergió,
@@ -278,8 +276,8 @@ public class AcoBlockEngine {
         Map<Long, Integer> simAirport = new HashMap<>(blockAirport);
         List<Asignacion> asignaciones = new ArrayList<>();
 
-        // Fase I: agrupar los envíos por (origen, destino, hora, SLA). Como `base`
-        // ya viene ordenada por deadline (G1), un LinkedHashMap conserva ese orden
+        // Agrupar los envíos por (origen, destino, hora, SLA). Como `base`
+        // ya viene ordenada por deadline, un LinkedHashMap conserva ese orden
         // de grupos → se respeta la prioridad por vencimiento. Se resuelven las rutas
         // UNA vez por grupo (sobre un representante) y se reparte la demanda del grupo
         // con relleno por capacidad, colapsando O(envíos) → O(grupos). Cada envío se
@@ -391,7 +389,7 @@ public class AcoBlockEngine {
         return r.getScarcityCost() * slackRatio + r.getTransitMin() * 1e-4;
     }
 
-    /** Clave de agrupación de demanda (Fase I): origen, destino, hora y SLA (sin cantidad). */
+    /** Clave de agrupación de demanda: origen, destino, hora y SLA (sin cantidad). */
     private String groupKey(LuggageBatch batch) {
         long readyBucket = batch.getReadyTime() == null
                 ? 0L
@@ -416,7 +414,7 @@ public class AcoBlockEngine {
         PendingPool pendientes = new PendingPool(base);
         List<Asignacion> asignaciones = new ArrayList<>();
 
-        // Fase B: dentro de una hormiga las feromonas son constantes y la
+        // Dentro de una hormiga las feromonas son constantes y la
         // capacidad simulada solo decrece, así que la evaluación de un batch es
         // reutilizable hasta que una asignación confirmada toque alguno de sus
         // vuelos/almacenes. Cacheamos por identidad de batch e invalidamos solo
@@ -870,7 +868,7 @@ public class AcoBlockEngine {
             CacheKey key = CacheKey.from(batch);
             if (key == null) return;
             // El Set de firmas se mantiene junto a los paths: no se recomputa en
-            // cada put (Fase A).
+            // cada put.
             CachedPaths entry = cache.computeIfAbsent(key, k -> new CachedPaths());
             for (RouteCandidate candidate : candidates) {
                 if (candidate.getEdges().isEmpty()) continue;

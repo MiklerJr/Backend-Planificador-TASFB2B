@@ -6,8 +6,8 @@ import java.util.List;
 
 /**
  * Serie temporal de ocupación de almacenes por SLOT de 60 min (eje UTC), una serie por bloque
- * publicado (Tanda 1B), expuesta por {@code GET /jobs/{id}/almacenes/serie?desde=N}. Antes el cuerpo
- * se armaba a mano en el controller; ahora lo construye {@code PlanificadorService.getSerieAlmacenes}.
+ * publicado, expuesta por {@code GET /jobs/{id}/almacenes/serie?desde=N}. La construye
+ * {@code PlanificadorService.getSerieAlmacenes}.
  * Misma paginación que {@code /bloques}: {@code desde} = índice de bloque.
  */
 @Data

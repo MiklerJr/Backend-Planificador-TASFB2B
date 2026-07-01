@@ -29,8 +29,8 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
- * Fase 5b — Lee la solución persistida (Fase 5a) y reconstruye {@link LuggageBatch} desde BD, para
- * dejar de retener los batches enrutados en RAM.
+ * Lee la solución persistida y reconstruye {@link LuggageBatch} desde BD, para dejar de retener
+ * los batches enrutados en RAM.
  *
  * <p>Dos usos:
  * <ul>
@@ -343,7 +343,7 @@ public class SolucionBdReader {
     }
 
     /**
-     * Fase 3 (anti-OOM): índice {@code id_vuelo} (BD, {@code ICAO-ICAO-HHMM}) → {@link Vuelo} del dataset.
+     * Anti-OOM: índice {@code id_vuelo} (BD, {@code ICAO-ICAO-HHMM}) → {@link Vuelo} del dataset.
      * La clave se deriva con {@code normalizarIdVuelo(vueloFrontId(v))} (NO de {@code Vuelo.getIdVuelo()},
      * que {@code DataLoader} deja null en prod); así casa con {@code tramo_ruta.id_vuelo}. Da el {@code Vuelo}
      * para reconstruir el vueloId del front ({@code vueloFrontId} = {@code Edge.id}) y la capacidad.
@@ -360,7 +360,7 @@ public class SolucionBdReader {
     }
 
     /**
-     * Fase 3 (anti-OOM): reconstruye el histórico COMPLETO de {@code /vuelos/usados} desde las rutas
+     * Anti-OOM: reconstruye el histórico COMPLETO de {@code /vuelos/usados} desde las rutas
      * ACTIVAS en BD, para servirlo cuando el acumulador en RAM ya purgó los bloques fuera de la ventana
      * reciente. El {@code vueloId} se devuelve en formato front ({@code ICAO-ICAO-HH:MM}, vía
      * {@link SimulacionFormat#vueloFrontId} = {@code Edge.id}) para que el front lo case igual que en vivo.
@@ -400,7 +400,7 @@ public class SolucionBdReader {
     }
 
     /**
-     * Fase 3 (anti-OOM): reconstruye el histórico de {@code /vuelos/carga} desde las rutas ACTIVAS en
+     * Anti-OOM: reconstruye el histórico de {@code /vuelos/carga} desde las rutas ACTIVAS en
      * BD, para servirlo cuando el buffer deslizante ya soltó los bloques viejos. Misma agregación por
      * vuelo-día que {@link #reconstruirVuelosUsados}; {@code cargaAsignada = SUM(cantidad)},
      * capacidad/%/semáforo del {@link Vuelo} del dataset. {@code bloqueIdx} = orden temporal global

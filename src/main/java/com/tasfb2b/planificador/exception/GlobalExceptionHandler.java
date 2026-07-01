@@ -13,9 +13,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
- * Manejo CENTRALIZADO de errores de toda la API REST (Tanda 1C). Reemplaza los
- * {@code ResponseEntity.badRequest().body(Map.of("error", ...))} dispersos por endpoint con un
- * cuerpo uniforme ({@link ErrorResponse}) y códigos HTTP consistentes.
+ * Manejo CENTRALIZADO de errores de toda la API REST: produce un cuerpo uniforme
+ * ({@link ErrorResponse}) y códigos HTTP consistentes para los errores que escapan de los
+ * endpoints.
  *
  * <p>Mapeo de excepciones → estado:
  * <ul>

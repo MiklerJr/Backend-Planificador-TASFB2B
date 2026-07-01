@@ -9,10 +9,10 @@ import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 
 /**
- * Estado y progreso de un job (Tanda 1B), expuesto por {@code GET /jobs/{id}/estado}. Antes el
- * cuerpo se construía a mano en el controller; ahora lo arma {@code PlanificadorService.getEstadoJob}.
+ * Estado y progreso de un job, expuesto por {@code GET /jobs/{id}/estado}. Lo arma
+ * {@code PlanificadorService.getEstadoJob}.
  *
- * <p>Byte-compatible con el mapa anterior: {@code fechaInicio}, {@code fin}, {@code error} y
+ * <p>Serialización: {@code fechaInicio}, {@code fin}, {@code error} y
  * {@code alertaColapso} se omiten cuando son {@code null} ({@link JsonInclude.Include#NON_NULL});
  * {@code vuelosCancelados} se emite siempre (lista vacía si no hubo cancelaciones).
  *

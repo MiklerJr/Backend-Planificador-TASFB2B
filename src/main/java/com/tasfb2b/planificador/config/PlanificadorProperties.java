@@ -67,9 +67,9 @@ public class PlanificadorProperties {
         private boolean simularTiempoReal3 = false;
 
         /**
-         * Fase T (N3) — si true, antes del bucle de bloques de E2 se pre-calienta la caché de
-         * esqueletos con la demanda de la ventana (Dijkstra fuera del presupuesto Ta). Sube el
-         * throughput en arranque limpio (caché fría). Ta-safe; no cambia rutas. {@code false} = off.
+         * Si true, antes del bucle de bloques de E2 se pre-calienta la caché de esqueletos con la
+         * demanda de la ventana (Dijkstra fuera del presupuesto Ta). Sube el throughput en arranque
+         * limpio (caché fría). No cambia rutas ni viola la cota Ta. {@code false} = off.
          */
         private boolean prewarmSkeletons = true;
 
@@ -90,7 +90,7 @@ public class PlanificadorProperties {
         private int maxVentanasColapso = 0;
 
         /**
-         * Anti-OOM (Fase 1): nº de bloques RECIENTES cuyas {@code asignaciones} y series por slot se
+         * Anti-OOM: nº de bloques RECIENTES cuyas {@code asignaciones} y series por slot se
          * retienen en RAM por job; los más viejos se purgan ({@code JobState.publicarBloque}). El front
          * consume {@code /bloques} y {@code /asignaciones} incrementalmente, así que solo necesita la
          * ventana reciente. Bajarlo reduce el pico de RAM; subirlo da más holgura si el front se atrasa.
@@ -98,7 +98,7 @@ public class PlanificadorProperties {
         private int maxBloquesBuffer = 60;
 
         /**
-         * Anti-OOM (Fase 2): nº de jobs TERMINADOS más recientes que conservan sus estructuras pesadas
+         * Anti-OOM: nº de jobs TERMINADOS más recientes que conservan sus estructuras pesadas
          * en RAM (para que el front siga animando el último que terminó). De los más antiguos se liberan
          * bloques/acumuladores (sus rutas viven en BD y el ZIP de auditoría en disco). Los jobs activos
          * nunca se tocan. Evita que correr varias simulaciones acumule RAM hasta reiniciar.
@@ -146,13 +146,13 @@ public class PlanificadorProperties {
         private double pesoTransit = 1.0;
         /** Penalización fija por cada batch tardado (incumplimiento de SLA). */
         private double pesoTarde = 5000.0;
-        /** Peso del término de uso de almacén (premia distribución, fase 5). */
+        /** Peso del término de uso de almacén (premia distribución de la carga). */
         private double pesoUsoAlmacen = 50.0;
-        /** Peso del término de uso de vuelo (premia distribución, fase 5). */
+        /** Peso del término de uso de vuelo (premia distribución de la carga). */
         private double pesoUsoVuelo = 20.0;
     }
 
-    /** Backlog acumulativo de pedidos pendientes/replanificables (fase 4). */
+    /** Backlog acumulativo de pedidos pendientes/replanificables. */
     @Data
     public static class Backlog {
         /** Tope absoluto de batches en backlog. Excedente se mueve a sinRutaDefinitivo. */
@@ -164,10 +164,9 @@ public class PlanificadorProperties {
         /** Máximo de replanificaciones preventivas por bloque (cota de cómputo). */
         private int maxReplanificacionesPorBloque = 20;
         /**
-         * Fase M (anti-thrash): máximo de envíos del backlog a reprocesar por bloque,
-         * tomando los de deadline más cercano. El resto se difiere al siguiente bloque
-         * (sin perderse). 0 = sin tope (comportamiento original). Acota que un backlog
-         * grande le robe Ta a la demanda nueva y dispare violaciones de Ta.
+         * Anti-thrash: máximo de envíos del backlog a reprocesar por bloque, tomando los de
+         * deadline más cercano. El resto se difiere al siguiente bloque (sin perderse). 0 = sin
+         * tope. Acota que un backlog grande le robe Ta a la demanda nueva y dispare violaciones de Ta.
          */
         private int maxReprocesoPorBloque = 0;
     }
@@ -213,31 +212,31 @@ public class PlanificadorProperties {
     }
 
     /**
-     * Fase L/O/P — perillas del enrutado storage-aware (libera almacén-día de hub para los SLA
-     * cortos). Expuestas para barrer valores SIN recompilar (la dirección está probada: cada
-     * subida de reserva / bajada de umbral / curva más agresiva ha movido el primer fallo).
+     * Perillas del enrutado storage-aware (libera almacén-día de hub para los SLA cortos).
+     * Expuestas para barrer valores sin recompilar (más reserva / menor umbral / curva más
+     * agresiva ⇒ protege antes los hubs).
      */
     @Data
     public static class StorageAware {
         /**
-         * L2 — colchón de reserva en almacén-día de hub para escalas overnight de envíos flexibles
-         * (escalado por holgura). 0 = sin reserva de almacén. La 2ª pasada con 0 siempre existe en
-         * el motor, así que nunca causa un sinRuta evitable (invariante anti-J3).
+         * Colchón de reserva en almacén-día de hub para escalas overnight de envíos flexibles
+         * (escalado por holgura). 0 = sin reserva. Siempre existe una 2ª pasada sin colchón, así
+         * que nunca causa un sinRuta evitable.
          */
         private double reservaAlmacenBase = 0.15;
         /**
-         * O — fracción de capacidad de almacén a partir de la cual un aeropuerto se marca hub
+         * Fracción de capacidad de almacén a partir de la cual un aeropuerto se marca hub
          * (utilización-pico). Más bajo = protege antes / a más aeropuertos.
          */
         private double umbralHubPico = 0.55;
         /**
-         * L1/P — exponente p de la curva de precio de almacén-hub {@code u^p/(1−u)}. p<2 muerde
+         * Exponente p de la curva de precio de almacén-hub {@code u^p/(1−u)}. p<2 muerde
          * antes (p=1.7 ⇒ desde ~0.35; p=2 ⇒ desde ~0.45). Menor p = la selección evita hubs con
          * más anticipación.
          */
         private double precioHubExponente = 1.7;
         /**
-         * Fase Q — máximo de claves de esqueleto a re-sembrar con rutas hub-avoiding por bloque
+         * Máximo de claves de esqueleto a re-sembrar con rutas hub-avoiding por bloque
          * (amortizado, usando el tiempo ocioso del bloque acotado por el deadline de Ta). 0 =
          * desactivar el re-seed. Solo agrega opciones a la caché (nunca quita la ruta rápida).
          */

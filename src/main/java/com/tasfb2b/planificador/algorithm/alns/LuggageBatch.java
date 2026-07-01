@@ -29,7 +29,7 @@ public class LuggageBatch {
     private List<Long> assignedDepartures; // epoch-minutes, paralelo a assignedRoute
     private boolean cumpleSLA;
 
-    // ── Fase 2: re-enrutamiento desde la posición física tras una cancelación ──
+    // ── Re-enrutamiento desde la posición física tras una cancelación ──
     /** Tramos ya volados (o en vuelo) que se preservan al re-enrutar desde una escala. Null/vacío
      *  en el caso normal. La ruta REAL del envío = prefijoFijo + assignedRoute (sufijo). */
     private List<Edge> prefijoFijo;
@@ -101,7 +101,7 @@ public class LuggageBatch {
         return (slaMin - transitMin) / slaMin;
     }
 
-    // ── Fase 2: prefijo fijo / posición actual ────────────────────────────────
+    // ── Prefijo fijo / posición actual ────────────────────────────────
     public boolean tienePrefijo() {
         return prefijoFijo != null && !prefijoFijo.isEmpty();
     }
@@ -154,7 +154,7 @@ public class LuggageBatch {
         clone.setAssignedDepartures(
                 assignedDepartures != null ? new ArrayList<>(assignedDepartures) : null);
         clone.setCumpleSLA(this.cumpleSLA);
-        // Fase 2: preservar la posición actual y el prefijo (el ACO no clona, pero por robustez).
+        // Preservar la posición actual y el prefijo (el ACO no clona, pero por robustez).
         clone.setCurrentOriginCode(this.currentOriginCode);
         clone.setCurrentReadyTime(this.currentReadyTime);
         clone.setPrefijoFijo(this.prefijoFijo != null ? new ArrayList<>(this.prefijoFijo) : null);

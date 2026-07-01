@@ -225,7 +225,7 @@ public class DataLoader {
             String dbId = rs.getString("id_envio");
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
-            // Fase 4: conservar el id_envio COMPLETO ("ICAO-num") como clave del envio. Sin esto,
+            // Conservar el id_envio COMPLETO ("ICAO-num") como clave del envio. Sin esto,
             // LuggageBatch.id quedaba null y rompia la contabilidad de origenAdmitidos y el conteo
             // de auditoria (batchAuditKey). AlgorithmMapper.mapToBatches lo lee con getIdEnvio().
             m.setIdEnvio(dbId);
@@ -318,7 +318,7 @@ public class DataLoader {
             String dbId = rs.getString("id_envio");
             String idOriginal = dbId.contains("-") ? dbId.substring(dbId.indexOf('-') + 1) : dbId;
             m.setId(Integer.parseInt(idOriginal));
-            // Fase 4: conservar el id_envio COMPLETO ("ICAO-num") como clave del envio. Sin esto,
+            // Conservar el id_envio COMPLETO ("ICAO-num") como clave del envio. Sin esto,
             // LuggageBatch.id quedaba null y rompia la contabilidad de origenAdmitidos y el conteo
             // de auditoria (batchAuditKey). AlgorithmMapper.mapToBatches lo lee con getIdEnvio().
             m.setIdEnvio(dbId);

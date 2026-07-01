@@ -92,7 +92,7 @@ public final class EnvioEstadoCalculator {
             r.setUbicacionActual(tramos.get(0).getOrigen()); // esperando en origen
         } else if (llegadaUlt != null && !ahoraUtc.isBefore(llegadaUlt)) {
             // Tras el último tramo conocido. Si ese tramo llega al DESTINO real → entregado; si no,
-            // es un envío varado (Fase 2): voló su prefijo pero aún espera continuación en la escala.
+            // es un envío varado: voló su prefijo pero aún espera continuación en la escala.
             String destinoFinal = asig != null ? asig.getDestino() : null;
             String destinoUltTramo = tramos.get(total - 1).getDestino();
             boolean llegaAlDestino = destinoFinal == null || destinoFinal.isBlank()

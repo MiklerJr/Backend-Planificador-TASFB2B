@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.dto.dataset;
 import lombok.Data;
 
 /**
- * Estado de la ingesta de un dataset (Fase 6B). Una ingesta a la vez; el worker async muta los
+ * Estado de la ingesta de un dataset. Una ingesta a la vez; el worker async muta los
  * campos (volatile para visibilidad) y el front los consulta con {@code GET /dataset/cargar/estado}.
  */
 @Data

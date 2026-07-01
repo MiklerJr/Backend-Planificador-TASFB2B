@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Fase 5a — Persiste la solución (rutas) de cada bloque en {@code ruta_asignada}/{@code tramo_ruta}.
+ * Persiste la solución (rutas) de cada bloque en {@code ruta_asignada}/{@code tramo_ruta}.
  *
  * <p><b>Serializado:</b> como el esquema no tiene {@code corrida_id} (decisión de diseño: una corrida
  * a la vez), solo un job escribe a la vez. El primero que arranca toma la persistencia y limpia las
@@ -137,7 +137,7 @@ public class PersistenciaSolucionService {
     public void persistirBloque(String jobId, List<LuggageBatch> batches) {
         if (batches == null || batches.isEmpty() || !persiste(jobId)) return;
 
-        // Fase 2: persiste cualquier batch con ruta COMPLETA (prefijo+sufijo) no vacía. Incluye los
+        // Persiste cualquier batch con ruta COMPLETA (prefijo+sufijo) no vacía. Incluye los
         // varados (solo prefijo): su prefijo se guarda como ruta activa incompleta para que el
         // endpoint de estado lo muestre EN_ESCALA esperando.
         // Se PARTEN en dos carriles: los del dataset van a ruta_asignada/tramo_ruta (FK a envio); los
@@ -282,7 +282,7 @@ public class PersistenciaSolucionService {
             if (i > 0) sql.append(',');
             sql.append("(?, TRUE, ?, ?, ?, ?, ?)");
 
-            // Fase 2: la ruta REAL = prefijo (volado) + sufijo. Tránsito/slack se miden desde el
+            // La ruta REAL = prefijo (volado) + sufijo. Tránsito/slack se miden desde el
             // registro ORIGINAL hasta la llegada del último tramo conocido (para un varado, la escala).
             List<Edge> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();

@@ -10,9 +10,7 @@ import com.tasfb2b.planificador.model.dataset.Vuelo;
  * ({@code PlanificadorService}, que construye la telemetría por bloque) y los read models de solo
  * lectura ({@code JobQueryService}, {@code DatasetMetadataService}).
  *
- * <p>Se extrajo en la Tanda 2A/2B al separar los read models del orquestador: estos helpers los usan
- * tanto el servicio que se queda como los servicios nuevos, así que viven aquí para no duplicarlos.
- * Todos son estáticos y sin estado:
+ * <p>Todos son estáticos y sin estado:
  * <ul>
  *   <li>{@link #porcentaje}/{@link #semaforoPorPorcentaje}: % de uso y su semáforo VERDE/AMBAR/ROJO
  *       (umbrales 0.70/0.90 de {@link CostFunction}).</li>

@@ -25,7 +25,7 @@ import java.util.function.Supplier;
  *       dataset). Tras la 1.ª corrida queda caliente ⇒ el pre-warm de las siguientes es casi instantáneo.</li>
  * </ul>
  *
- * <p>Se invalidan al recargar el dataset (Fase 6B ingesta), que reemplaza vuelos/aeropuertos.
+ * <p>Se invalidan al recargar el dataset (ingesta), que reemplaza vuelos/aeropuertos.
  */
 @Slf4j
 @Component

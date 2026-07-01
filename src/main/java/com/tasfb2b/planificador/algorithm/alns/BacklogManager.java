@@ -89,7 +89,7 @@ public class BacklogManager {
 
     /**
      * Vista de solo lectura de los pendientes actuales (sinRuta + replanificables) SIN vaciarlos.
-     * Útil para contabilizar su ocupación de almacén de origen mientras esperan (Fase Origen-B).
+     * Útil para contabilizar su ocupación de almacén de origen mientras esperan.
      */
     public List<LuggageBatch> peekPendientes() {
         if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
@@ -118,7 +118,7 @@ public class BacklogManager {
     }
 
     /**
-     * Fase M (anti-thrash): devuelve hasta {@code max} pendientes priorizando los de
+     * Anti-thrash: devuelve hasta {@code max} pendientes priorizando los de
      * DEADLINE más cercano ({@code readyTime + SLA}), mezclando sinRuta y replanificables.
      * Los no devueltos (los MENOS urgentes) permanecen en el backlog para el siguiente
      * bloque — no se pierde ninguno; {@code purgarVencidas} los purgará si vencen. Acota el

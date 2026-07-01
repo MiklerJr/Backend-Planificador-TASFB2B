@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Fase 6B — Ingesta de un dataset completo (aeropuertos + vuelos + envíos) por endpoint, con
+ * Ingesta de un dataset completo (aeropuertos + vuelos + envíos) por endpoint, con
  * <b>reemplazo total</b> de la BD. Asíncrona (los envíos pueden ser millones de líneas) y serializada
  * con las simulaciones (corre en el executor de {@link JobsRegistry}; se rechaza si hay una
  * simulación activa). Una ingesta a la vez.

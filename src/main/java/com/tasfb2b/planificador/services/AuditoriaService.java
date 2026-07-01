@@ -83,7 +83,7 @@ public class AuditoriaService {
         int slaMin = batch.getSlaLimitHours() * 60;
         audit.setDeadlineMin(slaMin);
 
-        List<Edge> ruta = batch.getRutaCompleta();   // Fase 2: prefijo volado + sufijo
+        List<Edge> ruta = batch.getRutaCompleta();   // ruta real = prefijo volado + sufijo
         boolean enrutada = ruta != null && !ruta.isEmpty();
 
         if (!enrutada) {
@@ -269,7 +269,7 @@ public class AuditoriaService {
     }
 
     /**
-     * Fase 5b — Variante en STREAMING del ZIP, para no retener O(envíos) en RAM. Los envíos
+     * Variante en STREAMING del ZIP, para no retener O(envíos) en RAM. Los envíos
      * enrutados los emite {@code fuenteEnrutados} (típicamente {@code SolucionBdReader.forEachEnrutado},
      * que los lee de BD con cursor y ya vienen ordenados por {@code readyTime}); los {@code sinRuta}
      * (fracción pequeña que no llegó a BD) se añaden al final ordenados por {@code readyTime}. Las

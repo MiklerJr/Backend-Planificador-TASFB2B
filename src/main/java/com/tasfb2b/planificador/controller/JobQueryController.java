@@ -20,19 +20,18 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Lecturas y polling del estado de los jobs (Tanda 1D: extraído de {@code PlanificadorController}):
- * listado de jobs, estado, estado-inicial (warm-up), alerta de colapso, dashboard, indicadores,
- * carga/uso de vuelos, ocupación/serie de almacenes, asignaciones, bloques y resultado. Todos son
- * read models que NO modifican el job. Rutas inalteradas bajo {@code /api/planificador}; CORS lo
- * aporta el {@code CorsFilter} global.
+ * Lecturas y polling del estado de los jobs: listado de jobs, estado, estado-inicial (warm-up),
+ * alerta de colapso, dashboard, indicadores, carga/uso de vuelos, ocupación/serie de almacenes,
+ * asignaciones, bloques y resultado. Todos son read models que NO modifican el job. Rutas bajo
+ * {@code /api/planificador}; CORS lo aporta el {@code CorsFilter} global.
  */
 @RestController
 @RequestMapping("/api/planificador")
 public class JobQueryController {
 
     private final PlanificadorService service;
-    // Tanda 2A: los read models de telemetría (dashboard, indicadores, carga/uso de vuelos,
-    // ocupación de almacenes, asignaciones) los sirve el servicio cohesivo JobQueryService.
+    // Los read models de telemetría (dashboard, indicadores, carga/uso de vuelos, ocupación de
+    // almacenes, asignaciones) los sirve JobQueryService.
     // PlanificadorService queda para el ciclo de vida del job (estado, serie, bloques, resultado).
     private final JobQueryService jobQuery;
 

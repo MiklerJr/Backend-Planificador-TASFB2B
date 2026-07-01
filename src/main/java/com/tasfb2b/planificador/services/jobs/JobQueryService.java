@@ -23,15 +23,12 @@ import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
 import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
 
 /**
- * Read models de SOLO LECTURA sobre los jobs en memoria (Tanda 2A: extraído de
- * {@code PlanificadorService}). Alimenta los endpoints de polling de {@code JobQueryController}
- * (dashboard, indicadores, carga/uso de vuelos, ocupación de almacenes, asignaciones) sin tocar el
- * bucle de simulación ni mutar el job.
+ * Read models de SOLO LECTURA sobre los jobs en memoria. Alimenta los endpoints de polling de
+ * {@code JobQueryController} (dashboard, indicadores, carga/uso de vuelos, ocupación de almacenes,
+ * asignaciones) sin tocar el bucle de simulación ni mutar el job.
  *
- * <p>El JSON de salida es idéntico al que producía {@code PlanificadorService}: estos métodos y sus
- * helpers se movieron tal cual. Los helpers de formato puro compartidos con el orquestador
- * (semáforo, %, {@code safe}, {@code vueloFrontId}, {@code completar*}) viven en
- * {@link SimulacionFormat} para no duplicarlos.
+ * <p>Los helpers de formato puro compartidos con el orquestador (semáforo, %, {@code safe},
+ * {@code vueloFrontId}, {@code completar*}) viven en {@link SimulacionFormat} para no duplicarlos.
  */
 @Service
 public class JobQueryService {
@@ -41,7 +38,7 @@ public class JobQueryService {
 
     private final JobsRegistry jobs;
     private final DataLoader dataLoader;
-    /** Fase 3 (anti-OOM): reconstruye agregados desde BD cuando se pide histórico fuera de la ventana RAM. */
+    /** Anti-OOM: reconstruye agregados desde BD cuando se pide histórico fuera de la ventana RAM. */
     private final SolucionBdReader solucionBdReader;
     private final PersistenciaSolucionService persistencia;
     /** Anti-OOM: tope de filas por página de los read models paginados (de {@code planificador.consulta}). */
@@ -92,7 +89,7 @@ public class JobQueryService {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
-        // Fase 5b-2: con el job en curso usa el snapshot de métricas (las asignaciones de bloques
+        // Con el job en curso usa el snapshot de métricas (las asignaciones de bloques
         // viejos se purgan, así que no se pueden recontar desde bloquesDesde(0)).
         Metricas metricas = job.resultado != null
                 ? job.resultado.getMetricas()
@@ -190,7 +187,7 @@ public class JobQueryService {
         List<CargaVueloRow> vuelos;
         int proximoDesde;
         boolean hayMas;
-        // Fase 3 (anti-OOM): si el buffer deslizante ya soltó bloques (hay histórico fuera de RAM) y el
+        // Anti-OOM: si el buffer deslizante ya soltó bloques (hay histórico fuera de RAM) y el
         // job tiene su solución en BD, se pagina el histórico desde BD; si no, la ventana RAM.
         if (usarHistoricoBd(job)) {
             // Ruta BD: cursor = filas (OFFSET/LIMIT). Pide limit+1 para detectar si quedan más páginas.
@@ -236,9 +233,9 @@ public class JobQueryService {
         if (job == null) return null;
 
         int desdeNormalizado = Math.max(0, desde);
-        // Fase 5b-2: el agregado vive en el JobState (acumulado por bloque), no se reconstruye desde
-        // las asignaciones (que se purgan de los bloques viejos).
-        // Fase 3 (anti-OOM): si se pide histórico FUERA de la ventana reciente en RAM y el job tiene su
+        // El agregado vive en el JobState (acumulado por bloque), no se reconstruye desde las
+        // asignaciones (que se purgan de los bloques viejos).
+        // Anti-OOM: si se pide histórico FUERA de la ventana reciente en RAM y el job tiene su
         // solución en BD, se reconstruye el histórico COMPLETO desde BD; si no, se sirve la ventana RAM.
         int corte = Math.max(0, job.bloquesPublicados() - job.getMaxBloquesConAsignaciones());
         List<VuelosUsadosResponse.VueloUsado> vuelos;

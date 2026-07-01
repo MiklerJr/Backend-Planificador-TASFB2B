@@ -3,13 +3,12 @@ package com.tasfb2b.planificador.dto.almacenes;
 import lombok.Data;
 
 /**
- * Fila tipada de ocupación de almacén-día contextualizada por bloque (Tanda 1B). Es un
+ * Fila tipada de ocupación de almacén-día contextualizada por bloque. Es un
  * {@link OcupacionAlmacen} (pico concurrente ACUMULADO del día) más las coordenadas del bloque que
  * lo reportó ({@code bloqueIdx}, {@code horaInicio}, {@code horaFin}). La usan los read models
  * {@code GET /jobs/{id}/almacenes/ocupacion} y la sección {@code almacenes} de {@code /indicadores}.
  *
- * <p>El JSON serializado es idéntico al mapa que se construía antes a mano: mismos nombres y tipos
- * de campo, en el mismo orden.
+ * <p>El JSON expone los mismos nombres, tipos y orden de campo del contrato del front.
  */
 @Data
 public class OcupacionAlmacenRow {

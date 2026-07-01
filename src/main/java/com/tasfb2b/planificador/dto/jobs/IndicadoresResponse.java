@@ -10,7 +10,7 @@ import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenRow;
 import com.tasfb2b.planificador.dto.vuelos.CargaVueloRow;
 
 /**
- * Read model de indicadores del semáforo (Tanda 1B), expuesto por {@code GET /jobs/{id}/indicadores}:
+ * Read model de indicadores del semáforo, expuesto por {@code GET /jobs/{id}/indicadores}:
  * umbrales verde/ámbar más la telemetría consolidada de vuelos y almacenes (las mismas filas de
  * {@code /vuelos/carga} y {@code /almacenes/ocupacion}).
  */

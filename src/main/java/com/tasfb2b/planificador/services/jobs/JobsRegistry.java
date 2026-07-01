@@ -48,7 +48,7 @@ public class JobsRegistry {
                 return t;
             });
 
-    /** Anti-OOM (Fase 2): nº de jobs terminados recientes que conservan sus estructuras pesadas. */
+    /** Anti-OOM: nº de jobs terminados recientes que conservan sus estructuras pesadas. */
     private final int maxJobsEnMemoria;
 
     /** Constructor de Spring: toma el tope de jobs en memoria del yaml. */
@@ -86,7 +86,7 @@ public class JobsRegistry {
     }
 
     /**
-     * Anti-OOM (Fase 2): libera las estructuras pesadas ({@link JobState#liberarPesados()}) de los jobs
+     * Anti-OOM: libera las estructuras pesadas ({@link JobState#liberarPesados()}) de los jobs
      * TERMINADOS más antiguos, dejando intactos los {@link #maxJobsEnMemoria} más recientes (por hora de
      * fin) para que el front siga animando el último que terminó. No toca jobs activos ni elimina nada
      * del registro: los metadatos ligeros (estado, fin, métricas, ruta del ZIP) se conservan.
@@ -138,7 +138,7 @@ public class JobsRegistry {
     }
 
     /**
-     * Encola una tarea genérica (p. ej. la ingesta de dataset, Fase 6B) en el MISMO single-thread
+     * Encola una tarea genérica (p. ej. la ingesta de dataset) en el MISMO single-thread
      * executor, de modo que NO corre a la par de una simulación (la ingesta reemplaza la BD y recarga
      * el DataLoader que el motor usa en vivo).
      */
@@ -151,7 +151,7 @@ public class JobsRegistry {
         return jobs.get(jobId);
     }
 
-    /** Fase 0 (medición anti-OOM): nº de jobs retenidos en el registro (nunca se purgan hoy). */
+    /** Nº de jobs retenidos en el registro (nunca se purgan hoy). */
     public int cantidadJobs() {
         return jobs.size();
     }

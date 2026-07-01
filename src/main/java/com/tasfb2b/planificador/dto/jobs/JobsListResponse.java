@@ -6,11 +6,11 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * Listado de jobs en memoria (Tanda 1B), expuesto por {@code GET /jobs}. Antes el bucle se construía
- * a mano en el controller; ahora lo arma {@code PlanificadorService.listarJobsResponse}.
+ * Listado de jobs en memoria, expuesto por {@code GET /jobs}. Lo arma
+ * {@code PlanificadorService.listarJobsResponse}.
  *
- * <p>Byte-compatible con el mapa anterior: cada {@link JobResumen} omite {@code fechaInicio} y
- * {@code fin} cuando son {@code null} ({@link JsonInclude.Include#NON_NULL}).
+ * <p>Serialización: cada {@link JobResumen} omite {@code fechaInicio} y {@code fin} cuando son
+ * {@code null} ({@link JsonInclude.Include#NON_NULL}).
  */
 @Data
 public class JobsListResponse {
