@@ -10,23 +10,19 @@ import java.util.stream.Collectors;
 
 public final class FileUtils {
 
-    // Constructor privado para evitar instanciación
     private FileUtils() {
         throw new UnsupportedOperationException("Clase utilitaria");
     }
 
     public static List<String> leerLineasSeguro(Path file) throws IOException {
         try {
-            // Intento 1: UTF-8 (El estándar mundial actual)
             List<String> lineas = Files.readAllLines(file, StandardCharsets.UTF_8);
             return limpiarLineas(lineas);
         } catch (java.nio.charset.MalformedInputException | java.nio.charset.UnmappableCharacterException e) {
             try {
-                // Intento 2: Formato de Windows tradicional
                 List<String> lineas = Files.readAllLines(file, Charset.forName("Windows-1252"));
                 return limpiarLineas(lineas);
             } catch (Exception e2) {
-                // Intento 3: UTF-16 (Por si acaso algún archivo viene así)
                 List<String> lineas = Files.readAllLines(file, StandardCharsets.UTF_16);
                 return limpiarLineas(lineas);
             }

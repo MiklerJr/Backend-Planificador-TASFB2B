@@ -17,7 +17,6 @@ import java.util.Map;
 @Component
 public class FlightParser {
 
-    /** Fecha base usada al parsear los vuelos (solo hora local, sin timezone). */
     public static final LocalDate FLIGHT_BASE_DATE = LocalDate.of(2026, 1, 1);
 
     public List<Vuelo> parse(Path file, Map<String, Aeropuerto> aeropuertoMap) throws IOException {
@@ -62,11 +61,6 @@ public class FlightParser {
 
                 LocalDateTime fechaSalida = LocalDateTime.of(BASE, LocalTime.of(salidaHora, salidaMinuto));
 
-                // El cruce de medianoche NO se puede decidir comparando horas de pared locales de
-                // aeropuertos en husos distintos (un vuelo hacia el oeste más corto que su diferencia
-                // de huso aterriza a una hora de pared menor sin cruzar medianoche). La duración real
-                // se calcula con los husos y un único módulo 24h; la fecha de llegada sube de día solo
-                // cuando el vuelo cruza medianoche de verdad.
                 int origenOffset = origen.getOffsetHorario();
                 int destOffset   = destino.getOffsetHorario();
                 int depWall = salidaHora * 60 + salidaMinuto;

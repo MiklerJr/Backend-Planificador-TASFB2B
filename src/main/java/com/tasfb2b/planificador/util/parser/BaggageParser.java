@@ -28,8 +28,8 @@ public class BaggageParser {
                               Map<String, Aeropuerto> aeropuertoMap) throws IOException {
         List<String> lineas = FileUtils.leerLineasSeguro(file);
         List<Envio> result = new ArrayList<>();
-        int descartadosMismoAeropuerto = 0;    // RF02: envíos con origen == destino
-        int descartadosCamposIncompletos = 0;  // RF03: envíos con campos obligatorios faltantes o mal formados
+        int descartadosMismoAeropuerto = 0;
+        int descartadosCamposIncompletos = 0;
 
         for (String line : lineas) {
             line = line.trim();
@@ -38,7 +38,7 @@ public class BaggageParser {
             String[] p = line.split("-");
             if (p.length < 7) continue;
 
-            String idEnvio   = p[0].trim();   // RF03: el id es opcional (puede venir en blanco)
+            String idEnvio   = p[0].trim();
             String dateStr   = p[1].trim();
             String horaStr   = p[2].trim();
             String minStr    = p[3].trim();
@@ -46,7 +46,6 @@ public class BaggageParser {
             String cantStr   = p[5].trim();
             String idCliente = p[6].trim();
 
-            // RF03: todos los campos obligatorios (todos menos el id) deben estar presentes.
             if (!EnvioValidator.camposObligatoriosPresentes(dateStr, horaStr, minStr, destCode, cantStr, idCliente)) {
                 descartadosCamposIncompletos++;
                 continue;
@@ -55,13 +54,11 @@ public class BaggageParser {
             Aeropuerto destino = aeropuertoMap.get(destCode);
             if (destino == null) continue;
 
-            // RF02: el origen y el destino de un envío no pueden ser el mismo aeropuerto.
             if (EnvioValidator.esMismoAeropuerto(origen.getCodigo(), destino.getCodigo())) {
                 descartadosMismoAeropuerto++;
                 continue;
             }
 
-            // RF03: los campos numéricos y la fecha deben estar bien formados.
             int hour, minute, cantidad, clienteId;
             LocalDateTime fechaHoraRegistro;
             try {

@@ -14,7 +14,6 @@ import java.util.regex.Pattern;
 @Component
 public class AeropuertoParser {
 
-    // Detecta líneas como: "01   SKBO   Bogota   Colombia   bogo   -5   430   Latitude..."
     private static final Pattern LINE = Pattern.compile(
             "^\\s*(\\d{2})\\s+" +           // 1: número
                     "([A-Z]{4})\\s+" +              // 2: código ICAO
@@ -53,13 +52,6 @@ public class AeropuertoParser {
         return result;
     }
 
-    /**
-     * Deriva el continente a partir del primer carácter del código ICAO.
-     * Prefijos presentes en este dataset:
-     *   S → Sudamérica (AM)
-     *   E, L, U → Europa / Europa del Este (EU)
-     *   O, V → Oriente Medio / Asia del Sur (AS)
-     */
     private static String continentePorIcao(String code) {
         if (code == null || code.isEmpty()) return "UNKNOWN";
         return switch (code.charAt(0)) {
@@ -69,20 +61,17 @@ public class AeropuertoParser {
             default             -> "UNKNOWN";
         };
     }
-    // Convierte "12° 01' 19\" S" a -12.0219 (negativo si es S)
     private Double parseLatitud(String raw) {
         double val = parseDMS(raw);
         return raw.toUpperCase().contains("S") ? -val : val;
     }
 
-    // Convierte "77° 06' 52\" W" a -77.0652 (negativo si es W)
     private Double parseLongitud(String raw) {
         double val = parseDMS(raw);
         return raw.toUpperCase().contains("W") ? -val : val;
     }
 
     private double parseDMS(String raw) {
-        // Extrae todos los números del string
         Matcher m = Pattern.compile("(\\d+)").matcher(raw);
         int grados  = m.find() ? Integer.parseInt(m.group()) : 0;
         int minutos = m.find() ? Integer.parseInt(m.group()) : 0;

@@ -6,14 +6,10 @@ spring:
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      # Fase 1 (alineación model↔BD): red de seguridad. validate SOLO comprueba que las
-      # @Entity casan con el esquema real; NUNCA modifica la BD (no usar update/create en RDS).
       ddl-auto: validate
     open-in-view: false
   servlet:
     multipart:
-      # Fase 6B: la ingesta sube los TXT de envíos (pueden ser cientos de MB). Volcado a disco
-      # temprano (file-size-threshold) para no cargarlos en heap.
       max-file-size: 512MB
       max-request-size: 2GB
       file-size-threshold: 2MB
@@ -48,28 +44,18 @@ planificador:
     # con 720 y K=144 E3 quedaba en ~5 bloques (2,5 días) sin llegar nunca al colapso.
     max-ventanas-colapso: 0
 
-    # Anti-OOM (Fase 1): nº de bloques recientes cuyas asignaciones + series por slot se retienen en
-    # RAM por job (el resto se purga; el front consume /bloques y /asignaciones incrementalmente).
-    # Antes era 500 hardcoded. Bajar = menos RAM; subir = más holgura si el front se atrasa.
     max-bloques-buffer: 35
 
-    # Anti-OOM (Fase 2): nº de jobs TERMINADOS recientes que conservan sus bloques/acumuladores en RAM
-    # (el front anima el último); de los más viejos se liberan (sus rutas están en BD, el ZIP en disco).
-    # Evita que correr varias simulaciones seguidas acumule RAM hasta reiniciar.
     max-jobs-en-memoria: 3
 
-    # K FIJO por escenario (regla de negocio): E1=1, E2=144, E3=144. NO configurable por
-    # request — los endpoints devuelven 400 si llega un k distinto.
     k-default-1: 1
     k-default-2: 144
     k-default-3: 144
     umbral-colapso: 0.01
     umbral-colapso-backlog: 1000
-    simular-tiempo-real-1: false            # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
+    simular-tiempo-real-1: true            # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
     simular-tiempo-real-2: true           # El perfil smoke pondrá esto en false
     simular-tiempo-real-3: true
-    # Fase T (N3): pre-calienta la caché de esqueletos con la demanda de la ventana antes del bucle
-    # de bloques (Dijkstra fuera de Ta). Sube throughput en arranque limpio. false = off (revertir).
     prewarm-skeletons: true
 
   alns:
@@ -94,16 +80,6 @@ planificador:
     peso-uso-almacen: 50.0
     peso-uso-vuelo: 20.0
 
-  # Fase L/O/P/Q — enrutado storage-aware (libera almacén-día de hub para los SLA cortos).
-  # Perillas tuneables sin recompilar; la dirección está probada (cada subida de reserva /
-  # bajada de umbral / curva más agresiva ha movido el primer fallo). Reversión si aparecen
-  # fallos tempranos de 48h (firma J3): bajar reserva / subir umbral / subir exponente.
-  #
-  # Fase R (NEUTRALIZADO) — el modelo de almacén pasó a OCUPACIÓN CONCURRENTE por slot (no
-  # throughput diario). L/O/P/Q repartían un cuello ARTIFICIAL del modelo de cubo-diario; con
-  # el modelo correcto el almacén deja de ser el cuello, así que se neutralizan para medir
-  # limpio: reserva=0 (sin colchón), re-seed=0 (sin inyección hub-avoiding), umbral=0.99 (casi
-  # ningún nodo se marca hub ⇒ L1/L2 inertes). Reactivables si el almacén volviera a apretar.
   storage-aware:
     reserva-almacen-base: 0.0       # R5: sin colchón (L2 inerte)
     umbral-hub-pico: 0.99           # R5: casi nadie es hub (L1/L2/O inertes)
@@ -115,22 +91,11 @@ planificador:
     purgar-vencidas: true
     umbral-replanificacion-slack: 0.10
     max-replanificaciones-por-bloque: 20
-    # Fase M (anti-thrash): tope de envíos del backlog reprocesados por bloque (los más
-    # urgentes por deadline; el resto se difiere sin perderse). 0 = sin tope. Acota que el
-    # backlog le robe Ta a la demanda nueva y dispare violaciones de Ta. Tunear con la medición.
     max-reproceso-por-bloque: 3000
 
-  # Anti-OOM (endpoints de consulta): acotan cuánta memoria pide una sola request de telemetría
-  # mientras un job pesado corre en paralelo, para que la respuesta materializada en RAM no agote
-  # el heap. /vuelos/carga y /almacenes/ocupacion paginan por desde/limit; /demanda/resumen agrega
-  # en SQL y acota el span del rango.
   consulta:
     max-filas-pagina: 5000      # tope de filas por página (limit por defecto) en /vuelos/carga y /almacenes/ocupacion
     demanda-max-dias: 31        # span máximo (días) de /demanda/resumen (acota el escaneo de BD)
 
-  # Persistencia de la caché de esqueletos (pre-warm Fase T) entre reinicios del proceso: en la VM
-  # de despliegue el calentamiento con caché fría cuesta ~13 min de Dijkstra y se perdía con cada
-  # restart del contenedor. El archivo lleva la huella del dataset (se descarta solo tras una
-  # ingesta). En el contenedor resuelve a /app/data (volumen). Vacío = desactivado (solo RAM).
   cache:
     skeleton-file: data/skeleton-cache.bin

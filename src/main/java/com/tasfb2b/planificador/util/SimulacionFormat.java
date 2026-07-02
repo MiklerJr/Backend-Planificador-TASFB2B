@@ -5,21 +5,6 @@ import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
 import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacen;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
 
-/**
- * Utilidades de formato/semáforo compartidas por la capa de simulación
- * ({@code PlanificadorService}, que construye la telemetría por bloque) y los read models de solo
- * lectura ({@code JobQueryService}, {@code DatasetMetadataService}).
- *
- * <p>Todos son estáticos y sin estado:
- * <ul>
- *   <li>{@link #porcentaje}/{@link #semaforoPorPorcentaje}: % de uso y su semáforo VERDE/AMBAR/ROJO
- *       (umbrales 0.70/0.90 de {@link CostFunction}).</li>
- *   <li>{@link #completarCargaVuelo}/{@link #completarOcupacionAlmacen}: rellenan el %carga/%ocupación
- *       y el semáforo del DTO a partir de carga y capacidad.</li>
- *   <li>{@link #vueloFrontId}: id estable del vuelo para el front (id de BD o {@code ORIGEN-DESTINO-HH:mm}).</li>
- *   <li>{@link #safe}: normaliza {@code null} → {@code ""}.</li>
- * </ul>
- */
 public final class SimulacionFormat {
 
     private SimulacionFormat() {}

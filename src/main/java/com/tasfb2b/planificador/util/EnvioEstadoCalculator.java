@@ -7,14 +7,6 @@ import com.tasfb2b.planificador.dto.simulacion.TramoRuta;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/**
- * Deriva el estado de un envío "en ruta" (y la clasificación de cada tramo) comparando los tiempos
- * UTC de su ruta contra un instante de referencia. Lógica pura: sin BD ni Spring, para poder
- * testearla directa. La usa {@code PlanificadorService.buscarEstadoEnvio}.
- *
- * <p>Todos los tiempos (tramos y {@code ahoraUtc}) están en el mismo eje UTC sin offset que produce
- * {@code AlgorithmMapper}/{@code buildAsignaciones}, así que la comparación es directa.
- */
 public final class EnvioEstadoCalculator {
 
     public static final String COMPLETADO = "COMPLETADO";
@@ -29,11 +21,6 @@ public final class EnvioEstadoCalculator {
 
     private EnvioEstadoCalculator() {}
 
-    /**
-     * Clasifica los tramos de {@code asig} (mutando su {@code estado}) y devuelve el estado global.
-     * Si {@code ahoraUtc} es null (no se pudo determinar el instante actual), deja los tramos sin
-     * clasificar y reporta {@code DESCONOCIDO}.
-     */
     public static EnvioEstadoResponse calcular(AsignacionMaleta asig, LocalDateTime ahoraUtc) {
         EnvioEstadoResponse r = new EnvioEstadoResponse();
         r.setAsignacion(asig);
@@ -44,7 +31,6 @@ public final class EnvioEstadoCalculator {
         r.setTramosTotales(total);
 
         if (total == 0) {
-            // Envío sin tramos (no debería pasar para un enrutado): nada que clasificar.
             r.setEstado(ahoraUtc == null ? E_DESCONOCIDO : E_PROGRAMADO);
             return r;
         }
@@ -91,8 +77,6 @@ public final class EnvioEstadoCalculator {
             r.setEstado(E_PROGRAMADO);
             r.setUbicacionActual(tramos.get(0).getOrigen()); // esperando en origen
         } else if (llegadaUlt != null && !ahoraUtc.isBefore(llegadaUlt)) {
-            // Tras el último tramo conocido. Si ese tramo llega al DESTINO real → entregado; si no,
-            // es un envío varado: voló su prefijo pero aún espera continuación en la escala.
             String destinoFinal = asig != null ? asig.getDestino() : null;
             String destinoUltTramo = tramos.get(total - 1).getDestino();
             boolean llegaAlDestino = destinoFinal == null || destinoFinal.isBlank()
@@ -108,7 +92,6 @@ public final class EnvioEstadoCalculator {
         return r;
     }
 
-    /** Parseo tolerante de un ISO local datetime (con o sin segundos); null si no se puede. */
     private static LocalDateTime parse(String iso) {
         if (iso == null || iso.isBlank()) return null;
         try {

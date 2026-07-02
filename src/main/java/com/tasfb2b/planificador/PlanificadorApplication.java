@@ -19,17 +19,13 @@ public class PlanificadorApplication {
         SpringApplication.run(PlanificadorApplication.class, args);
     }
 
-    // --- REEMPLAZA EL BEAN ANTERIOR POR ESTE ---
     @Bean
     public CorsFilter corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
-        // Agregamos los puertos típicos de React/Vite
         config.setAllowedOrigins(Arrays.asList("http://localhost:5173", "http://localhost:3000"));
         config.setAllowedHeaders(Arrays.asList("Origin", "Content-Type", "Accept", "Authorization"));
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "OPTIONS", "DELETE", "PATCH"));
-        // Headers que el front necesita leer desde fetch (CSV row count y
-        // nombre de archivo del attachment). Sin esto el navegador los oculta.
         config.setExposedHeaders(Arrays.asList(
                 "X-Audit-Rows", "X-Audit-Range", "Content-Disposition"));
 
