@@ -4,12 +4,6 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * POJO de cliente. La BD <b>no</b> tiene tabla {@code cliente} (la tabla {@code envio}
- * solo guarda {@code id_cliente}), por eso NO es una entidad JPA: se usa únicamente en
- * memoria para transportar el id del cliente del envío. Mantenerla como @Entity haría
- * fallar {@code ddl-auto=validate} al arrancar.
- */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
