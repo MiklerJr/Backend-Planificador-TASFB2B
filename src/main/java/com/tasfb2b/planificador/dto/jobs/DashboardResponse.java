@@ -5,15 +5,6 @@ import lombok.Data;
 
 import com.tasfb2b.planificador.dto.simulacion.Metricas;
 
-/**
- * Read model agregado para el panel operativo, expuesto por
- * {@code GET /jobs/{id}/dashboard}. No modifica el job: toma las métricas del resultado final si
- * existe, o las deriva de los bloques publicados si sigue corriendo.
- *
- * <p>Serialización: {@code fechaInicio}, {@code fin} y {@code error} se
- * omiten cuando son {@code null} ({@link JsonInclude.Include#NON_NULL}); {@code ultimoBloque} se
- * emite siempre (incluso {@code null} si aún no hay bloques publicados).
- */
 @Data
 public class DashboardResponse {
     private String jobId;
@@ -38,10 +29,8 @@ public class DashboardResponse {
     private String error;
     private Metricas metricas;
     private Tasas tasas;
-    /** Resumen del último bloque publicado; {@code null} (y se emite como tal) si no hay bloques. */
     private UltimoBloque ultimoBloque;
 
-    /** Porcentajes derivados de {@link Metricas} (0..100). */
     @Data
     public static class Tasas {
         private double enrutamientoPct;
@@ -50,7 +39,6 @@ public class DashboardResponse {
         private double tardadasPct;
     }
 
-    /** Resumen del último bloque publicado para el panel (deltas en envíos, acumulados físicos). */
     @Data
     public static class UltimoBloque {
         private int bloqueIdx;

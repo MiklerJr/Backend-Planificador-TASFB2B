@@ -7,11 +7,6 @@ import lombok.NoArgsConstructor;
 
 import java.util.List;
 
-/**
- * Demanda agregada del dataset en una ventana, expuesta por {@code GET /demanda/resumen}.
- * No requiere job. {@code desde}/{@code hasta} se emiten siempre (incluso {@code null} si el dataset
- * está vacío). Las listas top-N van vacías ({@code []}) cuando la ventana es inválida.
- */
 @Data
 public class DemandaResumenResponse {
     private String desde;
@@ -24,7 +19,6 @@ public class DemandaResumenResponse {
     @JsonProperty("porOD")
     private List<DemandaRow> porOD;
 
-    /** Fila agregada de demanda: clave (origen, destino u OD), nº de envíos y de maletas. */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

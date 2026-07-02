@@ -4,11 +4,6 @@ import lombok.Data;
 
 import java.util.List;
 
-/**
- * Read model de asignaciones por envío con filtros opcionales, expuesto por
- * {@code GET /jobs/{id}/asignaciones}. {@code aeropuerto} y {@code vueloId} reflejan los filtros
- * aplicados (normalizados) y se emiten SIEMPRE, incluso {@code null} cuando no se filtró.
- */
 @Data
 public class AsignacionesResponse {
     private String jobId;
@@ -19,7 +14,6 @@ public class AsignacionesResponse {
     private int total;
     private List<AsignacionItem> asignaciones;
 
-    /** Una asignación con la posición del bloque que la publicó. */
     @Data
     public static class AsignacionItem {
         private int bloqueIdx;
