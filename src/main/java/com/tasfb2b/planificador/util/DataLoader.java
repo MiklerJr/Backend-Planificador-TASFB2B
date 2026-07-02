@@ -54,7 +54,10 @@ public class DataLoader {
         log.info("INICIANDO DESCARGA DESDE LA NUBE (100% POSTGRESQL)");
         
         // 1. Cargamos Aeropuertos desde AWS
-        String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, latitud, longitud FROM AEROPUERTO";
+        // ORDER BY: el orden de estas listas define los Node.idx/Edge.idx del grafo; debe ser
+        // estable entre reinicios para que la caché de esqueletos persistida (SkeletonCacheStore)
+        // siga siendo válida tras un restart.
+        String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, latitud, longitud FROM AEROPUERTO ORDER BY icao";
         aeropuertos = jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
             Aeropuerto a = new Aeropuerto();
             a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
@@ -74,7 +77,7 @@ public class DataLoader {
                 .collect(Collectors.toMap(Aeropuerto::getCodigo, a -> a));
 
         // 2. Cargamos Vuelos desde AWS
-        String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima FROM VUELO";
+        String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima FROM VUELO ORDER BY id_vuelo";
         List<Vuelo> vuelosCargados = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
             Vuelo v = new Vuelo();
 

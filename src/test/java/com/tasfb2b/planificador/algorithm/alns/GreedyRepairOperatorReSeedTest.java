@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -113,6 +114,39 @@ class GreedyRepairOperatorReSeedTest {
                 new LuggageBatch("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 15)),
                 new java.util.HashMap<>(), new java.util.HashMap<>(), 5);
         assertTrue(!cand.isEmpty(), "tras el pre-warm, generarCandidatosRuta devuelve candidatos");
+    }
+
+    @Test
+    void precalentarEsqueletosAbortaCuandoSePideCancelar() {
+        // Pre-warm cancelable: con caché fría cada clave cuesta un Dijkstra, así que el check de
+        // cancelación corta el bucle entre claves en vez de esperar a calentar toda la ventana.
+        // Lo ya calentado se conserva (la corrida siguiente continúa desde ahí).
+        Graph graph = grafoSinDirecto();
+        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+
+        // Tres claves distintas (buckets de hora 7, 8 y 9 del mismo O→D).
+        List<LuggageBatch> demanda = List.of(
+                new LuggageBatch("E1", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 0)),
+                new LuggageBatch("E2", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 8, 0)),
+                new LuggageBatch("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 9, 0)));
+
+        // La cancelación llega tras calentar la primera clave (el check corre antes de cada una).
+        AtomicInteger checks = new AtomicInteger();
+        int claves = op.precalentarEsqueletos(demanda, 5, () -> checks.incrementAndGet() > 1);
+
+        assertEquals(1, claves, "cancelado tras la primera clave: el resto no se calienta");
+        int aaa = graph.nodes.get("AAA").idx, ccc = graph.nodes.get("CCC").idx;
+        assertTrue(op.rutaSkeletonCache.containsKey(GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24)),
+                "lo calentado antes de cancelar se conserva en la caché");
+        assertTrue(!op.rutaSkeletonCache.containsKey(GreedyRepairOperator.skeletonKey(aaa, ccc, 9 * 60, 24)),
+                "las claves posteriores a la cancelación no se calientan");
+
+        // Sin supplier (null) se comporta como la variante de dos argumentos: intenta las 3 claves
+        // (la 1.ª resuelve por fast-path de caché; el contador es de claves intentadas por llamada).
+        assertEquals(3, op.precalentarEsqueletos(demanda, 5, null),
+                "sin cancelación se intentan todas las claves de la demanda");
+        assertTrue(op.rutaSkeletonCache.containsKey(GreedyRepairOperator.skeletonKey(aaa, ccc, 9 * 60, 24)),
+                "tras el pre-warm completo la clave que faltaba queda calentada");
     }
 
     // ----------------------------------------------------------------------- helpers

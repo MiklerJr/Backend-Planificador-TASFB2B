@@ -127,3 +127,10 @@ planificador:
   consulta:
     max-filas-pagina: 5000      # tope de filas por página (limit por defecto) en /vuelos/carga y /almacenes/ocupacion
     demanda-max-dias: 31        # span máximo (días) de /demanda/resumen (acota el escaneo de BD)
+
+  # Persistencia de la caché de esqueletos (pre-warm Fase T) entre reinicios del proceso: en la VM
+  # de despliegue el calentamiento con caché fría cuesta ~13 min de Dijkstra y se perdía con cada
+  # restart del contenedor. El archivo lleva la huella del dataset (se descarta solo tras una
+  # ingesta). En el contenedor resuelve a /app/data (volumen). Vacío = desactivado (solo RAM).
+  cache:
+    skeleton-file: data/skeleton-cache.bin

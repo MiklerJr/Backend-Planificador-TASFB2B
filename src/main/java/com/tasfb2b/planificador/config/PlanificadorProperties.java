@@ -23,6 +23,7 @@ public class PlanificadorProperties {
     private StorageAware storageAware = new StorageAware();
     private AlertaColapso alertaColapso = new AlertaColapso();
     private Consulta     consulta     = new Consulta();
+    private Cache        cache        = new Cache();
 
     /** Parámetros de planificación programada fija (Sa, Ta, K, umbrales globales). */
     @Data
@@ -209,6 +210,20 @@ public class PlanificadorProperties {
          * diminuto), así que no es un riesgo de heap, pero acota el escaneo.
          */
         private int demandaMaxDias = 31;
+    }
+
+    /** Persistencia de cachés del motor entre reinicios del proceso. */
+    @Data
+    public static class Cache {
+        /**
+         * Archivo donde se persiste la caché de esqueletos (pre-warm Fase T) para que sobreviva a
+         * los reinicios del proceso/contenedor. Lleva la huella del dataset: si cambian
+         * aeropuertos/vuelos (ingesta) el archivo se descarta solo. Ruta relativa al working dir:
+         * en dev cae en {@code data/} del repo; en el contenedor (WORKDIR /app) en
+         * {@code /app/data} — el volumen ya montado. Vacío = desactivado (caché solo en RAM,
+         * comportamiento previo).
+         */
+        private String skeletonFile = "data/skeleton-cache.bin";
     }
 
     /**

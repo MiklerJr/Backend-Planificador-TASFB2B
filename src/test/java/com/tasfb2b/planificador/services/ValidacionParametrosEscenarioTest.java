@@ -38,7 +38,7 @@ class ValidacionParametrosEscenarioTest {
     void escenario2ConKInvalidoLanzaParametroInvalido() {
         EscenarioController controller =
                 new EscenarioController(serviceSinDataset(), new PlanificadorProperties(),
-                        new IngestaService(null, null, null, null, null, null));
+                        new IngestaService(null, null, null, null, null, null, null));
 
         ParametroInvalidoException ex = assertThrows(ParametroInvalidoException.class,
                 () -> controller.iniciarEsc2(0, "alns", null, null, null, null, null, false));
@@ -49,7 +49,7 @@ class ValidacionParametrosEscenarioTest {
     void escenario3ConKInvalidoLanzaParametroInvalido() {
         EscenarioController controller =
                 new EscenarioController(serviceSinDataset(), new PlanificadorProperties(),
-                        new IngestaService(null, null, null, null, null, null));
+                        new IngestaService(null, null, null, null, null, null, null));
 
         ParametroInvalidoException ex = assertThrows(ParametroInvalidoException.class,
                 () -> controller.iniciarEsc3(-1, 0.20, "alns", null, null));
@@ -60,7 +60,7 @@ class ValidacionParametrosEscenarioTest {
     void escenario2ConSaOTaInvalidosLanzaParametroInvalido() {
         EscenarioController controller =
                 new EscenarioController(serviceSinDataset(), new PlanificadorProperties(),
-                        new IngestaService(null, null, null, null, null, null));
+                        new IngestaService(null, null, null, null, null, null, null));
 
         // k = null para saltar la verificación de k-fijo y caer en la validación de sa/ta.
         assertThrows(ParametroInvalidoException.class,

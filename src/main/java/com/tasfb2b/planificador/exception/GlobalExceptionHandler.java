@@ -11,6 +11,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Manejo CENTRALIZADO de errores de toda la API REST: produce un cuerpo uniforme
@@ -23,12 +25,16 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
  *   <li>{@link MethodArgumentTypeMismatchException} / {@link MissingServletRequestParameterException}
  *       (p. ej. {@code fechaInicio} con formato inválido, {@code k} no numérico) → <b>400</b>.</li>
  *   <li>{@link HttpMessageNotReadableException} (body JSON ausente o malformado) → <b>400</b>.</li>
+ *   <li>{@link NoResourceFoundException} / {@link NoHandlerFoundException} (ruta que no existe,
+ *       típicamente sondas de bots contra el servidor expuesto) → <b>404</b> con log de UNA línea,
+ *       sin stack trace.</li>
  *   <li>Cualquier otra {@link Exception} no prevista → <b>500</b> (se loguea con stack trace).</li>
  * </ul>
  *
- * <p><b>Qué NO toca este advice:</b> los 404 (job/recurso inexistente) y 409 (job ya terminado) se
- * resuelven en el controller con {@code ResponseEntity.notFound()}/{@code status(409)} y sus cuerpos
- * propios; no se canalizan por aquí para no alterar el contrato (ver CONTRATO_API_FRONTEND.md §1).
+ * <p><b>Qué NO toca este advice:</b> los 404 de dominio (job/envío inexistente) y 409 (job ya
+ * terminado) se resuelven en el controller con {@code ResponseEntity.notFound()}/{@code status(409)}
+ * y sus cuerpos propios; no se canalizan por aquí para no alterar el contrato (ver
+ * CONTRATO_API_FRONTEND.md §1). El handler de 404 de este advice cubre solo RUTAS inexistentes.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -61,6 +67,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleBodyNoLegible(HttpMessageNotReadableException ex,
                                                              HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST, "Cuerpo de la petición ausente o malformado", request);
+    }
+
+    /**
+     * Ruta que no corresponde a ningún endpoint ni recurso estático (en producción son casi siempre
+     * escáneres de bots: {@code /api/.env}, {@code /api/v0/run_sql}, …). Sin este handler caían en
+     * el genérico como 500 con ~80 líneas de stack trace en ERROR por sonda; el 404 es el contrato
+     * correcto y una línea de WARN basta para conservar la traza de que el servidor está expuesto.
+     */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<ErrorResponse> handleRutaInexistente(Exception ex, HttpServletRequest request) {
+        log.warn("Ruta inexistente: {}", pathDe(request));
+        return build(HttpStatus.NOT_FOUND, "Recurso no encontrado", request);
     }
 
     /**

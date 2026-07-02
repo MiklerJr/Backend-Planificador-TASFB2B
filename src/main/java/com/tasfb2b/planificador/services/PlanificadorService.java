@@ -59,6 +59,8 @@ public class PlanificadorService {
     private final SolucionBdReader solucionBdReader;
     /** Grafo + caché de esqueletos reutilizables entre simulaciones (recorta la latencia de arranque). */
     private final MotorGrafoCache motorCache;
+    /** Persistencia de la caché de esqueletos entre reinicios (el pre-warm sobrevive al restart). */
+    private final SkeletonCacheStore skeletonStore;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -87,7 +89,8 @@ public class PlanificadorService {
                                AcoBlockEngine acoEngine,
                                PersistenciaSolucionService persistencia,
                                SolucionBdReader solucionBdReader,
-                               MotorGrafoCache motorCache) {
+                               MotorGrafoCache motorCache,
+                               SkeletonCacheStore skeletonStore) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -97,6 +100,7 @@ public class PlanificadorService {
         this.persistencia = persistencia;
         this.solucionBdReader = solucionBdReader;
         this.motorCache = motorCache;
+        this.skeletonStore = skeletonStore;
     }
 
     /**
@@ -110,7 +114,7 @@ public class PlanificadorService {
                         AcoBlockEngine acoEngine) {
         this(dataLoader, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null),
-                new MotorGrafoCache());
+                new MotorGrafoCache(), new SkeletonCacheStore(null, null, ""));
     }
 
 
@@ -149,8 +153,14 @@ public class PlanificadorService {
         pf.setSeed(seedRes);
 
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarALNS(pf, job);
-            job.resultado = res;
+            try {
+                SimulacionResponse res = ejecutarALNS(pf, job);
+                job.resultado = res;
+            } finally {
+                // La caché de esqueletos también crece durante el bucle de bloques (misses del
+                // Dijkstra): persistir lo aprendido para el próximo arranque del proceso.
+                skeletonStore.guardarSiCrecio();
+            }
         });
         return job;
     }
@@ -176,8 +186,12 @@ public class PlanificadorService {
         job.fechaInicio = fechaInicio;
         job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarJob)
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
-            job.resultado = res;
+            try {
+                SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
+                job.resultado = res;
+            } finally {
+                skeletonStore.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
+            }
         });
         return job;
     }
@@ -216,8 +230,12 @@ public class PlanificadorService {
         job.enVivo = enVivo;
         final LocalDateTime fechaEff = job.fechaInicio;
         jobs.ejecutar(job, () -> {
-            SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaEff, enVivo);
-            job.resultado = res;
+            try {
+                SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaEff, enVivo);
+                job.resultado = res;
+            } finally {
+                skeletonStore.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
+            }
         });
         return job;
     }
@@ -856,10 +874,33 @@ public class PlanificadorService {
             long t0Prewarm = System.currentTimeMillis();
             List<Envio> demandaVentana = dataLoader.getMaletasEnRango(
                     plan.get(0).scStart, plan.get(plan.size() - 1).scEnd);
+            // Con caché fría el pre-warm puede tardar minutos (un Dijkstra por clave): se expone al
+            // front como "calentando" (mismo estado que el warm-up) y /cancelar lo aborta entre
+            // claves en vez de surtir efecto recién al cierre del bloque 1. El tamaño previo de la
+            // caché deja en el log si la corrida arrancó fría (0) o caliente.
+            if (job != null && !cancelacionPedida(job)) job.estado = "calentando";
+            log.info("Pre-warm iniciado: {} envíos en ventana | caché de esqueletos con {} claves precargadas",
+                    demandaVentana.size(), motorCache.skeletonCache().size());
             int clavesCalentadas = enrutador.precalentarEsqueletos(
-                    mapper.mapToBatches(demandaVentana), PREWARM_ROUTE_CANDIDATES);
+                    mapper.mapToBatches(demandaVentana), PREWARM_ROUTE_CANDIDATES,
+                    () -> cancelacionPedida(job));
             log.info("Pre-warm esqueletos (N3): {} claves desde {} envíos en {} ms",
                     clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
+            if (job != null && !cancelacionPedida(job)) job.estado = "ejecutando";
+            // Persistir lo calentado YA (no esperar al fin de la corrida): si el proceso se
+            // reinicia a mitad, el pre-warm no se repite. Incluso cancelado: lo hecho se conserva.
+            skeletonStore.guardarSiCrecio();
+        }
+
+        // Cancelación pedida durante el warm-up o el pre-warm: abortar ANTES de iniciarCorrida
+        // (que trunca las tablas de solución) y sin procesar ningún bloque.
+        if (cancelacionPedida(job)) {
+            log.info("E2 cancelado por usuario antes del primer bloque (warm-up/pre-warm)");
+            bloquesCacheados = new ArrayList<>();
+            SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
+            r.setK(k);
+            r.setSaMinutos(saMin);
+            return r;
         }
 
         // Fase 5a: toma la persistencia (una corrida a la vez) y limpia las tablas de solución.
@@ -2941,6 +2982,11 @@ public class PlanificadorService {
                 b.clearRoute();
             }
         });
+    }
+
+    /** True si el usuario pidió cancelar el job (POST /jobs/{id}/cancelar). Null-safe (sin job ⇒ false). */
+    private static boolean cancelacionPedida(JobState job) {
+        return job != null && ("cancelado".equals(job.estado) || job.canceladoPorUsuario);
     }
 
     private static Random rngParaBloque(long seed, String motor, int bloqueIdx) {

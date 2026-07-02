@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
 
 @Slf4j
 public class GreedyRepairOperator implements RepairOperator {
@@ -918,12 +919,26 @@ public class GreedyRepairOperator implements RepairOperator {
      * @return número de claves distintas intentadas (Dijkstra ejecutado una vez por cada una).
      */
     public int precalentarEsqueletos(Iterable<LuggageBatch> batches, int maxCandidatos) {
+        return precalentarEsqueletos(batches, maxCandidatos, null);
+    }
+
+    /**
+     * Variante cancelable del pre-warm: consulta {@code cancelado} antes de cada clave y aborta en
+     * cuanto devuelve true. Con la caché fría cada clave cuesta un Dijkstra (decenas de ms), así
+     * que la cancelación responde en ese orden de tiempo en vez de esperar a toda la ventana. Lo ya
+     * calentado se conserva en la caché compartida (una corrida posterior continúa desde ahí).
+     *
+     * @param cancelado null ⇒ sin cancelación (equivale a la variante de dos argumentos).
+     */
+    public int precalentarEsqueletos(Iterable<LuggageBatch> batches, int maxCandidatos,
+                                     BooleanSupplier cancelado) {
         if (batches == null || maxCandidatos <= 0) return 0;
         Map<Long, Integer> bf = new HashMap<>();   // mapas de bloque vacíos: generarCandidatosRuta solo los lee
         Map<Long, Integer> ba = new HashMap<>();
         Set<Long> vistas = new HashSet<>();
         int calentadas = 0;
         for (LuggageBatch b : batches) {
+            if (cancelado != null && cancelado.getAsBoolean()) break;
             if (b == null || b.getReadyTime() == null) continue;
             Node o = graph.nodes.get(b.getOriginCode());
             Node d = graph.nodes.get(b.getDestCode());

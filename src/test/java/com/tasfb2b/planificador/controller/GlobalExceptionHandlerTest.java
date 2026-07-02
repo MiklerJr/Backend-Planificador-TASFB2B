@@ -61,11 +61,25 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void rutaInexistenteProduce404SinTratarseComoErrorInterno() {
+        // Sondas de bots (/api/.env, /api/v0/run_sql, …) llegaban al handler genérico como 500 con
+        // stack trace ERROR; el contrato correcto para una ruta que no existe es 404.
+        ResponseEntity<ErrorResponse> resp = handler.handleRutaInexistente(
+                new org.springframework.web.servlet.resource.NoResourceFoundException(
+                        org.springframework.http.HttpMethod.GET, "api/.env", null), null);
+
+        assertEquals(404, resp.getStatusCode().value());
+        ErrorResponse body = resp.getBody();
+        assertEquals(404, body.getEstado());
+        assertEquals("Recurso no encontrado", body.getError());
+    }
+
+    @Test
     void endToEndExcepcionDeDominioSeTraduceA400ConCuerpoUniforme() throws Exception {
         // El controller no necesita servicio para esta ruta: la verificación de k-fijo lanza antes
         // de tocar el servicio, así que basta con props (defaults) + el advice registrado.
         EscenarioController controller = new EscenarioController(null, new PlanificadorProperties(),
-                new IngestaService(null, null, null, null, null, null));
+                new IngestaService(null, null, null, null, null, null, null));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

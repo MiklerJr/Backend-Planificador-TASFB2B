@@ -38,6 +38,9 @@ build/
 
 audits/planificaciones_auditoria_test.csv
 
+# Caché de esqueletos persistida (pre-warm Fase T); se regenera sola, no va al repo
+data/skeleton-cache.bin
+
 CLAUDE.md
 /src/.claude
 *.csv

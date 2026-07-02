@@ -2,6 +2,7 @@ package com.tasfb2b.planificador.services.ingesta;
 
 import com.tasfb2b.planificador.dto.dataset.IngestaEstado;
 import com.tasfb2b.planificador.services.MotorGrafoCache;
+import com.tasfb2b.planificador.services.SkeletonCacheStore;
 import com.tasfb2b.planificador.services.jobs.JobsRegistry;
 import com.tasfb2b.planificador.util.parser.AeropuertoParser;
 import com.tasfb2b.planificador.util.DataLoader;
@@ -41,18 +42,21 @@ public class IngestaService {
     private final DataLoader dataLoader;
     private final JobsRegistry jobs;
     private final MotorGrafoCache motorCache;
+    private final SkeletonCacheStore skeletonStore;
 
     private final AtomicReference<IngestaEstado> estado = new AtomicReference<>();
     private final AtomicBoolean enCurso = new AtomicBoolean(false);
 
     public IngestaService(JdbcTemplate jdbc, MigradorEnviosDb migrador, AeropuertoParser aeropuertoParser,
-                          DataLoader dataLoader, JobsRegistry jobs, MotorGrafoCache motorCache) {
+                          DataLoader dataLoader, JobsRegistry jobs, MotorGrafoCache motorCache,
+                          SkeletonCacheStore skeletonStore) {
         this.jdbc = jdbc;
         this.migrador = migrador;
         this.aeropuertoParser = aeropuertoParser;
         this.dataLoader = dataLoader;
         this.jobs = jobs;
         this.motorCache = motorCache;
+        this.skeletonStore = skeletonStore;
     }
 
     public boolean estaEnCurso() { return enCurso.get(); }
@@ -153,6 +157,9 @@ public class IngestaService {
             e.setFase("recargando");
             dataLoader.load();
             motorCache.invalidar();
+            // Los esqueletos persistidos también son del dataset viejo: borrar el archivo (la
+            // huella de SkeletonCacheStore lo descartaría igual, pero así no quedan huérfanos).
+            skeletonStore.borrar();
 
             e.setFase("completada");
             log.info("Ingesta completada: {} aeropuertos, {} vuelos, {} envíos ({} descartados)",

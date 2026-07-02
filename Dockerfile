@@ -8,9 +8,6 @@ RUN mkdir -p /app/data
 
 EXPOSE 8080
 
-# Anti-OOM: heap acotado (el host de 3.8 GB lo comparten back + front + BD, así que -Xmx FIJO, no
-# MaxRAMPercentage, que vería los 3.8 GB completos) + heap dump on OOM + GC log para diagnóstico.
-# Ajustar -Xmx según lo que dejen libre la BD y el front en el host.
 ENTRYPOINT ["java", \
   "-Xms256m", "-Xmx1228m", \
   "-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=/app/data", \
