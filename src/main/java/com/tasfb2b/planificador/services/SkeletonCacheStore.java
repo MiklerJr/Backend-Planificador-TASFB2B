@@ -29,36 +29,12 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Persistencia a disco de la caché de esqueletos de {@link MotorGrafoCache} para que el pre-warm
- * (Fase T) sobreviva a los reinicios del proceso: en el despliegue (VM de 2 vCPU) el calentamiento
- * con caché fría cuesta minutos de Dijkstra, y hoy se pierde con cada restart del contenedor.
- *
- * <p>Seguridad ante cambios de dataset: el archivo lleva una <b>huella</b> (SHA-256 de aeropuertos
- * y vuelos, ya ordenados por {@code DataLoader} con ORDER BY). Antes de cargar se recalcula la
- * huella contra lo que hay AHORA en la BD; si no coincide (ingesta de por medio, archivo copiado de
- * otro dataset), el archivo se ignora y se sigue con caché vacía, como hoy. Los esqueletos son
- * secuencias de {@code Edge.idx}, así que su validez depende SOLO de la malla de vuelos —que la
- * huella cubre por completo—, nunca de la demanda. Un archivo corrupto/truncado también se ignora
- * (lectura best-effort) y la escritura es atómica (tmp + move), así que nunca queda un archivo a
- * medias con huella válida.
- *
- * <p>Ciclo: {@code ApplicationReadyEvent} carga el archivo si la huella coincide;
- * {@link #guardarSiCrecio()} lo reescribe cuando la caché ganó claves (tras el pre-warm y al final
- * de cada corrida, ver {@code PlanificadorService}); la ingesta lo {@link #borrar() borra} junto
- * con {@code MotorGrafoCache.invalidar()}. Reversible con {@code planificador.cache.skeleton-file}
- * vacío (comportamiento previo: caché solo en RAM).
- */
 @Slf4j
 @Component
 public class SkeletonCacheStore {
 
-    /** Cabecera del archivo. Si cambia el formato en disco, subir VERSION descarta los archivos viejos. */
     static final int MAGIC = 0x54534B31;   // "TSK1"
     static final int VERSION = 1;
-
-    // Cotas de sanidad al leer (hoy: máx 8 esqueletos/clave y rutas de pocos tramos; ver
-    // GreedyRepairOperator.MAX_SKELETONS_POR_CLAVE). Un valor fuera de rango = archivo corrupto.
     private static final int MAX_SKELETONS_LEIDOS = 64;
     private static final int MAX_TRAMOS_LEIDOS = 4096;
 
@@ -66,7 +42,6 @@ public class SkeletonCacheStore {
     private final MotorGrafoCache motorCache;
     private final String archivo;   // vacío ⇒ persistencia desactivada (no-op)
 
-    /** Claves en la caché en el último guardado/carga: evita reescribir el archivo sin cambios. */
     private int clavesUltimoGuardado = 0;
 
     @Autowired
@@ -75,7 +50,6 @@ public class SkeletonCacheStore {
         this(dataLoader, motorCache, props.getCache().getSkeletonFile());
     }
 
-    /** Constructor directo (tests / instancia no-op con archivo vacío). */
     SkeletonCacheStore(DataLoader dataLoader, MotorGrafoCache motorCache, String archivo) {
         this.dataLoader = dataLoader;
         this.motorCache = motorCache;
@@ -90,10 +64,6 @@ public class SkeletonCacheStore {
         return Path.of(archivo);
     }
 
-    /**
-     * Carga la caché persistida al arrancar (DataLoader ya cargó el dataset en su @PostConstruct).
-     * Si no hay archivo, la huella no coincide o está corrupto, arranca con caché vacía como hoy.
-     */
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void cargarAlArranque() {
         if (desactivado()) return;
@@ -105,11 +75,6 @@ public class SkeletonCacheStore {
                 archivo, cargada.size());
     }
 
-    /**
-     * Persiste la caché si ganó claves desde el último guardado (si no, no toca el disco).
-     * Best-effort: nunca lanza — un fallo de IO deja la caché solo en RAM, como hoy.
-     * También corre en {@code @PreDestroy} para capturar lo aprendido ante un stop ordenado.
-     */
     @PreDestroy
     public synchronized void guardarSiCrecio() {
         if (desactivado()) return;
@@ -124,7 +89,6 @@ public class SkeletonCacheStore {
         }
     }
 
-    /** Borra el archivo. Llamar en la ingesta: el dataset nuevo invalida los esqueletos guardados. */
     public synchronized void borrar() {
         if (desactivado()) return;
         clavesUltimoGuardado = 0;
@@ -136,10 +100,6 @@ public class SkeletonCacheStore {
         }
     }
 
-    /**
-     * Huella del dataset: SHA-256 sobre TODOS los campos de aeropuertos y vuelos (en el orden
-     * estable de DataLoader). Cualquier cambio en la malla ⇒ huella distinta ⇒ archivo descartado.
-     */
     String huellaDataset() {
         MessageDigest md;
         try {
@@ -165,13 +125,6 @@ public class SkeletonCacheStore {
         return HexFormat.of().formatHex(md.digest());
     }
 
-    // ── IO de archivo (estático y puro: testeable sin Spring ni BD) ─────────────────────────────
-
-    /**
-     * Escribe la caché con escritura atómica (tmp en el mismo directorio + move): o queda el archivo
-     * completo con huella válida, o queda el anterior. Formato: MAGIC, VERSION, huella (UTF), nº de
-     * claves y por clave {@code long} + nº de esqueletos + ({@code len} + ints de edge-idx).
-     */
     static void escribir(Path destino, String huella, Map<Long, List<int[]>> cache) throws IOException {
         Path dir = destino.toAbsolutePath().getParent();
         if (dir != null) Files.createDirectories(dir);
@@ -203,10 +156,6 @@ public class SkeletonCacheStore {
         }
     }
 
-    /**
-     * Lee la caché si el archivo existe, el formato es el esperado y la huella coincide con la del
-     * dataset actual; en cualquier otro caso (incluido corrupto/truncado) devuelve vacío sin lanzar.
-     */
     static Map<Long, List<int[]>> leerSiCoincide(Path origen, String huella) {
         if (!Files.isRegularFile(origen)) return Map.of();
         try (DataInputStream in = new DataInputStream(
@@ -243,7 +192,6 @@ public class SkeletonCacheStore {
             }
             return out;
         } catch (IOException ex) {
-            // EOFException (archivo truncado) llega sin mensaje: mostrar al menos el tipo.
             String motivo = ex.getClass().getSimpleName()
                     + (ex.getMessage() != null ? ": " + ex.getMessage() : "");
             log.warn("Caché de esqueletos {} ilegible ({}): se ignora y se arranca con caché vacía.",

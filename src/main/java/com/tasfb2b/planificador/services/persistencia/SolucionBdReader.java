@@ -28,34 +28,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
-/**
- * Lee la solución persistida y reconstruye {@link LuggageBatch} desde BD, para dejar de retener
- * los batches enrutados en RAM.
- *
- * <p>Dos usos:
- * <ul>
- *   <li><b>ZIP de auditoría</b> ({@link #forEachEnrutado}): recorre TODOS los envíos enrutados en
- *       streaming (cursor JDBC), ordenados por {@code readyTime} UTC, sin cargar todo a memoria.</li>
- *   <li><b>Cancelación en vivo</b> ({@link #afectadosPorVuelo}): los envíos cuya ruta activa usa un
- *       vuelo-día cancelado, reconstruidos con su ruta para devolverlos al backlog.</li>
- * </ul>
- *
- * <p>La ruta se reconstruye mapeando {@code tramo_ruta.id_vuelo} a un {@link Edge} del grafo vía el
- * índice {@link #construirIndiceVuelo}. El {@code readyTime} UTC se deriva igual que
- * {@code AlgorithmMapper.mapToBatches}: {@code fecha_hora_registro − offset(origen)}; el SLA, con
- * {@code TipoEnvio.derivar}.
- */
 @Slf4j
 @Service
 public class SolucionBdReader {
 
     private final JdbcTemplate jdbc;
     private final DataLoader dataLoader;
-    /**
-     * Transacción READ-ONLY para el streaming del ZIP: el cursor server-side de PostgreSQL
-     * (fetchSize) solo surte efecto con autoCommit=false; sin él, el driver cargaría TODO el
-     * ResultSet en RAM (millones de filas). {@code null} en el constructor no-op de tests.
-     */
     private final TransactionTemplate txReadOnly;
 
     public SolucionBdReader(JdbcTemplate jdbc, DataLoader dataLoader, PlatformTransactionManager txManager) {
@@ -69,7 +47,6 @@ public class SolucionBdReader {
         }
     }
 
-    /** Índice {@code id_vuelo (ICAO-ICAO-HHMM) → Edge} del grafo (una vez por corrida; ~2.866 entradas). */
     public Map<String, Edge> construirIndiceVuelo(Graph graph) {
         Map<String, Edge> idx = new HashMap<>();
         if (graph == null) return idx;
@@ -79,26 +56,12 @@ public class SolucionBdReader {
         return idx;
     }
 
-    /**
-     * Recorre en streaming los envíos con ruta activa, reconstruidos como {@link LuggageBatch}
-     * (con su ruta y departures), ordenados por {@code readyTime} UTC. Pensado para alimentar el
-     * ZIP de auditoría sin retener nada O(envíos) en RAM.
-     */
     public void forEachEnrutado(Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer) {
         forEachEnrutado(indiceVuelo, null, null, consumer);
     }
 
-    /**
-     * Variante con filtro por rango de {@code readyTime} UTC (auditoría on-demand por fecha). Los
-     * límites {@code desde} (inclusivo) y {@code hasta} (exclusivo) se aplican en BD sobre la misma
-     * expresión de {@code readyTime} ({@code registro − offset(origen)}) que el orden, así el ZIP por
-     * rango solo lee de BD los envíos del período pedido. Cualquiera de los dos puede ser {@code null}
-     * (sin cota por ese lado); ambos {@code null} = histórico completo.
-     */
     public void forEachEnrutado(Map<String, Edge> indiceVuelo, LocalDateTime desde, LocalDateTime hasta,
                                 Consumer<LuggageBatch> consumer) {
-        // readyTime UTC = registro − offset(origen). Agrupa los tramos de cada ruta contiguos
-        // (mismo id_ruta ⇒ mismo readyTime) para poder emitir un batch a la vez.
         final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
         StringBuilder sql = new StringBuilder()
                 .append("SELECT r.id_ruta, r.id_envio, r.cumple_sla, ")
@@ -138,18 +101,9 @@ public class SolucionBdReader {
         else lectura.run();
         emitir(acc, indiceVuelo, consumer);            // último batch pendiente
 
-        // Tras los del dataset, emitir también los inyectados EN VIVO (INV-*): su ruta vive en
-        // ruta_inyectada/tramo_inyectado (sin FK a envio), con metadatos en envio_inyectado.
         forEachEnrutadoInyectado(indiceVuelo, desde, hasta, consumer);
     }
 
-    /**
-     * Variante de {@link #forEachEnrutado} para los inyectados EN VIVO ({@code INV-*}). Lee de las
-     * tablas paralelas {@code ruta_inyectada}/{@code tramo_inyectado} + {@code envio_inyectado} (sin FK
-     * a {@code envio}). El {@code readyTime} ya es UTC ({@code ready_time_utc}, no {@code registro −
-     * offset}), así que la emisión usa {@code readyYaEsUtc=true}. Mismo cursor/streaming y filtro por
-     * rango que la fuente del dataset.
-     */
     private void forEachEnrutadoInyectado(Map<String, Edge> indiceVuelo, LocalDateTime desde,
                                           LocalDateTime hasta, Consumer<LuggageBatch> consumer) {
         StringBuilder sql = new StringBuilder()
@@ -190,11 +144,6 @@ public class SolucionBdReader {
         emitir(acc, indiceVuelo, consumer, true);      // último batch pendiente
     }
 
-    /**
-     * Envíos cuya ruta ACTIVA usa el vuelo {@code idVueloNormalizado} en el día {@code dia} (UTC),
-     * reconstruidos con su ruta vieja para que {@code procesarBloque} libere su capacidad al
-     * sacarlos del backlog. {@code idsVueloNormalizado} cubre los varios edge-día de la cancelación.
-     */
     public List<LuggageBatch> afectadosPorVuelo(List<String> idsVueloNormalizado, LocalDate dia,
                                                 Map<String, Edge> indiceVuelo) {
         List<LuggageBatch> out = new ArrayList<>();
@@ -243,23 +192,10 @@ public class SolucionBdReader {
         return out;
     }
 
-    /**
-     * Lee las cancelaciones de vuelo persistidas en {@code cancelacion_vuelo} y las reconstruye como
-     * {@link VueloCancelado} para el CSV de auditoría (fuente de verdad en BD, no la lista en RAM).
-     * {@code origen}/{@code destino}/hora-salida UTC salen del {@code Edge} del índice (sin parsear
-     * strings); {@code enviosAfectados} de la propia fila. Orden estable por fecha + id_vuelo. Si un
-     * {@code id_vuelo} no estuviera en el índice (defensivo), deriva origen/destino/hora del propio id.
-     */
     public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo) {
         return leerCancelaciones(indiceVuelo, null, null);
     }
 
-    /**
-     * Variante con filtro por rango: incluye solo las cancelaciones cuyo {@code fecha_cancelacion} cae
-     * dentro de {@code [desde, hasta)} UTC (a granularidad de DÍA — la tabla guarda solo la fecha). Así
-     * el CSV de cancelaciones de un "día"/rango trae únicamente las de ese período. Ambos {@code null}
-     * = todas. El resto del mapeo es idéntico a {@link #leerCancelaciones(Map)}.
-     */
     public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo,
                                                   LocalDateTime desde, LocalDateTime hasta) {
         StringBuilder sql = new StringBuilder(
@@ -291,22 +227,12 @@ public class SolucionBdReader {
         }, args.toArray());
     }
 
-    /**
-     * Fecha exclusiva (límite superior) para filtrar {@code fecha_cancelacion} (DATE) por un {@code hasta}
-     * UTC con hora: si {@code hasta} cae a medianoche se usa su propia fecha (día siguiente ya excluido);
-     * si cae a media jornada, se sube al día siguiente para INCLUIR las cancelaciones de ese día.
-     */
     private static LocalDate fechaExclusivaHasta(LocalDateTime hasta) {
         return hasta.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
                 ? hasta.toLocalDate()
                 : hasta.toLocalDate().plusDays(1);
     }
 
-    /**
-     * Cuenta los envíos ENRUTADOS (rutas activas) que el ZIP de auditoría exportaría en el rango
-     * {@code [desde, hasta)} de {@code readyTime} UTC (mismo {@code WHERE} y expresión que
-     * {@link #forEachEnrutado}). Es el nº de FILAS de envíos del CSV (1 por envío enrutado), sin leerlos.
-     */
     public long contarEnrutados(LocalDateTime desde, LocalDateTime hasta) {
         final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
         StringBuilder sql = new StringBuilder(
@@ -332,7 +258,6 @@ public class SolucionBdReader {
         return (n != null ? n : 0L) + (nIny != null ? nIny : 0L);
     }
 
-    /** Cuenta las cancelaciones de vuelo persistidas en el rango {@code [desde, hasta)} (por día, UTC). */
     public long contarCancelaciones(LocalDateTime desde, LocalDateTime hasta) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM cancelacion_vuelo WHERE 1=1 ");
         List<Object> args = new ArrayList<>();
@@ -342,12 +267,6 @@ public class SolucionBdReader {
         return n != null ? n : 0L;
     }
 
-    /**
-     * Anti-OOM: índice {@code id_vuelo} (BD, {@code ICAO-ICAO-HHMM}) → {@link Vuelo} del dataset.
-     * La clave se deriva con {@code normalizarIdVuelo(vueloFrontId(v))} (NO de {@code Vuelo.getIdVuelo()},
-     * que {@code DataLoader} deja null en prod); así casa con {@code tramo_ruta.id_vuelo}. Da el {@code Vuelo}
-     * para reconstruir el vueloId del front ({@code vueloFrontId} = {@code Edge.id}) y la capacidad.
-     */
     private Map<String, Vuelo> indiceVueloPorIdBd() {
         Map<String, Vuelo> idx = new HashMap<>();
         for (Vuelo v : dataLoader.getVuelos()) {
@@ -359,16 +278,6 @@ public class SolucionBdReader {
         return idx;
     }
 
-    /**
-     * Anti-OOM: reconstruye el histórico COMPLETO de {@code /vuelos/usados} desde las rutas
-     * ACTIVAS en BD, para servirlo cuando el acumulador en RAM ya purgó los bloques fuera de la ventana
-     * reciente. El {@code vueloId} se devuelve en formato front ({@code ICAO-ICAO-HH:MM}, vía
-     * {@link SimulacionFormat#vueloFrontId} = {@code Edge.id}) para que el front lo case igual que en vivo.
-     *
-     * <p><b>bloqueIdx:</b> es un índice de ORDEN temporal (por {@code hora_salida_utc}), NO el bloque de
-     * cálculo: la BD no guarda el bloque. {@code envioIds} va vacío en el histórico (peso). Los inyectados
-     * ({@code INV-…}) no están en {@code ruta_asignada} (sin FK) ⇒ no aparecen, igual que su ruta no se persiste.
-     */
     public List<VuelosUsadosResponse.VueloUsado> reconstruirVuelosUsados() {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
@@ -399,18 +308,6 @@ public class SolucionBdReader {
         });
     }
 
-    /**
-     * Anti-OOM: reconstruye el histórico de {@code /vuelos/carga} desde las rutas ACTIVAS en
-     * BD, para servirlo cuando el buffer deslizante ya soltó los bloques viejos. Misma agregación por
-     * vuelo-día que {@link #reconstruirVuelosUsados}; {@code cargaAsignada = SUM(cantidad)},
-     * capacidad/%/semáforo del {@link Vuelo} del dataset. {@code bloqueIdx} = orden temporal global
-     * ({@code desde + rowNum}); {@code horaInicio/horaFin} quedan null (no hay bloque en BD).
-     *
-     * <p>Anti-OOM: PAGINADO ({@code OFFSET desde LIMIT limit}) y leído con cursor server-side
-     * ({@code fetchSize} en una tx read-only ⇒ {@code autoCommit=false}, igual que
-     * {@link #forEachEnrutado}), para no materializar TODO el histórico de golpe. El llamador pide
-     * {@code limit+1} para detectar si quedan más páginas.
-     */
     public List<CargaVueloRow> reconstruirCargasVuelos(int desde, int limit) {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
         final int offset = Math.max(0, desde);
@@ -464,7 +361,6 @@ public class SolucionBdReader {
         return jdbc.query(psc, mapper);
     }
 
-    /** {@code "HHMM"} → minutos del día; 0 si no parsea (fallback de {@link #leerCancelaciones}). */
     private static int parseHHMM(String hhmm) {
         try {
             int v = Integer.parseInt(hhmm.trim());
@@ -474,14 +370,6 @@ public class SolucionBdReader {
         }
     }
 
-    /**
-     * Reconstruye el envío {@code idEnvio} desde su ruta ACTIVA en BD, o {@link Optional#empty()} si
-     * no tiene ruta activa persistida (no existe, o quedó en backlog/sin ruta). Pensado para la
-     * consulta puntual del front del detalle de un envío de un bloque anterior (ya purgado de la RAM
-     * del job). Mismo patrón de reconstrucción que {@link #afectadosPorVuelo}, pero para un único
-     * {@code id_envio}: el índice parcial {@code ux_ruta_activa_por_envio} garantiza una sola ruta
-     * activa, así que todos los tramos pertenecen a la misma.
-     */
     public Optional<LuggageBatch> buscarPorEnvio(String idEnvio, Map<String, Edge> indiceVuelo) {
         if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
         String sql =
@@ -507,12 +395,6 @@ public class SolucionBdReader {
         return Optional.ofNullable(reconstruir(acc, indiceVuelo));
     }
 
-    /**
-     * Como {@link #buscarPorEnvio} pero para un inyectado EN VIVO ({@code INV-*}): su ruta activa vive
-     * en {@code ruta_inyectada}/{@code tramo_inyectado} (sin FK a {@code envio}), con metadatos en
-     * {@code envio_inyectado}. El {@code readyTime} ya es UTC ({@code readyYaEsUtc=true}). Fuente durable
-     * del rastreo {@code /envios/{id}} de los inyectados cuando el índice en RAM del job ya no está.
-     */
     public Optional<LuggageBatch> buscarPorEnvioInyectado(String idEnvio, Map<String, Edge> indiceVuelo) {
         if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
         String sql =
@@ -541,12 +423,10 @@ public class SolucionBdReader {
 
     // ── Reconstrucción ──────────────────────────────────────────────────────
 
-    /** Cierra el batch acumulado (si hay) y lo entrega al consumidor. */
     private void emitir(Acumulador acc, Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer) {
         emitir(acc, indiceVuelo, consumer, false);
     }
 
-    /** Variante con {@code readyYaEsUtc} para la fuente de inyectados (su readyTime ya está en UTC). */
     private void emitir(Acumulador acc, Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer,
                         boolean readyYaEsUtc) {
         if (acc.idEnvio == null || acc.tramos.isEmpty()) return;
@@ -560,11 +440,6 @@ public class SolucionBdReader {
         return reconstruir(acc, indiceVuelo, false);
     }
 
-    /**
-     * Reconstruye el {@link LuggageBatch} del envío acumulado. {@code readyYaEsUtc=false} (dataset): el
-     * registro viene en hora local del origen y el readyTime UTC = registro − offset. {@code true}
-     * (inyectados EN VIVO): la columna {@code ready_time_utc} ya es UTC, no se le resta el offset.
-     */
     private LuggageBatch reconstruir(Acumulador acc, Map<String, Edge> indiceVuelo, boolean readyYaEsUtc) {
         Aeropuerto origen = dataLoader.getAeropuerto(acc.origen);
         Aeropuerto destino = dataLoader.getAeropuerto(acc.destino);
@@ -599,12 +474,10 @@ public class SolucionBdReader {
         return b;
     }
 
-    /** Inversa de {@code PersistenciaSolucionService.epochMinToLdt}: LocalDateTime UTC → epoch-min. */
     static long ldtToEpochMin(LocalDateTime dt) {
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
     }
 
-    /** Estado mutable mientras se agrupan los tramos de un mismo {@code id_ruta} en streaming. */
     private static final class Acumulador {
         String idEnvio;
         String origen;

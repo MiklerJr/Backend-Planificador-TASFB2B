@@ -15,19 +15,12 @@ import java.util.*;
 import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
 import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
 
-/**
- * Metadatos estáticos del dataset cargado en RAM. Solo lectura sobre {@link DataLoader}: catálogo
- * de aeropuertos y vuelos, rango temporal disponible y resumen de demanda por ventana. Alimenta los
- * endpoints de {@code MetadataController} sin tocar el bucle de simulación.
- */
 @Service
 public class DatasetMetadataService {
 
-    /** Default del span máximo (días) de {@code /demanda/resumen} si no hay config (constructor de tests). */
     static final int DEFAULT_DEMANDA_MAX_DIAS = 31;
 
     private final DataLoader dataLoader;
-    /** Anti-OOM: span máximo admitido por {@code /demanda/resumen} (de {@code planificador.consulta}). */
     private final int demandaMaxDias;
 
     @Autowired
@@ -39,16 +32,10 @@ public class DatasetMetadataService {
                 : DEFAULT_DEMANDA_MAX_DIAS;
     }
 
-    /** Constructor sin config para tests (usa el default de span). */
     public DatasetMetadataService(DataLoader dataLoader) {
         this(dataLoader, null);
     }
 
-    /**
-     * Mapa estático de aeropuertos del dataset cargado. Pensado para que el
-     * front cachee las coordenadas al arrancar la sesión y pueda dibujar
-     * los bloques de forma incremental sin esperar a {@code /resultado}.
-     */
     public Map<String, AeropuertoDTO> getAeropuertosInfo() {
         Map<String, AeropuertoDTO> info = new LinkedHashMap<>();
         for (Aeropuerto a : dataLoader.getAeropuertos()) {
@@ -57,22 +44,12 @@ public class DatasetMetadataService {
             dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
             dto.setLongitud(a.getLongitud() != null ? a.getLongitud() : 0.0);
             dto.setCapacidadAlmacen(a.getCapacidad());
-            // gmt = el MISMO offset que usa el motor (horas enteras del dataset); el front lo emplea
-            // para el reloj local y la conversión local→UTC, así comparten exactamente el mismo huso.
             dto.setGmt(a.getOffsetHorario() != null ? a.getOffsetHorario().doubleValue() : 0.0);
             info.put(a.getCodigo(), dto);
         }
         return info;
     }
 
-    /**
-     * Catálogo estático de vuelos planeados del dataset cargado (la red completa, ~2.866 vuelos).
-     * Espejo de {@link #getAeropuertosInfo()}: pensado para que el front cachee la red al arrancar
-     * la sesión y pre-dibuje TODAS las aristas sin esperar a {@code /resultado} (que solo llega al
-     * final). Devuelve los horarios de plantilla base (sin desplazamiento de fecha); los horarios
-     * reales por día llegan en los tramos UTC de cada bloque. {@code cargaAsignada} siempre 0: la
-     * carga real es por bloque (ver {@code CargaVuelo} / {@code /jobs/{id}/vuelos/usados}).
-     */
     public List<VueloBackend> getVuelosPlaneados() {
         List<Vuelo> vuelos = dataLoader.getVuelos();
         List<VueloBackend> out = new ArrayList<>(vuelos.size());
@@ -90,13 +67,6 @@ public class DatasetMetadataService {
         return out;
     }
 
-    /**
-     * Metadatos del dataset cargado (rango de fechas, días disponibles, total
-     * de maletas). Útil para que el front valide {@code fechaInicio} contra
-     * el rango antes de invocar {@code /escenario2/iniciar}.
-     *
-     * <p>Devuelve nulls en los campos de fecha si el dataset está vacío.
-     */
     public DatasetInfoResponse getDatasetInfo() {
         LocalDateTime primera = dataLoader.getPrimeraVentana();
         LocalDateTime ultima  = dataLoader.getUltimaVentana();
@@ -124,9 +94,6 @@ public class DatasetMetadataService {
         LocalDateTime primera = dataLoader.getPrimeraVentana();
         LocalDateTime ultima = dataLoader.getUltimaVentana();
         LocalDateTime inicio = desde != null ? desde : primera;
-        // Anti-OOM (guarda de rango): si falta `hasta` o el span supera demanda-max-dias, se acota a
-        // inicio + demanda-max-dias (y se reporta el rango efectivo). Con la agregación en SQL el peor
-        // caso ya no agota el heap; la guarda acota el escaneo de BD. Se respeta el fin del dataset.
         LocalDateTime fin = hasta;
         if (inicio != null) {
             LocalDateTime topeSpan = inicio.plusDays(demandaMaxDias);
@@ -156,7 +123,6 @@ public class DatasetMetadataService {
         long totalMaletas = 0L;
         long totalEnvios = 0L;
 
-        // Agregación en BD por par O→D (≤ ~900 filas): no materializa los envíos del rango en RAM.
         for (DataLoader.DemandaAgrupada fila : dataLoader.agregarDemandaEnRango(inicio, fin)) {
             String origen = safe(fila.origen());
             String destino = safe(fila.destino());

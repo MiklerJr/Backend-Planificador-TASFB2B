@@ -29,22 +29,11 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-/**
- * Construye registros de auditoría {@link AuditoriaEnvio} a partir de los
- * {@link LuggageBatch} que produjo el planificador ALNS y los serializa a CSV.
- *
- * <p>El CSV resultante (25 columnas) permite al cliente validar de forma
- * independiente que cada restricción del problema TASF.B2B se cumple por envío:
- * SLA, sin ciclos y tiempo mínimo de escala.
- *
- * <p>Compartido por los escenarios 1, 2 y 3: cada job genera su propia auditoría
- * (un ZIP de CSV) accesible vía {@code GET /api/planificador/jobs/{jobId}/auditoria.zip}.
- */
+
 @Service
 public class AuditoriaService {
 
     private static final int TIEMPO_MIN_ESCALA = CostFunction.TIEMPO_MIN_ESCALA;
-    /** Minutos de procesamiento en el almacén destino antes de quedar disponible. */
     private static final long DEST_STORAGE_MIN = 10L;
     private static final String CSV_HEADER =
             "idEnvio,origen,destino,clienteId,cantidad,tipoEnvio,registroHHMM,deadlineMin,exitoso,motivoFalla,"
@@ -52,17 +41,11 @@ public class AuditoriaService {
                     + "slackSlaMin,slackSlaHoras,cumpleSLA,sinCiclos,escalaMinOK,scoreCalidad,"
                     + "fechaHoraInicio,fechaHoraFin\n";
 
-    /** Máximo de filas de datos por CSV dentro del ZIP de auditoría. */
     public static final int FILAS_POR_ARCHIVO = 50_000;
 
-    /** Formato seguro para nombres de archivo (sin ':' ni separadores inválidos). */
     private static final DateTimeFormatter FMT_NOMBRE =
             DateTimeFormatter.ofPattern("yyyyMMddHHmm");
 
-    /**
-     * Construye el registro de auditoría a partir de un batch ya procesado.
-     * Si la ruta está vacía, se considera fallido.
-     */
     public AuditoriaEnvio construir(LuggageBatch batch) {
         AuditoriaEnvio audit = new AuditoriaEnvio();
         audit.setIdEnvio(batch.getId());
@@ -70,13 +53,9 @@ public class AuditoriaService {
         audit.setDestino(batch.getDestCode());
         audit.setClienteId(batch.getClienteId());
         audit.setCantidad(batch.getQuantity());
-        // El plazo (24 h intra / 48 h inter) es función directa del tipo de envío, así que
-        // lo derivamos del SLA sin necesitar el cache de aeropuertos (continentes).
         audit.setTipoEnvio(batch.getSlaLimitHours() <= 24 ? "INTRACONTINENTAL" : "INTERCONTINENTAL");
         audit.setRegistroHHMM(String.format("%02d:%02d",
                 batch.getReadyTime().getHour(), batch.getReadyTime().getMinute()));
-        // Inicio del envío: momento de registro del batch. Disponible siempre,
-        // haya o no ruta asignada.
         audit.setFechaHoraInicio(batch.getReadyTime());
 
         long readyMin = toEpochMin(batch.getReadyTime());
@@ -92,11 +71,9 @@ public class AuditoriaService {
             audit.setRuta("");
             audit.setSlackSlaMin(slaMin);
             audit.setSlackSlaHoras(slaMin / 60.0);
-            // Sin ruta → no hay fin de envío.
             return audit;
         }
 
-        // Construcción de la ruta como string ICAO->ICAO->...
         StringBuilder rutaStr = new StringBuilder(ruta.get(0).from.code);
         for (Edge e : ruta) rutaStr.append("->").append(e.to.code);
         audit.setRuta(rutaStr.toString());
@@ -106,7 +83,6 @@ public class AuditoriaService {
         audit.setNumTramos(numTramos);
         audit.setNumEscalas(numEscalas);
 
-        // Tiempos calculados desde los departures reales si están disponibles.
         int tiempoVueloMin = 0;
         for (Edge e : ruta) tiempoVueloMin += e.durationMinutes;
 
@@ -130,18 +106,12 @@ public class AuditoriaService {
         int llegadaDesdeReady = (int) (llegadaEpoch - readyMin);
         audit.setLlegadaMin(llegadaDesdeReady);
 
-        // Fin del envío: instante en que la maleta queda disponible en el
-        // almacén destino (aterrizaje del último vuelo + DEST_STORAGE_MIN).
-        // Coherente con el cómputo de SLA de la vía de producción (GreedyRepairOperator).
         audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + DEST_STORAGE_MIN));
 
         int slack = slaMin - llegadaDesdeReady;
         audit.setSlackSlaMin(slack);
         audit.setSlackSlaHoras(slack / 60.0);
 
-        // Restricciones (validación a posteriori). Capacidad de vuelo y almacén las garantiza
-        // el ALNS al comprometer la ruta (no son verificables aquí sin el estado del grafo en
-        // el momento del commit), por eso ya no se reportan como columnas.
         boolean cumpleSLA  = batch.isCumpleSLA() && slack >= 0;
         boolean sinCiclos  = sinCiclos(ruta);
         boolean escalaOK   = cumpleEscalaMinima(ruta, deps);
@@ -158,12 +128,6 @@ public class AuditoriaService {
         return audit;
     }
 
-    /**
-     * Convierte una lista de auditorías a CSV con la cabecera estándar (25 columnas).
-     * Las últimas dos columnas son {@code fechaHoraInicio} y {@code fechaHoraFin}
-     * (ISO LocalDateTime). {@code fechaHoraFin} queda vacía cuando el envío no
-     * encontró ruta.
-     */
     public String aCsv(List<AuditoriaEnvio> filas) {
         StringBuilder sb = new StringBuilder();
         sb.append(CSV_HEADER);
@@ -197,26 +161,6 @@ public class AuditoriaService {
         return out;
     }
 
-    /**
-     * Escribe la auditoría como un ZIP de varios CSV, cada uno con a lo sumo
-     * {@code maxFilas} filas de datos (un único CSV de 9.5M envíos no es práctico).
-     *
-     * <p>Los batches se ordenan por {@code fechaHoraInicio} (su {@code readyTime})
-     * y se parten en bloques. Cada archivo interno se llama
-     * {@code <jobId>-<inicio>-<fin>.csv}, donde {@code inicio}/{@code fin} son el
-     * primer y último registro del bloque (formato {@code yyyyMMddHHmm}). Si dos
-     * bloques colisionan en nombre se desambigua con un sufijo numérico.
-     *
-     * <p>Además, siempre añade un CSV {@code <jobId>-vuelos-cancelados.csv} con los vuelos que el
-     * usuario canceló en vivo durante la corrida (puede quedar solo con la cabecera si no hubo).
-     *
-     * @param batches           envíos a auditar (cada uno será una fila)
-     * @param zipPath           ruta destino del ZIP
-     * @param maxFilas          filas de datos máximas por CSV ({@code <=0} usa {@link #FILAS_POR_ARCHIVO})
-     * @param jobId             prefijo del nombre de cada CSV interno
-     * @param vuelosCancelados  vuelos cancelados a volcar en su propio CSV (puede ser null/vacío)
-     * @return total de filas de datos (de envíos) escritas (sin contar cabeceras)
-     */
     public int escribirZip(Collection<LuggageBatch> batches, Path zipPath,
                            int maxFilas, String jobId,
                            Collection<VueloCancelado> vuelosCancelados) throws IOException {
@@ -268,16 +212,6 @@ public class AuditoriaService {
         return totalFilas;
     }
 
-    /**
-     * Variante en STREAMING del ZIP, para no retener O(envíos) en RAM. Los envíos
-     * enrutados los emite {@code fuenteEnrutados} (típicamente {@code SolucionBdReader.forEachEnrutado},
-     * que los lee de BD con cursor y ya vienen ordenados por {@code readyTime}); los {@code sinRuta}
-     * (fracción pequeña que no llegó a BD) se añaden al final ordenados por {@code readyTime}. Las
-     * filas se bufferizan como texto hasta {@code maxFilas} y se vuelcan a un CSV interno por rango,
-     * igual que {@link #escribirZip}. Reusa {@link #construir}/{@link #lineaCsv}.
-     *
-     * @return total de filas de datos (de envíos) escritas (sin contar cabeceras)
-     */
     public int escribirZipStreaming(Path zipPath, int maxFilas, String jobId,
                                     java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados,
                                     Collection<LuggageBatch> sinRuta,
@@ -309,10 +243,6 @@ public class AuditoriaService {
         return total[0];
     }
 
-    /**
-     * Acumula líneas CSV y las vuelca a CSV internos del ZIP de a lo sumo {@code limite} filas,
-     * nombrando cada uno por el rango {@code readyTime} de sus filas (igual que {@link #escribirZip}).
-     */
     private static final class EscritorParticionado {
         private final ZipOutputStream zos;
         private final int limite;
@@ -378,7 +308,6 @@ public class AuditoriaService {
     private static final String CSV_HEADER_CANCELADOS =
             "origen,destino,fechaHoraSalida,enviosAfectados\n";
 
-    /** Añade al ZIP el CSV {@code <jobId>-vuelos-cancelados.csv} con los vuelos cancelados en vivo. */
     private void escribirCsvVuelosCancelados(ZipOutputStream zos, String jobId,
                                              Collection<VueloCancelado> vuelosCancelados) throws IOException {
         String pref = (jobId == null || jobId.isBlank()) ? "job" : jobId;
@@ -398,10 +327,6 @@ public class AuditoriaService {
         zos.closeEntry();
     }
 
-    /**
-     * Construye el nombre del CSV interno y garantiza unicidad dentro del ZIP
-     * (si el rango se repite, añade un sufijo {@code -N}).
-     */
     private static String nombreArchivo(String jobId, LocalDateTime inicio,
                                         LocalDateTime fin, Set<String> usados) {
         String pref = (jobId == null || jobId.isBlank()) ? "job" : jobId;
@@ -509,7 +434,6 @@ public class AuditoriaService {
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
     }
 
-    /** Inversa de {@link #toEpochMin}: epoch-min absolutos → {@link LocalDateTime}. */
     private static LocalDateTime epochMinToLocalDateTime(long epochMin) {
         long epochDay = Math.floorDiv(epochMin, 1440L);
         long minuteOfDay = Math.floorMod(epochMin, 1440L);
@@ -518,7 +442,6 @@ public class AuditoriaService {
         return LocalDateTime.of(date, time);
     }
 
-    /** Serialización ISO de un {@link LocalDateTime} para CSV. {@code null} → vacío. */
     private static String formatoFecha(LocalDateTime dt) {
         return dt == null ? "" : dt.toString();
     }

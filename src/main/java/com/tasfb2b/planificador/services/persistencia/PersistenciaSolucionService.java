@@ -19,41 +19,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * Persiste la solución (rutas) de cada bloque en {@code ruta_asignada}/{@code tramo_ruta}.
- *
- * <p><b>Serializado:</b> como el esquema no tiene {@code corrida_id} (decisión de diseño: una corrida
- * a la vez), solo un job escribe a la vez. El primero que arranca toma la persistencia y limpia las
- * tablas; los jobs concurrentes corren solo en memoria.
- *
- * <p><b>Aditivo y best-effort:</b> no toca el motor ni la memoria del job. Si una escritura falla,
- * se loguea y NO se propaga (la simulación no debe caerse por un problema de persistencia).
- */
 @Slf4j
 @Service
 public class PersistenciaSolucionService {
 
     private final JdbcTemplate jdbc;
 
-    /**
-     * Plantilla transaccional para escribir cada bloque como unidad atómica (rollback si fallan los
-     * tramos ⇒ no quedan rutas sin tramos). {@code null} solo en el constructor no-op de tests, donde
-     * nunca se llega a persistir (cae el camino directo sin transacción).
-     */
     private final TransactionTemplate tx;
 
-    /** jobId de la corrida que tiene tomada la persistencia. null = libre. */
     private final AtomicReference<String> corridaActiva = new AtomicReference<>();
 
-    /**
-     * jobId de la última corrida que TOMÓ la persistencia y dejó su solución en BD. A diferencia de
-     * {@link #corridaActiva}, NO se limpia en {@link #finalizarCorrida}: la solución sigue en BD tras
-     * terminar el job, hasta que otra corrida la sobrescriba con el TRUNCATE. Permite consultar un
-     * envío de un job ya finalizado (mientras nadie más haya arrancado otra corrida).
-     */
     private volatile String corridaPersistidaEnBd;
 
-    /** Tamaño de lote para los INSERT multi-fila de {@code ruta_asignada} (acota nº de parámetros). */
     private static final int LOTE_RUTAS = 500;
 
     public PersistenciaSolucionService(JdbcTemplate jdbc, PlatformTransactionManager txManager) {
@@ -61,19 +38,6 @@ public class PersistenciaSolucionService {
         this.tx = (txManager != null) ? new TransactionTemplate(txManager) : null;
     }
 
-    /**
-     * Intenta tomar la persistencia para {@code jobId}. Si la toma (no hay otra corrida activa),
-     * vacía las tablas de solución ({@code TRUNCATE ruta_asignada/tramo_ruta/cancelacion_vuelo/
-     * envio_inyectado}) y
-     * devuelve {@code true}. Si ya hay otra corrida persistiendo, devuelve {@code false} (ese job
-     * corre solo en memoria).
-     *
-     * <p>El TRUNCATE es lo único que hace falta para empezar una corrida limpia: el "enrutado activo"
-     * de un envío se modela con {@code ruta_asignada.activa=TRUE}, no con la columna
-     * {@code envio.estado} (columna huérfana: nadie la lee ni la escribe a otro valor en el código).
-     * Por eso ya NO se ejecuta {@code UPDATE envio SET estado='pendiente'} (reescribía ~9,5 M filas
-     * por nada, ~4 min de espera inicial).
-     */
     public boolean iniciarCorrida(String jobId) {
         if (jobId == null) return false;
         if (!corridaActiva.compareAndSet(null, jobId)) {
@@ -94,55 +58,28 @@ public class PersistenciaSolucionService {
         }
     }
 
-    /**
-     * Toma el lock de persistencia para LEER la solución de {@code jobId} (auditoría ON-DEMAND), sin
-     * TRUNCAR. Solo lo concede si {@code jobId} es la corrida reflejada en BD ({@link #reflejaEnBd}) y
-     * nadie más tiene el lock; así un {@link #iniciarCorrida} concurrente no puede TRUNCAR la solución
-     * mientras se genera el ZIP. Liberar con {@link #finalizarCorrida} (no toca {@code corridaPersistidaEnBd}).
-     *
-     * @return {@code true} si tomó el lock para lectura; {@code false} si la solución ya fue reemplazada
-     *         o hay otra corrida activa (el llamador debe responder 409).
-     */
     public boolean tomarParaLectura(String jobId) {
         if (jobId == null || !jobId.equals(corridaPersistidaEnBd)) return false;
         return corridaActiva.compareAndSet(null, jobId);
     }
 
-    /** Libera la persistencia si la tenía {@code jobId}. Llamar en {@code finally} al terminar. */
     public void finalizarCorrida(String jobId) {
         if (jobId != null && corridaActiva.compareAndSet(jobId, null)) {
             log.info("Persistencia liberada por la corrida {}.", jobId);
         }
     }
 
-    /** ¿Es {@code jobId} la corrida que está persistiendo ahora mismo? */
     public boolean persiste(String jobId) {
         return jobId != null && jobId.equals(corridaActiva.get());
     }
 
-    /**
-     * ¿La solución que está ahora mismo en BD corresponde a {@code jobId}? Sigue siendo {@code true}
-     * tras finalizar el job (a diferencia de {@link #persiste}), hasta que otra corrida haga TRUNCATE.
-     * Es la condición correcta para servir la consulta puntual de un envío desde BD.
-     */
     public boolean reflejaEnBd(String jobId) {
         return jobId != null && jobId.equals(corridaPersistidaEnBd);
     }
 
-    /**
-     * Persiste las rutas de los batches ENRUTADOS del bloque (solo si {@code jobId} es la corrida
-     * activa). Mantiene el histórico 1:N: desactiva la ruta activa previa del envío e inserta la
-     * nueva como {@code activa}. Best-effort: si falla, loguea y no propaga.
-     */
     public void persistirBloque(String jobId, List<LuggageBatch> batches) {
         if (batches == null || batches.isEmpty() || !persiste(jobId)) return;
 
-        // Persiste cualquier batch con ruta COMPLETA (prefijo+sufijo) no vacía. Incluye los
-        // varados (solo prefijo): su prefijo se guarda como ruta activa incompleta para que el
-        // endpoint de estado lo muestre EN_ESCALA esperando.
-        // Se PARTEN en dos carriles: los del dataset van a ruta_asignada/tramo_ruta (FK a envio); los
-        // inyectados en vivo (id sintético "INV-...", que NO existen en la tabla envio) van a las tablas
-        // paralelas ruta_inyectada/tramo_inyectado (sin FK a envio; metadatos en envio_inyectado).
         List<LuggageBatch> enrutados = new ArrayList<>();
         List<LuggageBatch> inyectados = new ArrayList<>();
         for (LuggageBatch b : batches) {
@@ -155,8 +92,6 @@ public class PersistenciaSolucionService {
         if (enrutados.isEmpty() && inyectados.isEmpty()) return;
 
         try {
-            // Los pasos del bloque se escriben como unidad atómica: si los tramos fallan (p. ej. FK),
-            // se revierten también las rutas, evitando rutas activas sin tramos.
             Runnable escribir = () -> {
                 if (!enrutados.isEmpty()) escribirBloque(enrutados, TablasSolucion.DATASET);
                 if (!inyectados.isEmpty()) escribirBloque(inyectados, TablasSolucion.INYECTADO);
@@ -171,24 +106,11 @@ public class PersistenciaSolucionService {
         }
     }
 
-    /**
-     * Identifica el juego de tablas de solución a escribir: el del dataset ({@code ruta_asignada}/
-     * {@code tramo_ruta}, FK a {@code envio}) o el paralelo de los inyectados EN VIVO
-     * ({@code ruta_inyectada}/{@code tramo_inyectado}, sin FK a {@code envio}). Mismas columnas salvo el
-     * nombre de la PK de ruta ({@code id_ruta} vs {@code id_ruta_iny}), así {@link #escribirBloque} e
-     * {@link #insertarRutasLote} sirven a ambos sin duplicar la lógica.
-     */
     private record TablasSolucion(String rutaTabla, String tramoTabla, String idRutaCol) {
         static final TablasSolucion DATASET   = new TablasSolucion("ruta_asignada", "tramo_ruta", "id_ruta");
         static final TablasSolucion INYECTADO = new TablasSolucion("ruta_inyectada", "tramo_inyectado", "id_ruta_iny");
     }
 
-    /**
-     * Persiste en {@code envio_inyectado} los envíos inyectados EN VIVO liberados en un bloque (solo si
-     * {@code jobId} es la corrida activa). Tabla independiente, sin FK a {@code envio}; la limpia el
-     * {@code TRUNCATE} de {@link #iniciarCorrida} al arrancar otra corrida. Best-effort: si falla,
-     * loguea y no propaga (la simulación no debe caerse por la persistencia).
-     */
     public void persistirInyecciones(String jobId, List<EnvioInyectadoInfo> items) {
         if (items == null || items.isEmpty() || !persiste(jobId)) return;
         try {
@@ -208,14 +130,6 @@ public class PersistenciaSolucionService {
         }
     }
 
-    /**
-     * Persiste en {@code cancelacion_vuelo} los vuelo-días que el usuario canceló EN VIVO durante un
-     * bloque (solo si {@code jobId} es la corrida activa). FK {@code id_vuelo → vuelo(id_vuelo)}: el
-     * {@code idVuelo} debe venir ya normalizado a {@code ICAO-ICAO-HHMM} (ver {@link #normalizarIdVuelo}),
-     * el mismo formato que {@code tramo_ruta.id_vuelo}. La limpia el {@code TRUNCATE} de
-     * {@link #iniciarCorrida} al arrancar otra corrida. Best-effort: si falla, loguea y NO propaga
-     * (la simulación no debe caerse por la persistencia).
-     */
     public void persistirCancelaciones(String jobId, List<CancelacionVueloDb> nuevas) {
         if (nuevas == null || nuevas.isEmpty() || !persiste(jobId)) return;
         try {
@@ -230,14 +144,8 @@ public class PersistenciaSolucionService {
         }
     }
 
-    /**
-     * Vuelo-día cancelado a persistir: {@code id_vuelo} ({@code ICAO-ICAO-HHMM}) + fecha (UTC) +
-     * {@code enviosAfectados} (devueltos al backlog por la cancelación, para reconstruir el CSV de
-     * auditoría desde BD sin perder esa columna).
-     */
     public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
-    /** Escribe el bloque (debe correr dentro de una transacción): desactiva previa → rutas → tramos. */
     private void escribirBloque(List<LuggageBatch> enrutados, TablasSolucion t) {
         // 1. Desactivar la ruta activa previa de estos envíos (no-op para los nuevos).
         List<Object[]> desactivar = new ArrayList<>(enrutados.size());
@@ -272,7 +180,6 @@ public class PersistenciaSolucionService {
                 + "VALUES (?, ?, ?, ?, ?)", tramos);
     }
 
-    /** INSERT multi-fila de un lote de rutas con {@code RETURNING} para mapear id_envio → id_ruta. */
     private void insertarRutasLote(List<LuggageBatch> lote, Map<String, Long> idRutaPorEnvio, TablasSolucion t) {
         StringBuilder sql = new StringBuilder(
                 "INSERT INTO " + t.rutaTabla() + " (id_envio, activa, costo_total, duracion_horas, cumple_sla, slack_sla_min, llegada_utc) VALUES ");
@@ -282,8 +189,6 @@ public class PersistenciaSolucionService {
             if (i > 0) sql.append(',');
             sql.append("(?, TRUE, ?, ?, ?, ?, ?)");
 
-            // La ruta REAL = prefijo (volado) + sufijo. Tránsito/slack se miden desde el
-            // registro ORIGINAL hasta la llegada del último tramo conocido (para un varado, la escala).
             List<Edge> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();
             long readyMin = GreedyRepairOperator.toEpochMinPublic(b.getReadyTime());
@@ -304,12 +209,10 @@ public class PersistenciaSolucionService {
                 args.toArray());
     }
 
-    /** El motor genera el id como {@code ICAO-ICAO-HH:MM}; {@code vuelo.id_vuelo} es {@code ICAO-ICAO-HHMM}. */
     public static String normalizarIdVuelo(String edgeId) {
         return edgeId == null ? null : edgeId.replace(":", "");
     }
 
-    /** Inversa de {@code PlanificadorService.toEpochMin}: epoch-min UTC → LocalDateTime (columna TIMESTAMP). */
     static LocalDateTime epochMinToLdt(long epochMin) {
         long day = Math.floorDiv(epochMin, 1440L);
         int minOfDay = (int) Math.floorMod(epochMin, 1440L);

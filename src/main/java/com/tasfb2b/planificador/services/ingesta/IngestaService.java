@@ -22,16 +22,6 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * Ingesta de un dataset completo (aeropuertos + vuelos + envíos) por endpoint, con
- * <b>reemplazo total</b> de la BD. Asíncrona (los envíos pueden ser millones de líneas) y serializada
- * con las simulaciones (corre en el executor de {@link JobsRegistry}; se rechaza si hay una
- * simulación activa). Una ingesta a la vez.
- *
- * <p>Pasos: copiar los multipart a temporales (en el hilo del request, antes de devolver) →
- * {@code TRUNCATE ... CASCADE} → insertar aeropuertos → vuelos → envíos → {@code DataLoader.load()}
- * para que las nuevas simulaciones vean el dataset nuevo.
- */
 @Slf4j
 @Service
 public class IngestaService {
@@ -62,14 +52,6 @@ public class IngestaService {
     public boolean estaEnCurso() { return enCurso.get(); }
     public IngestaEstado getEstado() { return estado.get(); }
 
-    /**
-     * Inicia la ingesta async. Copia los multipart a temporales en este hilo (el {@link MultipartFile}
-     * no es válido tras terminar el request) y encola el procesamiento. Lanza:
-     * <ul>
-     *   <li>{@link IllegalStateException} si hay una simulación activa o ya hay una ingesta en curso;</li>
-     *   <li>{@link IllegalArgumentException} si faltan archivos o un envío no tiene ICAO derivable.</li>
-     * </ul>
-     */
     public IngestaEstado iniciar(MultipartFile aeropuertos, MultipartFile vuelos, MultipartFile[] envios) {
         if (!jobs.listarActivos().isEmpty()) {
             throw new IllegalStateException("Hay una simulación activa; cancélala antes de cargar un dataset.");
@@ -176,8 +158,6 @@ public class IngestaService {
         }
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────────────
-
     private static boolean vacio(MultipartFile f) {
         return f == null || f.isEmpty();
     }
@@ -203,6 +183,5 @@ public class IngestaService {
         }
     }
 
-    /** Archivo temporal de envíos + el ICAO de origen derivado de su nombre. */
     private record EnvioTemp(Path path, String icao) { }
 }

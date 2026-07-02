@@ -17,15 +17,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Carga de datos crudos (aeropuertos, vuelos, envíos) a la BD. Originalmente una migración one-shot
- * desde archivos locales; la ingesta por endpoint reusa los métodos {@code *Desde(Reader)}
- * (subida multipart), sin depender de rutas en disco del servidor.
- *
- * <p>El parseo de envíos descarta líneas inválidas (RF03 vía {@link EnvioValidator}) sin abortar el
- * archivo. El INSERT usa {@code ON CONFLICT DO NOTHING} (idempotente); con reemplazo total las
- * tablas ya vienen vacías tras el TRUNCATE.
- */
 @Slf4j
 @Component
 public class MigradorEnviosDb {
@@ -50,8 +41,6 @@ public class MigradorEnviosDb {
     }
 
     // ── Aeropuertos ─────────────────────────────────────────────────────────────
-
-    /** Inserta los aeropuertos ya parseados ({@code util/AeropuertoParser}). Devuelve el nº insertado. */
     public int insertarAeropuertos(List<Aeropuerto> aeropuertos) {
         if (aeropuertos == null || aeropuertos.isEmpty()) return 0;
         List<Object[]> lote = new ArrayList<>(aeropuertos.size());
@@ -64,8 +53,6 @@ public class MigradorEnviosDb {
     }
 
     // ── Vuelos ──────────────────────────────────────────────────────────────────
-
-    /** Carga vuelos desde un archivo local (uso legacy/one-shot). */
     public void migrarVuelos(String rutaArchivoVuelos) {
         try (BufferedReader br = new BufferedReader(new FileReader(rutaArchivoVuelos))) {
             int n = migrarVuelosDesde(br);
@@ -75,7 +62,6 @@ public class MigradorEnviosDb {
         }
     }
 
-    /** Parsea e inserta vuelos desde un {@link Reader} (ingesta por endpoint). Devuelve el nº de filas. */
     public int migrarVuelosDesde(Reader reader) throws IOException {
         BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
         List<Object[]> lote = new ArrayList<>();
@@ -107,8 +93,6 @@ public class MigradorEnviosDb {
     }
 
     // ── Envíos ──────────────────────────────────────────────────────────────────
-
-    /** Carga todos los {@code _envios_<ICAO>_.txt} de un directorio local (uso legacy/one-shot). */
     public void migrarDirectorioCompleto(String rutaDirectorio) {
         File carpeta = new File(rutaDirectorio);
         File[] archivos = carpeta.listFiles((dir, name) -> name.endsWith(".txt") && name.startsWith("_envios_"));
@@ -128,18 +112,12 @@ public class MigradorEnviosDb {
         }
     }
 
-    /** ICAO de origen embebido en {@code _envios_<ICAO>_.txt} ({@code partes[2]}); null si no casa. */
     public static String origenIcaoDeNombre(String nombreArchivo) {
         if (nombreArchivo == null) return null;
         String[] partes = nombreArchivo.split("_");
         return partes.length >= 3 ? partes[2] : null;
     }
 
-    /**
-     * Parsea e inserta envíos desde un {@link Reader}, con el {@code origenIcao} (derivado del nombre
-     * del archivo). Devuelve {@code [insertados, descartados]}. RF03: descarta líneas inválidas sin
-     * abortar.
-     */
     public int[] migrarEnviosDesde(Reader reader, String origenIcao) throws IOException {
         BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
         List<Object[]> batchArgs = new ArrayList<>();
@@ -181,16 +159,6 @@ public class MigradorEnviosDb {
         return new int[]{ insertados, descartados };
     }
 
-    /**
-     * E1 — Operación día a día EN VIVO: parsea envíos de un {@link Reader} a
-     * {@link InyeccionEnviosRequest.Item} <b>SIN tocar la BD</b> (a diferencia de
-     * {@link #migrarEnviosDesde}). Mismo formato del dataset
-     * {@code id-YYYYMMDD-HH-MM-DESTINO-cantidad-idCliente}; el {@code origenIcao} viene del nombre del
-     * archivo ({@link #origenIcaoDeNombre}) o del form. Los tiempos del TXT se interpretan en <b>UTC</b>
-     * (el backend es 100% UTC; el front ya convierte). Descarta líneas inválidas (RF03) sin abortar y
-     * aplica {@code registrador}/{@code sede} a todos los ítems. La validación de negocio (ICAO
-     * existente, origen≠destino, cantidad>0) la hace después {@code solicitarInyeccionEnvios}.
-     */
     public static List<InyeccionEnviosRequest.Item> parsearEnviosParaInyeccion(
             Reader reader, String origenIcao, String registrador, String sede) throws IOException {
         BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);

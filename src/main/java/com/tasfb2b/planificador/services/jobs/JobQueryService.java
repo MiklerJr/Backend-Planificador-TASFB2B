@@ -22,26 +22,16 @@ import static com.tasfb2b.planificador.util.SimulacionFormat.porcentaje;
 import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
 import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
 
-/**
- * Read models de SOLO LECTURA sobre los jobs en memoria. Alimenta los endpoints de polling de
- * {@code JobQueryController} (dashboard, indicadores, carga/uso de vuelos, ocupación de almacenes,
- * asignaciones) sin tocar el bucle de simulación ni mutar el job.
- *
- * <p>Los helpers de formato puro compartidos con el orquestador (semáforo, %, {@code safe},
- * {@code vueloFrontId}, {@code completar*}) viven en {@link SimulacionFormat} para no duplicarlos.
- */
+
 @Service
 public class JobQueryService {
 
-    /** Default de filas por página cuando no hay {@link PlanificadorProperties} (constructor de tests). */
     static final int DEFAULT_MAX_FILAS_PAGINA = 5000;
 
     private final JobsRegistry jobs;
     private final DataLoader dataLoader;
-    /** Anti-OOM: reconstruye agregados desde BD cuando se pide histórico fuera de la ventana RAM. */
     private final SolucionBdReader solucionBdReader;
     private final PersistenciaSolucionService persistencia;
-    /** Anti-OOM: tope de filas por página de los read models paginados (de {@code planificador.consulta}). */
     private final int maxFilasPagina;
 
     @Autowired
@@ -58,18 +48,15 @@ public class JobQueryService {
                 : DEFAULT_MAX_FILAS_PAGINA;
     }
 
-    /** Constructor sin acceso a BD ni config para tests (BD deshabilitada; usa el default de filas). */
     public JobQueryService(JobsRegistry jobs, DataLoader dataLoader) {
         this(jobs, dataLoader, null, null, null);
     }
 
-    /** Clampea el {@code limit} pedido a {@code [1, maxFilasPagina]}; {@code <=0} ⇒ default configurado. */
     private int limitEfectivo(int limit) {
         if (limit <= 0) return maxFilasPagina;
         return Math.min(limit, maxFilasPagina);
     }
 
-    /** ¿Servir el histórico desde BD? (la ventana RAM ya soltó bloques y la solución del job está en BD). */
     private boolean usarHistoricoBd(JobState job) {
         return job.bloquesPublicados() > job.getMaxBloquesConAsignaciones()
                 && solucionBdReader != null && persistencia != null
@@ -80,17 +67,10 @@ public class JobQueryService {
         return jobs.get(jobId);
     }
 
-    /**
-     * Read model liviano para dashboard operativo. No modifica el job ni fuerza
-     * recalculos del motor; usa el resultado final si existe o los bloques ya
-     * publicados si el job sigue corriendo.
-     */
     public DashboardResponse getDashboardJob(String jobId) {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
-        // Con el job en curso usa el snapshot de métricas (las asignaciones de bloques
-        // viejos se purgan, así que no se pueden recontar desde bloquesDesde(0)).
         Metricas metricas = job.resultado != null
                 ? job.resultado.getMetricas()
                 : (job.metricasSnapshot != null ? job.metricasSnapshot
@@ -120,12 +100,6 @@ public class JobQueryService {
         return body;
     }
 
-    /**
-     * Snapshot del semáforo "ahora": umbrales + carga de vuelos y ocupación de almacenes de los bloques
-     * MÁS RECIENTES de la ventana RAM. Anti-OOM: acotado de forma dura a {@link #maxFilasPagina} filas
-     * por sección (no es un volcado histórico) y tomando el tail (lo reciente), no el frente (lo viejo).
-     * Para el histórico completo el front pagina {@code /vuelos/carga} y {@code /almacenes/ocupacion}.
-     */
     public IndicadoresResponse getIndicadoresJob(String jobId) {
         JobState job = getJob(jobId);
         if (job == null) return null;
@@ -139,11 +113,6 @@ public class JobQueryService {
         return body;
     }
 
-    /**
-     * Carga de vuelos de los bloques MÁS RECIENTES de la ventana RAM, acotada a {@code limit} filas
-     * (snapshot del semáforo). Recorre la ventana desde el final e incluye bloques COMPLETOS hasta
-     * alcanzar {@code limit}, devolviéndolos en orden cronológico. Memoria O(limit + 1 bloque).
-     */
     private List<CargaVueloRow> cargaVuelosRecientes(JobState job, int limit) {
         List<BloqueSimulacion> ventana = job.bloquesDesde(0);
         List<CargaVueloRow> acc = new ArrayList<>();
@@ -157,7 +126,6 @@ public class JobQueryService {
         return acc;
     }
 
-    /** Análogo a {@link #cargaVuelosRecientes} para la ocupación de almacenes (tail reciente, acotado). */
     private List<OcupacionAlmacenRow> ocupacionRecientes(JobState job, int limit) {
         List<BloqueSimulacion> ventana = job.bloquesDesde(0);
         List<OcupacionAlmacenRow> acc = new ArrayList<>();
@@ -171,12 +139,6 @@ public class JobQueryService {
         return acc;
     }
 
-    /**
-     * Carga de vuelos por bloque, PAGINADA (anti-OOM). {@code desde} = cursor de reanudación opaco
-     * ({@code 0} para empezar); {@code limit} = tope de filas (clampeado a {@link #maxFilasPagina}).
-     * El front recorre páginas reusando {@code proximoDesde} mientras {@code hayMas}; para refrescar,
-     * reinicia en {@code desde=0}. El cursor es válido DENTRO de un mismo recorrido.
-     */
     public CargaVuelosResponse getCargaVuelosJob(String jobId, int desde, int limit) {
         JobState job = getJob(jobId);
         if (job == null) return null;
@@ -187,17 +149,12 @@ public class JobQueryService {
         List<CargaVueloRow> vuelos;
         int proximoDesde;
         boolean hayMas;
-        // Anti-OOM: si el buffer deslizante ya soltó bloques (hay histórico fuera de RAM) y el
-        // job tiene su solución en BD, se pagina el histórico desde BD; si no, la ventana RAM.
         if (usarHistoricoBd(job)) {
-            // Ruta BD: cursor = filas (OFFSET/LIMIT). Pide limit+1 para detectar si quedan más páginas.
             List<CargaVueloRow> pagina = solucionBdReader.reconstruirCargasVuelos(desdeNorm, limitEf + 1);
             hayMas = pagina.size() > limitEf;
             vuelos = hayMas ? new ArrayList<>(pagina.subList(0, limitEf)) : pagina;
             proximoDesde = desdeNorm + vuelos.size();
         } else {
-            // Ruta RAM: cursor = bloque. Incluye bloques COMPLETOS desde `desde` hasta acumular ≥ limit
-            // filas (no parte las filas de un bloque entre páginas).
             vuelos = new ArrayList<>();
             proximoDesde = desdeNorm;
             hayMas = false;
@@ -222,21 +179,11 @@ public class JobQueryService {
         return body;
     }
 
-    /**
-     * Vuelos efectivamente usados por las asignaciones publicadas desde el bloque {@code desde}.
-     * Eje temporal: {@code flightKey}, {@code fechaSalida} y {@code fechaLlegada} están en UTC
-     * (mismo eje que {@code TramoRuta.salidaUtc} y {@code CargaVuelo.fechaSalida}), de modo que
-     * el front puede animar el vuelo-día sobre un reloj global sin mezclar husos.
-     */
     public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
         JobState job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNormalizado = Math.max(0, desde);
-        // El agregado vive en el JobState (acumulado por bloque), no se reconstruye desde las
-        // asignaciones (que se purgan de los bloques viejos).
-        // Anti-OOM: si se pide histórico FUERA de la ventana reciente en RAM y el job tiene su
-        // solución en BD, se reconstruye el histórico COMPLETO desde BD; si no, se sirve la ventana RAM.
         int corte = Math.max(0, job.bloquesPublicados() - job.getMaxBloquesConAsignaciones());
         List<VuelosUsadosResponse.VueloUsado> vuelos;
         if (desdeNormalizado < corte && solucionBdReader != null
@@ -256,12 +203,6 @@ public class JobQueryService {
         return response;
     }
 
-    /**
-     * Ocupación de almacenes por bloque, PAGINADA (anti-OOM; mismo contrato de cursor que
-     * {@link #getCargaVuelosJob}). La ocupación concurrente por slot NO se deriva directo de BD ⇒
-     * siempre se sirve desde la VENTANA reciente en RAM (cursor = bloque). El front pagina con
-     * {@code desde}/{@code proximoDesde} mientras {@code hayMas}.
-     */
     public OcupacionAlmacenesResponse getOcupacionAlmacenesJob(String jobId, int desde, int limit) {
         JobState job = getJob(jobId);
         if (job == null) return null;
@@ -269,7 +210,6 @@ public class JobQueryService {
         int desdeNorm = Math.max(0, desde);
         int limitEf = limitEfectivo(limit);
 
-        // Ruta RAM (única): incluye bloques COMPLETOS desde `desde` hasta acumular ≥ limit filas.
         List<OcupacionAlmacenRow> almacenes = new ArrayList<>();
         int proximoDesde = desdeNorm;
         boolean hayMas = false;
@@ -331,9 +271,7 @@ public class JobQueryService {
         return body;
     }
 
-    // =========================================================
-    // Helpers privados (movidos tal cual desde PlanificadorService)
-    // =========================================================
+    // Helpers privados
 
     private Metricas metricasDesdeBloques(List<BloqueSimulacion> bloques) {
         Metricas m = new Metricas();
@@ -436,8 +374,6 @@ public class JobQueryService {
             if (!asignacion.isEnrutada() || asignacion.getTramos() == null) continue;
             for (TramoRuta tramo : asignacion.getTramos()) {
                 String vueloId = safe(tramo.getVueloId());
-                // Eje UTC, igual que buildCargasVuelos: el mismo campo no puede cambiar de eje
-                // según el camino (principal vs fallback legacy).
                 String salida = safe(tramo.getSalidaUtc());
                 String key = vueloId + "|" + salida;
                 CargaVuelo dto = acc.computeIfAbsent(key, k -> {
@@ -472,8 +408,6 @@ public class JobQueryService {
             TramoRuta ultimo =
                     asignacion.getTramos().get(asignacion.getTramos().size() - 1);
             String aeropuerto = safe(ultimo.getDestino());
-            // Eje UTC: el camino principal (buildOcupacionAlmacenes) deriva la fecha del
-            // almacén-día del slot UTC; el fallback debe usar el mismo eje.
             String fecha = fechaDe(ultimo.getLlegadaUtc());
             String key = aeropuerto + "|" + fecha;
             OcupacionAlmacen dto = acc.computeIfAbsent(key, k -> {
