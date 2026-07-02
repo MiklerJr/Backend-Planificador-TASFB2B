@@ -11,9 +11,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-                // 1. Apaga la protección CSRF para permitir peticiones POST desde Postman/Frontend
                 .csrf(csrf -> csrf.disable())
-                // 2. Permite que cualquier petición pase sin pedir contraseña
                 .authorizeHttpRequests(auth -> auth
                         .anyRequest().permitAll()
                 );
