@@ -35,12 +35,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Arranque y control del ciclo de vida de los escenarios de simulación: lanzamiento de E1/E2/E3,
- * cancelación/reinicio de jobs, cancelación de vuelos en vivo y los endpoints legacy síncronos
- * ({@code /ejecutar}, {@code /ejecutar-colapso}, {@code /bloque/{index}}). Rutas bajo
- * {@code /api/planificador}. CORS lo aporta el {@code CorsFilter} global.
- */
 @RestController
 @RequestMapping("/api/planificador")
 public class EscenarioController {
@@ -56,10 +50,6 @@ public class EscenarioController {
         this.ingesta = ingesta;
     }
 
-    /**
-     * Rechaza arrancar una simulación mientras una ingesta está reemplazando el dataset
-     * (la ingesta hace TRUNCATE + recarga el DataLoader que el motor usa). 409.
-     */
     private void rechazarSiIngestaEnCurso() {
         if (ingesta.estaEnCurso()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -67,14 +57,6 @@ public class EscenarioController {
         }
     }
 
-    // ── Legacy síncronos ─────────────────────────────────────────────────────
-
-    /**
-     * Ejecuta la planificación de pedidos-rutas.
-     *
-     * @param algoritmo   "alns" (default) o "aco"
-     * @param k           Factor de aceleración: K=1 día a día, K=14 sim-3días (default), K=144 colapso
-     */
     @GetMapping("/ejecutar")
     public ResponseEntity<SimulacionResponse> ejecutar(
             @RequestParam(defaultValue = "alns") String algoritmo,
@@ -95,8 +77,6 @@ public class EscenarioController {
         return ResponseEntity.ok(bloque);
     }
 
-    // ── Escenario 3: hasta el colapso (legacy síncrono) ──────────────────────
-
     @GetMapping("/ejecutar-colapso")
     public ResponseEntity<SimulacionResponse> ejecutarColapso(
             @RequestParam(defaultValue = "75")   int    k,
@@ -107,25 +87,6 @@ public class EscenarioController {
         return ResponseEntity.ok(service.ejecutarHastaColapso(k, umbralColapso));
     }
 
-    // ── Escenario 1: día a día ────────────────────────────────────────────────
-
-    /**
-     * Lanza el escenario 1 como job asíncrono. K se fija al default del yaml
-     * (día a día). El front consume bloques vía
-     * {@code GET /jobs/{jobId}/bloques?desde=N} igual que en E2/E3.
-     *
-     * <p>{@code enVivo=true} arranca la OPERACIÓN día a día ("caja registradora"): NO es simulación —
-     * la demanda NO sale del dataset {@code ENVIO} sino 100% EN VIVO (registro manual
-     * {@code POST /jobs/{id}/inyectar-envios} y carga {@code POST /jobs/{id}/cargar-envios-txt}). El
-     * cursor se ancla a {@code now()} UTC y avanza en tiempo real; la operación se detiene con
-     * {@code POST /jobs/{id}/cancelar}. En este modo {@code fechaInicio} se ignora.
-     *
-     * <p>{@code enVivo=false} (default): E1 simulación clásica. {@code fechaInicio} (opcional): si es
-     * posterior al inicio del dataset, el período previo se PRE-CALCULA como warm-up — respeta el
-     * presupuesto Ta por bloque pero ignora el sleep de Sa — y la fase visible arranca en fechaInicio
-     * respetando Sa. Mientras dura, el job está en estado "calentando"; el snapshot de aviones aún en el
-     * aire queda en {@code GET /jobs/{jobId}/estado-inicial}. 400 si fechaInicio está fuera del dataset.
-     */
     @PostMapping("/escenario1/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc1Async(
             @RequestParam(defaultValue = "alns") String algoritmo,
@@ -153,21 +114,6 @@ public class EscenarioController {
         return ResponseEntity.accepted().body(body);
     }
 
-    // ── Escenarios 2/3 asíncronos ────────────────────────────────────────────
-    // Soportan ejecuciones largas (30-90 min con sleep activo) sin bloquear el HTTP.
-
-    /**
-     * Lanza el escenario 2. Todos los parámetros son opcionales — los que falten caen al
-     * default del yaml. Permite override por petición de {@code Sa}, {@code Ta} y {@code dias}
-     * para que cada job pueda ejecutar con su propia ventana sin tocar configuración global.
-     *
-     * <p><b>K es FIJO en el escenario 2 (regla de negocio: 144)</b>: el parámetro {@code k}
-     * se acepta solo por compatibilidad/verificación — si llega con un valor distinto al fijo
-     * se responde 400; el motor usa siempre el K del yaml.
-     *
-     * <p>Ejemplo: {@code /escenario2/iniciar?sa=5&dias=5&algoritmo=alns}
-     * → cálculo dinámico {@code ventanas = (5·24·60)/5 = 1440} bloques de Sc=K·Sa.
-     */
     @PostMapping("/escenario2/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc2(
             @RequestParam(required = false)       Integer k,
@@ -197,10 +143,6 @@ public class EscenarioController {
         params.setSaMin(sa);
         params.setTaSegundos(ta);
         params.setDias(dias);
-        // Warm-up (procesamiento previo) DESACTIVADO: se ignora el flag entrante y se fuerza a
-        // false para que el período previo a fechaInicio nunca se simule. El @RequestParam se
-        // mantiene por compatibilidad con el front, pero no tiene efecto. Revertir: volver a
-        // setProcesamientoPrevio(procesamientoPrevio).
         params.setProcesamientoPrevio(false);
 
         JobState job = service.iniciarEscenario2Async(params);
@@ -219,15 +161,6 @@ public class EscenarioController {
         return ResponseEntity.accepted().body(body);
     }
 
-    /**
-     * Lanza el escenario 3 (hasta colapso). {@code fechaInicio} (opcional): igual que en E1 —
-     * warm-up Ta-only hasta esa fecha (estado "calentando", snapshot en
-     * {@code /jobs/{id}/estado-inicial}) y la vigilancia del colapso arranca desde fechaInicio.
-     *
-     * <p><b>K es FIJO en el escenario 3 (regla de negocio: 144)</b>: {@code k} se acepta solo
-     * por compatibilidad/verificación — 400 si llega distinto al fijo.
-     * 400 también si fechaInicio está fuera del dataset.
-     */
     @PostMapping("/escenario3/iniciar")
     public ResponseEntity<Map<String, Object>> iniciarEsc3(
             @RequestParam(required = false)       Integer k,
@@ -258,7 +191,6 @@ public class EscenarioController {
         ));
     }
 
-    // ── Control de jobs en vivo ──────────────────────────────────────────────
 
     @PostMapping("/jobs/{jobId}/cancelar")
     public ResponseEntity<Map<String, Object>> cancelarJob(@PathVariable String jobId) {
@@ -266,15 +198,6 @@ public class EscenarioController {
         return ResponseEntity.ok(Map.of("jobId", jobId, "cancelado", ok));
     }
 
-    /**
-     * Reinicia un job (botón "reinicio" del front): detiene la simulación en curso y lanza una
-     * NUEVA con los MISMOS parámetros de la ejecución anterior (misma seed ⇒ re-juego idéntico).
-     * Crea un jobId NUEVO; el front debe reengancharse a ese id. Funciona en E1/E2/E3 y tanto si
-     * el job estaba activo como si ya había terminado.
-     *
-     * @return 202 con {@code jobIdAnterior} y el {@code jobId} nuevo; 404 si el job no existe;
-     *         400 si el escenario no es reiniciable.
-     */
     @PostMapping("/jobs/{jobId}/reiniciar")
     public ResponseEntity<Map<String, Object>> reiniciarJob(@PathVariable String jobId) {
         JobState viejo = service.getJob(jobId);
@@ -293,15 +216,6 @@ public class EscenarioController {
                 "estado",        nuevo.estado));
     }
 
-    /**
-     * Cancela un vuelo concreto EN VIVO durante un job async (E1 async / E2 / E3). El vuelo queda no
-     * disponible solo el día de {@code fechaHoraSalida}; los envíos ya programados en él se devuelven
-     * al backlog y se re-enrutan en los bloques siguientes. El vuelo se identifica por
-     * {@code origen} + {@code destino} + {@code fechaHoraSalida} (los mismos datos de
-     * {@code /jobs/{jobId}/vuelos/usados}).
-     *
-     * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó.
-     */
     @PostMapping("/jobs/{jobId}/cancelar-vuelo")
     public ResponseEntity<Map<String, Object>> cancelarVueloJob(
             @PathVariable String jobId,
@@ -321,15 +235,6 @@ public class EscenarioController {
                 "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
     }
 
-    /**
-     * Agrega envíos EN VIVO durante un job async (E1 async / E2 / E3). Encola el lote; el worker libera
-     * cada envío cuando el cursor UTC alcanza su {@code fechaHoraRegistro} (próximo bloque si es
-     * pasada/actual u omitida). Solo valen para esa simulación: no contaminan el dataset maestro
-     * {@code ENVIO} y se registran en {@code envio_inyectado} (que se vacía al iniciar otra corrida).
-     *
-     * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó, 400 si el input es
-     *         inválido (ICAO desconocido, origen=destino, cantidad ≤ 0, lista vacía).
-     */
     @PostMapping({"/jobs/{jobId}/inyectar-envios", "/jobs/{jobId}/registrar-envios"})
     public ResponseEntity<Map<String, Object>> inyectarEnvios(
             @PathVariable String jobId,
@@ -345,18 +250,6 @@ public class EscenarioController {
                 "jobId", jobId, "encolado", true, "encolados", encolados));
     }
 
-    /**
-     * E1 — Operación día a día: carga de un archivo TXT de envíos adicionales (multipart). Cada archivo
-     * sigue el formato del dataset {@code id-YYYYMMDD-HH-MM-DESTINO-cantidad-idCliente}; el ICAO de
-     * origen sale del nombre ({@code _envios_<ICAO>_.txt}) o del parámetro {@code origen}. Los tiempos
-     * se interpretan en <b>UTC</b>. Se parsea SIN tocar la BD ({@link MigradorEnviosDb#parsearEnviosParaInyeccion})
-     * y se delega en la MISMA cola/validación/persistencia que el registro manual
-     * ({@code solicitarInyeccionEnvios} → {@code envio_inyectado}). Requiere job activo (operación E1 en
-     * marcha).
-     *
-     * @return 202 si se encoló, 404 si el job no existe, 409 si el job ya terminó, 400 si faltan
-     *         archivos / no hay ICAO derivable / ningún envío válido / algún envío inválido.
-     */
     @PostMapping(value = "/jobs/{jobId}/cargar-envios-txt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> cargarEnviosTxt(
             @PathVariable String jobId,

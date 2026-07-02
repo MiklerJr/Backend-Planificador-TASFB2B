@@ -16,17 +16,10 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Metadatos estáticos del dataset y catálogos para el front. Todas las rutas cuelgan de
- * {@code /api/planificador}. CORS lo aporta el {@code CorsFilter} global de
- * {@code PlanificadorApplication} (sin {@code @CrossOrigin} por controller).
- */
 @RestController
 @RequestMapping("/api/planificador")
 public class MetadataController {
 
-    // Los metadatos del dataset (info/aeropuertos/vuelos/demanda) los sirve DatasetMetadataService;
-    // PlanificadorService solo queda para el catálogo de escenarios.
     private final DatasetMetadataService datasetMetadata;
     private final PlanificadorService service;
 
@@ -35,23 +28,11 @@ public class MetadataController {
         this.service = service;
     }
 
-    /**
-     * Metadatos del dataset cargado (rango temporal disponible, conteos).
-     * Permite al front validar {@code fechaInicio} antes de enviar el job:
-     * si la fecha está fuera de {@code [primeraVentana, ultimaVentana]} el
-     * backend la ignora silenciosamente.
-     */
     @GetMapping("/dataset/info")
     public ResponseEntity<DatasetInfoResponse> datasetInfo() {
         return ResponseEntity.ok(datasetMetadata.getDatasetInfo());
     }
 
-    /**
-     * Mapa estático de aeropuertos del dataset cargado:
-     * {@code {[codigo]: {codigo, latitud, longitud, capacidadAlmacen}}}. Pensado para que el
-     * front lo cachee al cargar la app y dibuje bloques incrementalmente
-     * sin esperar a {@code /resultado}. No cambia en runtime.
-     */
     @GetMapping("/aeropuertos")
     public ResponseEntity<Map<String, AeropuertoDTO>> aeropuertos() {
         return ResponseEntity.ok()
@@ -59,14 +40,6 @@ public class MetadataController {
                 .body(datasetMetadata.getAeropuertosInfo());
     }
 
-    /**
-     * Catálogo estático de vuelos planeados del dataset (la red completa, ~2.866 vuelos):
-     * lista de {@code {id, origen, destino, fechaSalida, fechaLlegada, capacidadMaxima,
-     * cargaAsignada}}. Espejo de {@code /aeropuertos}: pensado para que el front lo cachee al
-     * cargar la app y pre-dibuje TODAS las aristas de la red sin esperar a {@code /resultado}.
-     * Horarios de plantilla base; los reales por día llegan en los tramos de cada bloque.
-     * {@code cargaAsignada} siempre 0 (la carga real es por bloque). No cambia en runtime.
-     */
     @GetMapping("/vuelos")
     public ResponseEntity<List<VueloBackend>> vuelos() {
         return ResponseEntity.ok()
@@ -74,14 +47,6 @@ public class MetadataController {
                 .body(datasetMetadata.getVuelosPlaneados());
     }
 
-    /**
-     * Catálogo de escenarios disponibles para el front. Devuelve los valores
-     * por defecto (Sa, Ta, K, umbrales), una descripción human-readable y la
-     * lista de motores soportados.
-     *
-     * <p>El cuerpo lo construye {@link PlanificadorService#getCatalogoEscenarios()}:
-     * el controller solo delega.
-     */
     @GetMapping("/escenarios")
     public ResponseEntity<Map<String, Object>> catalogoEscenarios() {
         return ResponseEntity.ok(service.getCatalogoEscenarios());

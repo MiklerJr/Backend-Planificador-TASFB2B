@@ -14,11 +14,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
-/**
- * Ingesta de dataset por la página de carga del front. Reemplazo total y asíncrono.
- * Rutas bajo {@code /api/planificador}; CORS lo aporta el {@code CorsFilter} global; sin auth
- * (igual que el resto).
- */
 @RestController
 @RequestMapping("/api/planificador")
 public class IngestaController {
@@ -29,14 +24,6 @@ public class IngestaController {
         this.ingesta = ingesta;
     }
 
-    /**
-     * Sube un dataset completo y dispara el reemplazo total (async). Multipart con los campos
-     * {@code aeropuertos} (1 archivo), {@code vuelos} (1 archivo) y {@code envios} (N archivos
-     * {@code _envios_<ICAO>_.txt}).
-     *
-     * @return 202 + estado inicial si se aceptó; 409 si hay una simulación activa o ya hay una
-     *         ingesta en curso; 400 si faltan archivos o un envío no tiene ICAO derivable del nombre.
-     */
     @PostMapping(value = "/dataset/cargar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> cargar(
             @RequestParam("aeropuertos") MultipartFile aeropuertos,
@@ -52,7 +39,6 @@ public class IngestaController {
         }
     }
 
-    /** Estado de la ingesta para polling del front. 204 si nunca se ha iniciado una ingesta. */
     @GetMapping("/dataset/cargar/estado")
     public ResponseEntity<IngestaEstado> estado() {
         IngestaEstado estado = ingesta.getEstado();
