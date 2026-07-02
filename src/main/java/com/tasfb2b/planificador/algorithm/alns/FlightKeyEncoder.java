@@ -1,11 +1,5 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-/**
- * Codificación compartida de claves long para vuelo-día y aeropuerto-día.
- *
- * Formato: bits [63..20] = índice de arista o nodo, bits [19..0] = día epoch.
- * DAY_BITS=20 soporta hasta día 1,048,575 (año ~4880), suficiente para el horizonte del sistema.
- */
 public final class FlightKeyEncoder {
 
     public static final int  DAY_BITS = 20;

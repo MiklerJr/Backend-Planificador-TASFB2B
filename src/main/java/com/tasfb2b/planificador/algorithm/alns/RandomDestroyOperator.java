@@ -7,15 +7,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
-/**
- * Operador de destrucción puramente aleatorio. No toma en cuenta calidad ni
- * congestión — su rol es <b>diversificar</b> la búsqueda del ALNS, abriendo
- * vecindarios que los operadores informados ({@link CapacityDestroyOperator},
- * {@link WorstRouteDestroyOperator}) ignorarían.
- *
- * <p>Útil cuando los pesos adaptativos hacen que un operador "informado" tome
- * el control y la búsqueda quede atrapada en un mínimo local.
- */
 public class RandomDestroyOperator implements DestroyOperator {
 
     private Random rng = new Random();

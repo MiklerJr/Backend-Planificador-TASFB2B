@@ -20,14 +20,6 @@ public class CapacityDestroyOperator implements DestroyOperator {
         if (rng != null) this.rng = rng;
     }
 
-    /**
-     * Selecciona lotes para destruir siguiendo esta prioridad:
-     *  1. Lotes tardados (SLA incumplido) — siempre se destruyen para intentar mejorarlos.
-     *  2. Selección aleatoria del resto hasta alcanzar (factor × total).
-     *
-     * IMPORTANTE: NO limpia las rutas aquí. AlgorithmALNS llama a releaseFromBlock()
-     * (que necesita la ruta intacta) y luego clearRoute() en el orden correcto.
-     */
     @Override
     public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
         List<LuggageBatch> all     = solution.getBatches();

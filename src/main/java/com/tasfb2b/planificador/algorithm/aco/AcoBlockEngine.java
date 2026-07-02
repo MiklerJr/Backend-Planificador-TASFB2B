@@ -23,21 +23,6 @@ import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 
-/**
- * Via de produccion del motor ACO.
- *
- * <p><b>ACO padre: asignacion global del bloque.</b> Este motor decide en que
- * orden atender los batches y cual ruta candidata confirmar para cada uno,
- * maximizando cumplimiento SLA y reduciendo presion sobre capacidad.
- *
- * <p><b>Dijkstra hijo: generacion de rutas factibles.</b> El padre consulta a
- * {@link GreedyRepairOperator#generarCandidatosRuta} para obtener rutas con el
- * mismo modelo temporal/capacidad del ALNS: flight-day, airport-day, vuelos
- * cancelados, conexion minima, destino final, horizonte 3 dias y SLA.
- *
- * <p>El front no consume esta jerarquia; solo recibe el resultado final en el
- * mismo {@code SimulacionResponse} de siempre.
- */
 @Slf4j
 @Component
 public class AcoBlockEngine {
@@ -51,17 +36,10 @@ public class AcoBlockEngine {
     private static final double BASE_PHEROMONE_BOOST = 2.0;
     private static final double PHEROMONE_MIN = 0.10;
     private static final double PHEROMONE_MAX = 20.0;
-    // Política congestión/holgura.
     private static final double RESERVA_BASE = 0.15;              // colchón en vuelos para flexibles
-    // La reserva de almacén-día de hub (escalas overnight) es configurable
-    // (planificador.storage-aware.reserva-almacen-base) → se lee de props en seleccionarRuta.
     private static final double UMBRAL_CONGESTION_DEFER = 2.0;    // ruta "cara" en congestión
     private static final long   MARGEN_DEFER_MIN = 1440L;         // solo diferir si slack > 24h (urgentes nunca)
     private static final int    GROUP_ROUTE_CANDIDATES = 5;       // más candidatos por grupo → más diversidad de congestión
-    // Admisión just-in-time (diferir envíos flexibles bajo congestión) DESACTIVADA: diferir bajo
-    // congestión creciente acaba no readmitiendo a tiempo (infla el backlog y fuga los SLA de 48h
-    // sin que falte capacidad). Se conserva el código gateado por si se ata a una garantía de
-    // readmisión. La selección y la reserva en vuelos sí se mantienen.
     private static final boolean ENABLE_J3_DEFER = false;
 
     private final PlanificadorProperties props;
@@ -71,13 +49,6 @@ public class AcoBlockEngine {
         this.props = props;
     }
 
-    /**
-     * Procesa el lote {@code batches} (datos del bloque + pendientes del backlog)
-     * con ACO padre. Asigna ruta, departures y cumpleSLA a cada batch que queda
-     * seleccionado en la mejor solucion encontrada.
-     *
-     * @return numero de batches enrutados.
-     */
     public int procesar(Graph graph,
                          GreedyRepairOperator enrutador,
                          List<LuggageBatch> batches,
@@ -95,11 +66,6 @@ public class AcoBlockEngine {
         return procesar(graph, enrutador, batches, blockFlight, blockAirport, rng, 0L);
     }
 
-    /**
-     * Variante con cota dura de tiempo (Ta). Si el presupuesto se agota, se
-     * confirma la mejor solucion parcial encontrada; los batches no asignados
-     * quedan {@code clearRoute() + cumpleSLA=false}, igual que antes.
-     */
     public int procesar(Graph graph,
                          GreedyRepairOperator enrutador,
                          List<LuggageBatch> batches,
@@ -113,8 +79,6 @@ public class AcoBlockEngine {
         ConfigACO cfg = configurar(batches.size());
         List<LuggageBatch> base = ordenarPorUrgencia(batches);
 
-        // La clave de feromona por batch es invariante durante toda la
-        // corrida; la calculamos una sola vez y la reusamos en el bucle caliente.
         Map<LuggageBatch, String> batchKeys = new IdentityHashMap<>(base.size() * 2);
         for (LuggageBatch b : base) batchKeys.put(b, batchKey(b));
 
@@ -130,9 +94,6 @@ public class AcoBlockEngine {
         int sinMejora = 0;
         int solucionesEvaluadas = 0;
 
-        // J3: envíos diferidos por admisión just-in-time (flexibles cuya mejor ruta es
-        // cara en congestión y aún tienen holgura amplia). Se excluyen del pool de
-        // hormigas para que el ACO no revierta el diferimiento (vuelven por el backlog).
         Set<LuggageBatch> diferidos = Collections.newSetFromMap(new IdentityHashMap<>());
         SolucionBloque baseDeterministica = construirSolucionBase(
                 enrutador, base, blockFlight, blockAirport, routeCache, stats, deadline, batchKeys, diferidos);
@@ -180,10 +141,6 @@ public class AcoBlockEngine {
         int onTime = 0;
         if (mejor != null) {
             for (Asignacion asignacion : mejor.asignaciones) {
-                // Politica de dominio (F1): no confirmar entregas tardias. Una ruta
-                // que no cumple SLA se difiere — el batch queda sinRuta (clearRoute
-                // ya aplicado arriba) y vuelve al backlog para reintentarse mientras
-                // le quede tiempo; solo "vence" al pasar su deadline (readyTime+SLA).
                 if (!asignacion.route.isCumpleSLA()) continue;
                 enrutador.aplicarCandidatoRuta(asignacion.batch, asignacion.route);
                 enrutador.aplicarCandidatoBloque(asignacion.batch, asignacion.route, blockFlight, blockAirport);
@@ -194,10 +151,6 @@ public class AcoBlockEngine {
 
         long elapsedMs = (System.nanoTime() - inicio) / 1_000_000L;
         int sinRuta = batches.size() - enrutados;
-        // Diagnóstico del cuello throughput/Ta: a DEBUG por bloque (la consola ya muestra la
-        // línea del servicio), promovido a INFO cada 50 bloques para ver en el onset si dominan
-        // los Dijkstra (dijkstraCalls) vs los hits de caché (cacheHits) y el t=ms. Ayuda a
-        // decidir si el pre-warm sube el techo.
         if (log.isInfoEnabled() && ++diagSeq % 50 == 0) {
             log.info("ACO padre bloque batches={} enrutados={} onTime={} sinRuta={} soluciones={} completas={} cacheHits={} cacheRejects={} dijkstraCalls={} t={}ms",
                     batches.size(), enrutados, onTime, sinRuta, solucionesEvaluadas, stats.solucionesCompletas,
@@ -210,19 +163,8 @@ public class AcoBlockEngine {
         return enrutados;
     }
 
-    /**
-     * Orden base determinista. El ACO padre puede apartarse de este orden dentro
-     * de cada hormiga, pero partir de urgencia mejora la primera solucion.
-     */
-    // Visible a nivel de paquete para pruebas del orden por deadline (G1).
     List<LuggageBatch> ordenarPorUrgencia(List<LuggageBatch> batches) {
         List<LuggageBatch> copia = new ArrayList<>(batches);
-        // G1: ordenar por DEADLINE ABSOLUTO (readyTime + SLA), no por horas de SLA.
-        // Asi un envio viejo reintentado desde el backlog (mismo SLA, readyTime
-        // antiguo) tiene deadline mas cercano y sube de prioridad conforme se acerca
-        // su vencimiento, evitando que los envios de SLA largo queden postergados
-        // indefinidamente (inanicion). Misma fuente de orden para la base y el
-        // frontier de las hormigas.
         copia.sort(Comparator
                 .comparingLong(AcoBlockEngine::deadlineEpochMin)
                 .thenComparing(Comparator.comparingInt(LuggageBatch::getQuantity).reversed())
@@ -231,7 +173,6 @@ public class AcoBlockEngine {
         return copia;
     }
 
-    /** Deadline absoluto del envio en epoch-min: {@code readyTime + SLA}. */
     private static long deadlineEpochMin(LuggageBatch batch) {
         return GreedyRepairOperator.toEpochMinPublic(batch.getReadyTime())
                 + (long) batch.getSlaLimitHours() * 60L;
@@ -239,11 +180,6 @@ public class AcoBlockEngine {
 
     private ConfigACO configurar(int batchCount) {
         ConfigACO cfg = new ConfigACO();
-        // Con las hormigas ya abaratadas, el límite real de
-        // búsqueda debe ser el deadline Ta, no el tope de iteraciones. Subimos los
-        // topes (≈×3) para aprovechar el presupuesto sobrante en bloques con
-        // holgura; maxNoImprovement sigue cortando temprano cuando ya convergió,
-        // preservando el warm-up rápido y evitando quemar wall-clock.
         if (batchCount > 100) {
             cfg.antCount = 8;
             cfg.iterations = 54;
@@ -276,14 +212,6 @@ public class AcoBlockEngine {
         Map<Long, Integer> simAirport = new HashMap<>(blockAirport);
         List<Asignacion> asignaciones = new ArrayList<>();
 
-        // Agrupar los envíos por (origen, destino, hora, SLA). Como `base`
-        // ya viene ordenada por deadline, un LinkedHashMap conserva ese orden
-        // de grupos → se respeta la prioridad por vencimiento. Se resuelven las rutas
-        // UNA vez por grupo (sobre un representante) y se reparte la demanda del grupo
-        // con relleno por capacidad, colapsando O(envíos) → O(grupos). Cada envío se
-        // valida barato con rutaSirveParaBatch (temporal + SLA + capacidad para SU
-        // readyTime/cantidad), sin re-materializar; si ninguna ruta del grupo le sirve,
-        // se recalcula solo para él. F1 se mantiene: solo se confirman rutas on-time.
         Map<String, List<LuggageBatch>> grupos = new LinkedHashMap<>();
         for (LuggageBatch batch : base) {
             grupos.computeIfAbsent(groupKey(batch), k -> new ArrayList<>()).add(batch);
@@ -292,8 +220,6 @@ public class AcoBlockEngine {
         for (List<LuggageBatch> grupo : grupos.values()) {
             if (System.nanoTime() >= deadline) break;
 
-            // Representante = mayor cantidad: si sus rutas on-time tienen capacidad,
-            // los envíos menores del grupo también caben (menos recálculos).
             LuggageBatch rep = grupo.get(0);
             for (LuggageBatch b : grupo) {
                 if (b.getQuantity() > rep.getQuantity()) rep = b;
@@ -304,9 +230,6 @@ public class AcoBlockEngine {
             for (LuggageBatch batch : grupo) {
                 if (System.nanoTime() >= deadline) break;
 
-                // J1: entre las rutas on-time que caben, elegir la de MENOR costo de
-                // congestión escalado por holgura (no la más rápida). Un envío flexible
-                // cede los vuelos escasos; uno urgente toma la ruta directa.
                 RouteCandidate elegida = seleccionarRuta(enrutador, batch, rutasGrupo, simFlight, simAirport);
                 if (elegida == null) {
                     // Ninguna ruta del grupo le sirve: recomputar para este envío.
@@ -316,10 +239,6 @@ public class AcoBlockEngine {
                 }
                 if (elegida == null) continue;   // sinRuta → se difiere al backlog
 
-                // J3: admisión just-in-time — si el envío es flexible (holgura > 24h, los
-                // urgentes nunca entran aquí) y su mejor ruta es CARA en congestión, no lo
-                // confirmamos este bloque: vuelve al backlog y, al acercarse su deadline (G1),
-                // se enrutará. Así libera los vuelos escasos para los urgentes de ahora.
                 if (ENABLE_J3_DEFER
                         && elegida.getSlackMin() > MARGEN_DEFER_MIN
                         && elegida.getScarcityCost() > UMBRAL_CONGESTION_DEFER) {
@@ -336,22 +255,14 @@ public class AcoBlockEngine {
         return new SolucionBloque(asignaciones, base.size());
     }
 
-    /**
-     * J1 — elige, entre las rutas on-time que caben, la de menor {@link #costoSeleccion}.
-     * Devuelve null si ninguna sirve (el envío se difiere al backlog).
-     */
     private RouteCandidate seleccionarRuta(GreedyRepairOperator enrutador,
                                            LuggageBatch batch,
                                            List<RouteCandidate> candidatos,
                                            Map<Long, Integer> simFlight,
                                            Map<Long, Integer> simAirport) {
-        // J4 + L2/P: 1ª pasada respetando la reserva (colchón en vuelos Y en almacén-día de hub).
-        // La reserva de almacén es configurable (planificador.storage-aware.reserva-almacen-base).
         double reservaAlmacen = props.getStorageAware().getReservaAlmacenBase();
         RouteCandidate best = mejorPorCosto(enrutador, batch, candidatos, simFlight, simAirport,
                 RESERVA_BASE, reservaAlmacen);
-        // Invariante (anti-J3/K1): si la reserva no deja ninguna ruta, se levanta para este
-        // envío (la reserva nunca causa un sinRuta evitable).
         if (best == null && (RESERVA_BASE > 0.0 || reservaAlmacen > 0.0)) {
             best = mejorPorCosto(enrutador, batch, candidatos, simFlight, simAirport, 0.0, 0.0);
         }
@@ -377,19 +288,12 @@ public class AcoBlockEngine {
         return best;
     }
 
-    /**
-     * J1 — costo de elección = congestión de la ruta escalada por la HOLGURA del envío
-     * + un desempate diminuto por tiempo. Flexible (slack alto) ⇒ penaliza fuerte la
-     * congestión (se desvía a capacidad libre); urgente (slack bajo) ⇒ el término de
-     * congestión se apaga y domina el tiempo (toma la ruta rápida/directa).
-     */
     private double costoSeleccion(LuggageBatch batch, RouteCandidate r) {
         double slaMin = Math.max(1.0, batch.getSlaLimitHours() * 60.0);
         double slackRatio = Math.max(0.0, Math.min(1.0, r.getSlackMin() / slaMin));
         return r.getScarcityCost() * slackRatio + r.getTransitMin() * 1e-4;
     }
 
-    /** Clave de agrupación de demanda: origen, destino, hora y SLA (sin cantidad). */
     private String groupKey(LuggageBatch batch) {
         long readyBucket = batch.getReadyTime() == null
                 ? 0L
@@ -414,11 +318,6 @@ public class AcoBlockEngine {
         PendingPool pendientes = new PendingPool(base);
         List<Asignacion> asignaciones = new ArrayList<>();
 
-        // Dentro de una hormiga las feromonas son constantes y la
-        // capacidad simulada solo decrece, así que la evaluación de un batch es
-        // reutilizable hasta que una asignación confirmada toque alguno de sus
-        // vuelos/almacenes. Cacheamos por identidad de batch e invalidamos solo
-        // las opciones cuyas claves intersecan la asignación recién aplicada.
         Map<LuggageBatch, BatchOption> evalCache = new IdentityHashMap<>(base.size() * 2);
 
         while (!pendientes.isEmpty() && System.nanoTime() < deadline) {
@@ -446,8 +345,6 @@ public class AcoBlockEngine {
             asignaciones.add(new Asignacion(elegida.batch, elegida.route, elegida.key, elegida.batchKey));
             pendientes.remove(opcion.ref);
 
-            // Invalidar evaluaciones afectadas: la asignación confirmada es lo
-            // único que cambió la capacidad de este recorrido de hormiga.
             evalCache.remove(elegida.batch);
             Set<Long> tocadas = enrutador.clavesOcupadas(elegida.route, elegida.batch);
             if (!tocadas.isEmpty() && !evalCache.isEmpty()) {
@@ -458,11 +355,6 @@ public class AcoBlockEngine {
         return new SolucionBloque(asignaciones, base.size());
     }
 
-    /**
-     * ACO padre: selecciona el siguiente batch con feromona + una heuristica
-     * barata. Solo despues consulta al Dijkstra hijo para rutas factibles del
-     * batch elegido, evitando gastar Ta evaluando rutas para todo el frontier.
-     */
     private List<BatchOption> evaluarFrontier(GreedyRepairOperator enrutador,
                                               PendingPool pendientes,
                                               Map<Long, Integer> simFlight,
@@ -479,8 +371,6 @@ public class AcoBlockEngine {
         for (BatchRef ref : pendientes.frontier(REGRET_FRONTIER, random)) {
             BatchOption cached = evalCache.get(ref.batch);
             if (cached != null) {
-                // Reuso: la capacidad de los vuelos/almacenes de este batch no
-                // cambió desde que se evaluó (de lo contrario se habría invalidado).
                 opciones.add(cached);
                 continue;
             }
@@ -512,7 +402,6 @@ public class AcoBlockEngine {
         return opciones;
     }
 
-    /** Unión de las claves vuelo-día/aeropuerto-día de todas las rutas candidatas de un batch. */
     private Set<Long> clavesDeRutas(GreedyRepairOperator enrutador, LuggageBatch batch, List<RouteCandidate> rutas) {
         Set<Long> keys = new HashSet<>(rutas.size() * 6);
         for (RouteCandidate ruta : rutas) {
@@ -689,9 +578,6 @@ public class AcoBlockEngine {
         if (c != 0) return c;
         c = Long.compare(Math.max(0L, -a.getSlackMin()), Math.max(0L, -b.getSlackMin()));
         if (c != 0) return c;
-        // J1: entre rutas on-time, preferir la de MENOR congestión (preserva capacidad
-        // escasa). Así el conjunto que se conserva tras truncar incluye rutas
-        // descongestionadas, no solo las más rápidas.
         c = Double.compare(a.getScarcityCost(), b.getScarcityCost());
         if (c != 0) return c;
         c = Double.compare(a.getPressure(), b.getPressure());
@@ -749,11 +635,6 @@ public class AcoBlockEngine {
                 + batch.getSlaLimitHours();
     }
 
-    /**
-     * Clave de feromona por (batch, ruta). Reusa la firma cacheada de la ruta
-     * ({@link RouteCandidate#signature()}) en vez de reconstruir un StringBuilder
-     * sobre las aristas en cada decisión del bucle caliente.
-     */
     private String pheromoneKey(String batchKey, RouteCandidate route) {
         return batchKey + '#' + route.signature();
     }
@@ -831,7 +712,6 @@ public class AcoBlockEngine {
         final double heuristic;
         final double weight;
         final String batchKey;
-        /** Claves vuelo-día/aeropuerto-día que tocan las rutas candidatas (para invalidar el cache de hormiga). */
         final Set<Long> occupiedKeys;
 
         BatchOption(BatchRef ref,

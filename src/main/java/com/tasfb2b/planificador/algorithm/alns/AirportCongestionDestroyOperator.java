@@ -13,22 +13,9 @@ import java.util.Random;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * Operador de destrucción enfocado en aeropuertos saturados.
- *
- * <p>Identifica los top-N aeropuertos más cargados en la solución actual
- * (suma de cantidades de batches que pasan por ellos como escala o destino)
- * y selecciona batches cuyas rutas pasan por al menos uno de ellos.
- * El ALNS al reasignar puede encontrar rutas alternativas que aprovechen
- * aeropuertos menos saturados, retrasando el colapso.
- *
- * <p>Complementa a {@link CapacityDestroyOperator} (foco en SLA) y
- * {@link WorstRouteDestroyOperator} (foco en tiempo de tránsito) atacando
- * la dimensión de capacidad de almacenes — clave para el escenario 3.
- */
+
 public class AirportCongestionDestroyOperator implements DestroyOperator {
 
-    /** Cuántos aeropuertos congestionados considerar. */
     private static final int TOP_AIRPORTS = 5;
 
     private Random rng = new Random();

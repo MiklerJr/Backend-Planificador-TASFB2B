@@ -19,10 +19,6 @@ public class Ant {
     //Reloj interno de la hormiga
     public java.time.LocalDateTime horaLlegadaActual = null;
 
-    // visited() O(1) por bit indexado en node.idx. Si algún nodo viene sin idx
-    // (idx < 0, escenarios de tests heredados que construyen Graph a mano), se
-    // usa el HashSet como respaldo. En producción el GreedyRepairOperator asigna
-    // idx a todos los nodos y nunca se cae al fallback.
     private final BitSet visitedIdx = new BitSet();
     private HashSet<Node> visitedFallback;
 

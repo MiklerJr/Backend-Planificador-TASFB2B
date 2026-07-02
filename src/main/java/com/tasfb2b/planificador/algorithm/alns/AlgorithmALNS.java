@@ -11,24 +11,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-/**
- * Adaptive Large Neighbourhood Search (ALNS) con Simulated Annealing.
- *
- * La "A" (Adaptativa) se implementa mediante pesos de selección que se actualizan
- * cada {@code segmentLength} iteraciones según el rendimiento de cada operador:
- *
- *   w_i ← (1 − r) · w_i + r · (score_i / max(1, uses_i))
- *
- * Recompensas por iteración:
- *   σ1 = 3 — nueva solución global mejor
- *   σ2 = 2 — mejora sobre la solución actual
- *   σ3 = 1 — aceptada por SA (peor, pero pasa el criterio de Boltzmann)
- *   σ4 = 0 — rechazada
- *
- * Operadores de destroy disponibles (seleccionados por ruleta proporcional a pesos):
- *   0 → CapacityDestroyOperator  (tardadas primero + aleatorio)
- *   1 → WorstRouteDestroyOperator (rutas de mayor tiempo de tránsito)
- */
 @Slf4j
 public class AlgorithmALNS {
 
@@ -40,12 +22,6 @@ public class AlgorithmALNS {
     public int    minBlockSize  = 3;      // bloques menores no ejecutan ALNS
     public int    segmentLength = 3;      // iters entre actualizaciones de pesos
 
-    /**
-     * Presupuesto de tiempo máximo para {@link #run(int)}. Si el algoritmo
-     * supera este límite, aborta antes de completar las iteraciones.
-     * Sirve para garantizar Ta &lt; Sa en bloques grandes (cerca del colapso).
-     * Por defecto sin límite ({@link Long#MAX_VALUE}).
-     */
     public long   tiempoLimiteMs = Long.MAX_VALUE;
 
     // ── Parámetros adaptativos (Ropke & Pisinger 2006) ───────────────────────
@@ -73,15 +49,8 @@ public class AlgorithmALNS {
 
     private double temperature;
 
-    /** Fuente de aleatoriedad (selección de operador, criterio SA). Reproducible si se setea via {@link #setRandom}. */
     private Random rng = new Random();
 
-    // ────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Inyecta una fuente de aleatoriedad explícita para reproducibilidad.
-     * También propaga el {@link Random} a los operadores destroy (shuffle).
-     */
     public void setRandom(Random rng) {
         if (rng == null) return;
         this.rng = rng;
@@ -92,15 +61,6 @@ public class AlgorithmALNS {
 
     // ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Constructor heredado: usa los hiperparámetros default hardcoded en los campos.
-     *
-     * @param graph         grafo aeropuertos/vuelos
-     * @param enrutador     repair operator compartido (contiene ocupación global)
-     * @param batches       lotes ya enrutados por la fase greedy inicial
-     * @param blockFlight   ocupación de vuelos del bloque tras la fase greedy
-     * @param blockAirport  ídem para aeropuertos
-     */
     public AlgorithmALNS(Graph graph,
                           GreedyRepairOperator enrutador,
                           List<LuggageBatch> batches,
@@ -109,10 +69,6 @@ public class AlgorithmALNS {
         this(graph, enrutador, batches, blockFlight, blockAirport, null);
     }
 
-    /**
-     * Constructor con configuración externalizada. Si {@code props} no es null,
-     * sobrescribe los hiperparámetros default y los pesos del objetivo en la solución.
-     */
     public AlgorithmALNS(Graph graph,
                           GreedyRepairOperator enrutador,
                           List<LuggageBatch> batches,
@@ -134,8 +90,6 @@ public class AlgorithmALNS {
         this.enrutador   = enrutador;
         this.temperature = initialTemp;
 
-        // Lista de operadores destroy: dinámica desde props si está disponible,
-        // o el conjunto heredado por defecto (capacity + worst-route).
         if (props != null && props.getAlns().getOperadoresDestroy() != null
                 && !props.getAlns().getOperadoresDestroy().isEmpty()) {
             this.destroyOps = construirOperadoresDestroy(props.getAlns().getOperadoresDestroy(), graph);
@@ -150,9 +104,8 @@ public class AlgorithmALNS {
         this.weights = new double[n];
         this.scores  = new double[n];
         this.uses    = new int[n];
-        Arrays.fill(weights, 1.0); // pesos iniciales iguales → selección equiprobable
+        Arrays.fill(weights, 1.0);
 
-        // Solución inicial = resultado de la fase greedy. Aplicar pesos del objetivo si procede.
         if (props != null) {
             this.currentSolution = new AlnsSolution(batches,
                     props.getObjetivo().getPesoTransit(),
@@ -169,8 +122,6 @@ public class AlgorithmALNS {
         this.bestFlight   = new HashMap<>(currentFlight);
         this.bestAirport  = new HashMap<>(currentAirport);
     }
-
-    // ────────────────────────────────────────────────────────────────────────
 
     public void run(int maxIterations) {
         if (currentSolution.getBatches().size() < minBlockSize) return;
@@ -202,9 +153,6 @@ public class AlgorithmALNS {
             Map<Long,Integer> cAirport = new HashMap<>(currentAirport);
 
             // ── 3. Destrucción ────────────────────────────────────────────────
-            // destroy() devuelve los lotes seleccionados con sus rutas INTACTAS.
-            // Liberamos la capacidad primero (la ruta debe estar presente),
-            // luego limpiamos la ruta para que repair pueda asignar una nueva.
             List<LuggageBatch> unassigned =
                     destroyOps.get(selectedIdx).destroy(candidate, destroyFactor);
 
@@ -252,9 +200,6 @@ public class AlgorithmALNS {
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-
-    /** Ruleta proporcional a los pesos actuales. */
     private int selectDestroyOp() {
         double total = 0;
         for (double w : weights) total += w;
@@ -267,11 +212,6 @@ public class AlgorithmALNS {
         return weights.length - 1;
     }
 
-    /**
-     * Actualiza pesos según Ropke & Pisinger (2006):
-     *   w_i ← (1 − r) · w_i + r · (score_i / max(1, uses_i))
-     * Luego reinicia contadores del segmento.
-     */
     private void updateWeights() {
         for (int i = 0; i < weights.length; i++) {
             if (uses[i] > 0)
@@ -291,17 +231,6 @@ public class AlgorithmALNS {
     public Map<Long,Integer> getBestBlockFlight()  { return bestFlight;   }
     public Map<Long,Integer> getBestBlockAirport() { return bestAirport;  }
 
-    /**
-     * Construye la lista de operadores destroy a partir de los nombres en
-     * {@code application.yaml}. Los nombres soportados son:
-     * <ul>
-     *   <li>{@code "capacity"} → {@link CapacityDestroyOperator}</li>
-     *   <li>{@code "worst-route"} → {@link WorstRouteDestroyOperator}</li>
-     *   <li>{@code "random"} → {@link RandomDestroyOperator}</li>
-     *   <li>{@code "airport-congestion"} → {@link AirportCongestionDestroyOperator}</li>
-     * </ul>
-     * Nombres desconocidos se ignoran con un WARNING.
-     */
     private static List<DestroyOperator> construirOperadoresDestroy(List<String> nombres, Graph graph) {
         java.util.ArrayList<DestroyOperator> ops = new java.util.ArrayList<>(nombres.size());
         for (String n : nombres) {

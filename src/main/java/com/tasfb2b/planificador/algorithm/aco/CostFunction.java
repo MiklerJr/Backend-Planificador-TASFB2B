@@ -29,11 +29,6 @@ public class CostFunction {
     public static final int TIEMPO_DESTINO_FINAL = 10;   // minutos antes de recoger en destino
 
     // Contexto del envío actual (se setea antes de correr el ACO)
-
-    /**
-     * Información del envío que el ACO está planificando.
-     * Setear estos valores antes de llamar a run() en AlgorithmACO.
-     */
     public static class EnvioContext {
         public String origenICAO;       // aeropuerto donde se origina (del nombre del archivo)
         public String destinoICAO;      // campo dest del archivo
@@ -68,19 +63,6 @@ public class CostFunction {
     }
 
     // 1. COSTO DE UN EDGE (se asigna a edge.cost al cargar los datos)
-
-    /**
-     * Calcula el costo de un edge individual para un envío dado.
-     * Asignar a edge.cost antes de correr el ACO.
-     *
-     * Componentes:
-     *  - Duración real del vuelo (minutos), manejando cruces de medianoche
-     *  - Penalización si el edge no tiene capacidad suficiente para el envío
-     *
-     * @param edge   arista del grafo (vuelo directo entre dos aeropuertos)
-     * @param envio  contexto del envío actual
-     * @return       costo del tramo (double, minimizar)
-     */
     public static double calcularCostoEdge(Edge edge, EnvioContext envio) {
 
         // --- Duración real del vuelo en minutos ---
@@ -97,20 +79,6 @@ public class CostFunction {
     }
 
     // 2. COSTO TOTAL DE LA RUTA (evalúa la solución completa de una hormiga)
-
-    /**
-     * Evalúa el costo total de la ruta construida por una hormiga.
-     * Usar para comparar hormigas y actualizar feromonas.
-     *
-     * ant.totalCost ya acumula edge.cost durante buildSolution,
-     * pero este método añade los componentes que dependen de la ruta completa:
-     * penalización SLA y tiempos de espera entre conexiones.
-     *
-     * @param ant    hormiga con su path construido
-     * @param edges  lista de edges del grafo (para encontrar los vuelos usados)
-     * @param envio  contexto del envío
-     * @return       costo total ajustado (reemplaza ant.totalCost para comparación)
-     */
     public static double calcularCostoRuta(Ant ant, List<Edge> edges, EnvioContext envio) {
 
         if (ant.path.size() < 2) return Double.MAX_VALUE; // ruta inválida
@@ -248,25 +216,6 @@ public class CostFunction {
     }
 
     // 3. HEURÍSTICA η — reemplaza 1/(e.cost+1) en selectEdge()
-
-    /**
-     * Heurística η(edge) para la selección probabilística del ACO.
-     *
-     * Reemplaza el 1.0 / (e.cost + 1) genérico de selectEdge() con uno
-     * que considera la ocupación del vuelo y el tiempo real.
-     *
-     * En AlgorithmACO.selectEdge() cambiar:
-     *   double heuristic = Math.pow(1.0 / (e.cost + 1), config.beta);
-     * por:
-     *   double heuristic = Math.pow(CostFunction.heuristica(e, envioContext), config.beta);
-     *
-     * @param edge  arista candidata
-     * @return      valor η > 0 (mayor = más atractivo)
-     */
-    /**
-     * Heurística η(edge) MEJORADA para la selección probabilística del ACO.
-     * Considera: Duración de vuelo, Capacidad del avión, y Capacidad del Almacén destino.
-     */
     public static double heuristica(Edge edge, EnvioContext envio, Ant hormiga) {
 
         // 1. RESTRICCIÓN DURA: ¿Tengo los 10 min de escala?
@@ -303,12 +252,6 @@ public class CostFunction {
     }
 
     // 4. SEMÁFORO DE OCUPACIÓN (para visualizador)
-    /**
-     * Color semáforo de un edge según su ocupación actual.
-     * Los umbrales UMBRAL_VERDE y UMBRAL_AMBAR son parámetros configurables.
-     *
-     * @return "VERDE", "AMBAR" o "ROJO"
-     */
     public static String semaforoOcupacion(Edge edge) {
         double ocup = (double) edge.usedCapacity / edge.capacity;
         if (ocup <= UMBRAL_VERDE) return "VERDE";
@@ -317,12 +260,6 @@ public class CostFunction {
     }
 
     // Helpers privados
-    /**
-     * Parsea "HH:MM" o "yyyy-MM-ddTHH:MM[:ss]" a minutos totales desde 00:00.
-     * Acepta el {@code toString()} de un {@code LocalDateTime} para permitir
-     * que los edges del flujo ALNS (con fecha real) y los del flujo ACO
-     * (solo hora) se procesen con la misma función.
-     */
     private static int parsearMinutos(String horaStr) {
         if (horaStr == null) return 0;
         // Si viene de LocalDateTime.toString() ("2026-01-01T19:00") tomar la parte
@@ -333,11 +270,6 @@ public class CostFunction {
         return Integer.parseInt(partes[0]) * 60 + Integer.parseInt(partes[1]);
     }
 
-    /**
-     * Duración real del vuelo en minutos.
-     * Maneja correctamente los vuelos que cruzan medianoche.
-     * Ejemplo: salida 22:45 → llegada 01:01 = 136 min (no -1304)
-     */
     public static double calcularDuracionMinutos(String salida, String llegada) {
         int minSalida  = parsearMinutos(salida);
         int minLlegada = parsearMinutos(llegada);
@@ -353,18 +285,10 @@ public class CostFunction {
         return d.toMinutes();
     }
 
-    /**
-     * Versión pública de {@link #parsearMinutos(String)} para que otros componentes
-     * (ej. {@code PlanificadorService}) puedan parsear de forma consistente.
-     */
     public static int hhmmAMinutos(String horaStr) {
         return parsearMinutos(horaStr);
     }
 
-    /**
-     * Suma los tiempos de espera entre vuelos consecutivos de la ruta.
-     * Si la conexión cruza medianoche, suma correctamente.
-     */
     private static double calcularTiempoEsperaTotal(List<Edge> edgesRuta) {
         double espera = 0.0;
         for (int i = 0; i < edgesRuta.size() - 1; i++) {
@@ -405,9 +329,6 @@ public class CostFunction {
         return (int) java.time.temporal.ChronoUnit.DAYS.between(inicio.toLocalDate(), fin.toLocalDate());
     }
 
-    /**
-     * Reconstruye la lista de edges usados a partir del path de nodos de la hormiga.
-     */
     private static List<Edge> reconstruirEdgesUsados(List<Node> path, List<Edge> todosEdges) {
         List<Edge> usados = new java.util.ArrayList<>();
         for (int i = 0; i < path.size() - 1; i++) {
@@ -421,10 +342,6 @@ public class CostFunction {
         return usados;
     }
 
-    /**
-     * Factor multiplicador según el semáforo de ocupación del edge.
-     * Vuelo lleno → prácticamente bloqueado para la heurística.
-     */
     private static double factorSemaforo(Edge edge, int demanda) {
         double ocup = (double)(edge.usedCapacity + demanda) / edge.capacity;
         if (ocup > 1.0)         return 0.0001; // sin capacidad: bloqueado
@@ -433,22 +350,15 @@ public class CostFunction {
         return 1.0;                             // verde
     }
 
-    /**
-     * Determina el continente de un aeropuerto por su prefijo ICAO.
-     * Basado en los aeropuertos reales de los archivos:
-     *   América → S* (SKBO, SEQM, SVMI, SBBR, SPIM, SLLP, SCEL, SABE, SGAS, SUAA)
-     *   Europa  → E*, L*, UMMS, UBBB
-     *   Asia    → O*, VIDP
-     */
     public static String getContinente(String icao) {
         if (icao == null || icao.isEmpty()) return "DESCONOCIDO";
         switch (icao.charAt(0)) {
             case 'S': return "AMERICA";
             case 'E': return "EUROPA";
             case 'L': return "EUROPA";
-            case 'U': return "EUROPA"; // UMMS (Minsk), UBBB (Bakú)
+            case 'U': return "EUROPA";
             case 'O': return "ASIA";
-            case 'V': return "ASIA";   // VIDP (Delhi)
+            case 'V': return "ASIA";
             default:  return "DESCONOCIDO";
         }
     }
