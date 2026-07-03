@@ -4,17 +4,17 @@ import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandi
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 final class Decision {
-    final LoteEnvio batch;
-    final RutaCandidata route;
-    final String key;
-    final String batchKey;
-    final double heuristic;
+    final LoteEnvio lote;
+    final RutaCandidata ruta;
+    final String clave;
+    final String claveLote;
+    final double heuristica;
 
-    Decision(LoteEnvio batch, RutaCandidata route, String key, String batchKey, double heuristic) {
-        this.batch = batch;
-        this.route = route;
-        this.key = key;
-        this.batchKey = batchKey;
-        this.heuristic = heuristic;
+    Decision(LoteEnvio lote, RutaCandidata ruta, String clave, String claveLote, double heuristica) {
+        this.lote = lote;
+        this.ruta = ruta;
+        this.clave = clave;
+        this.claveLote = claveLote;
+        this.heuristica = heuristica;
     }
 }

@@ -20,7 +20,7 @@ import java.util.Set;
 final class GeneradorRutas {
 
     static final long CACHE_BUCKET_MIN = 60L;
-    private static final int MAX_CACHE_PATHS_PER_KEY = 8;
+    private static final int MAX_RUTAS_CACHE_POR_CLAVE = 8;
 
     private final OperadorReparacionVoraz enrutador;
     private final CacheCandidatosRuta cache = new CacheCandidatosRuta();
@@ -85,7 +85,7 @@ final class GeneradorRutas {
         private final Map<ClaveCache, RutasCacheadas> cache = new HashMap<>();
 
         List<List<Arista>> get(LoteEnvio batch) {
-            ClaveCache key = ClaveCache.from(batch);
+            ClaveCache key = ClaveCache.desde(batch);
             if (key == null) return List.of();
             RutasCacheadas entry = cache.get(key);
             return entry == null ? List.of() : entry.paths;
@@ -93,22 +93,22 @@ final class GeneradorRutas {
 
         void put(LoteEnvio batch, List<RutaCandidata> candidates) {
             if (candidates == null || candidates.isEmpty()) return;
-            ClaveCache key = ClaveCache.from(batch);
+            ClaveCache key = ClaveCache.desde(batch);
             if (key == null) return;
             RutasCacheadas entry = cache.computeIfAbsent(key, k -> new RutasCacheadas());
             for (RutaCandidata candidate : candidates) {
-                if (candidate.getEdges().isEmpty()) continue;
-                String signature = pathSignature(candidate.getEdges());
+                if (candidate.getAristas().isEmpty()) continue;
+                String signature = pathSignature(candidate.getAristas());
                 if (!entry.signatures.add(signature)) continue;
-                entry.paths.add(List.copyOf(candidate.getEdges()));
-                if (entry.paths.size() >= MAX_CACHE_PATHS_PER_KEY) break;
+                entry.paths.add(List.copyOf(candidate.getAristas()));
+                if (entry.paths.size() >= MAX_RUTAS_CACHE_POR_CLAVE) break;
             }
         }
 
         private static String pathSignature(List<Arista> path) {
             StringBuilder sb = new StringBuilder(path.size() * 6);
             for (Arista edge : path) {
-                sb.append(edge.idx).append(';');
+                sb.append(edge.indice).append(';');
             }
             return sb.toString();
         }
@@ -134,11 +134,11 @@ final class GeneradorRutas {
             this.quantity = quantity;
         }
 
-        static ClaveCache from(LoteEnvio batch) {
-            if (batch == null || batch.getReadyTime() == null) return null;
-            long readyBucket = OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime()) / CACHE_BUCKET_MIN;
-            return new ClaveCache(batch.getOriginCode(), batch.getDestCode(), readyBucket,
-                    batch.getSlaLimitHours(), batch.getQuantity());
+        static ClaveCache desde(LoteEnvio batch) {
+            if (batch == null || batch.getTiempoListo() == null) return null;
+            long readyBucket = OperadorReparacionVoraz.aMinutoEpochPublico(batch.getTiempoListo()) / CACHE_BUCKET_MIN;
+            return new ClaveCache(batch.getCodigoOrigen(), batch.getCodigoDestino(), readyBucket,
+                    batch.getHorasLimiteSla(), batch.getCantidad());
         }
 
         @Override

@@ -31,11 +31,11 @@ import java.util.Set;
 @Component
 public class ColoniaACO {
 
-    private static final double BASE_PHEROMONE_BOOST = 2.0;
+    private static final double IMPULSO_FEROMONA_BASE = 2.0;
     private static final double RESERVA_BASE = 0.15;              // colchón en vuelos para flexibles
     private static final double UMBRAL_CONGESTION_DEFER = 2.0;    // ruta "cara" en congestión
-    private static final long   MARGEN_DEFER_MIN = 1440L;         // solo diferir si slack > 24h (urgentes nunca)
-    private static final int    GROUP_ROUTE_CANDIDATES = 5;       // más candidatos por grupo → más diversidad de congestión
+    private static final long   MARGEN_DIFERIR_MIN = 1440L;         // solo diferir si slack > 24h (urgentes nunca)
+    private static final int    CANDIDATOS_RUTA_GRUPO = 5;       // más candidatos por grupo → más diversidad de congestión
     private static final boolean ENABLE_J3_DEFER = false;
 
     private final PlanificadorProperties props;
@@ -76,7 +76,7 @@ public class ColoniaACO {
         List<LoteEnvio> base = ordenarPorUrgencia(batches);
 
         Map<LoteEnvio, String> batchKeys = new IdentityHashMap<>(base.size() * 2);
-        for (LoteEnvio b : base) batchKeys.put(b, RastroFeromonas.claveBatch(b));
+        for (LoteEnvio b : base) batchKeys.put(b, RastroFeromonas.claveLote(b));
 
         long inicio = System.nanoTime();
         long deadline = tiempoLimiteMs > 0
@@ -102,7 +102,7 @@ public class ColoniaACO {
             mejor = baseDeterministica;
             solucionesEvaluadas++;
             if (baseDeterministica.enrutados == base.size()) stats.solucionesCompletas++;
-            feromonas.depositar(baseDeterministica, cfg.q * BASE_PHEROMONE_BOOST);
+            feromonas.depositar(baseDeterministica, cfg.q * IMPULSO_FEROMONA_BASE);
         }
 
         List<LoteEnvio> baseAnts = base;
@@ -111,10 +111,10 @@ public class ColoniaACO {
             for (LoteEnvio b : base) if (!diferidos.contains(b)) baseAnts.add(b);
         }
 
-        for (int iter = 0; iter < cfg.iterations && System.nanoTime() < deadline; iter++) {
+        for (int iter = 0; iter < cfg.iteraciones && System.nanoTime() < deadline; iter++) {
             boolean huboMejora = false;
 
-            for (int ant = 0; ant < cfg.antCount && System.nanoTime() < deadline; ant++) {
+            for (int ant = 0; ant < cfg.cantidadHormigas && System.nanoTime() < deadline; ant++) {
                 SolucionBloque candidata = hormiga.construir(
                         baseAnts, blockFlight, blockAirport, batchKeys, deadline);
                 solucionesEvaluadas++;
@@ -125,15 +125,15 @@ public class ColoniaACO {
                 }
             }
 
-            feromonas.evaporar(cfg.evaporation);
+            feromonas.evaporar(cfg.evaporacion);
             if (mejor != null) feromonas.depositar(mejor, cfg.q);
 
             sinMejora = huboMejora ? 0 : sinMejora + 1;
-            if (cfg.maxNoImprovement > 0 && sinMejora >= cfg.maxNoImprovement) break;
+            if (cfg.maxSinMejora > 0 && sinMejora >= cfg.maxSinMejora) break;
         }
 
         for (LoteEnvio b : batches) {
-            b.clearRoute();
+            b.limpiarRuta();
             b.setCumpleSLA(false);
         }
 
@@ -141,9 +141,9 @@ public class ColoniaACO {
         int onTime = 0;
         if (mejor != null) {
             for (Asignacion asignacion : mejor.asignaciones) {
-                if (!asignacion.route.isCumpleSLA()) continue;
-                enrutador.aplicarCandidatoRuta(asignacion.batch, asignacion.route);
-                enrutador.aplicarCandidatoBloque(asignacion.batch, asignacion.route, blockFlight, blockAirport);
+                if (!asignacion.ruta.isCumpleSLA()) continue;
+                enrutador.aplicarCandidatoRuta(asignacion.lote, asignacion.ruta);
+                enrutador.aplicarCandidatoBloque(asignacion.lote, asignacion.ruta, blockFlight, blockAirport);
                 enrutados++;
                 onTime++;
             }
@@ -166,36 +166,36 @@ public class ColoniaACO {
     List<LoteEnvio> ordenarPorUrgencia(List<LoteEnvio> batches) {
         List<LoteEnvio> copia = new ArrayList<>(batches);
         copia.sort(Comparator
-                .comparingLong(ColoniaACO::deadlineEpochMin)
-                .thenComparing(Comparator.comparingInt(LoteEnvio::getQuantity).reversed())
-                .thenComparing(LoteEnvio::getOriginCode)
-                .thenComparing(LoteEnvio::getDestCode));
+                .comparingLong(ColoniaACO::fechaLimiteEpochMin)
+                .thenComparing(Comparator.comparingInt(LoteEnvio::getCantidad).reversed())
+                .thenComparing(LoteEnvio::getCodigoOrigen)
+                .thenComparing(LoteEnvio::getCodigoDestino));
         return copia;
     }
 
-    private static long deadlineEpochMin(LoteEnvio batch) {
-        return OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime())
-                + (long) batch.getSlaLimitHours() * 60L;
+    private static long fechaLimiteEpochMin(LoteEnvio batch) {
+        return OperadorReparacionVoraz.aMinutoEpochPublico(batch.getTiempoListo())
+                + (long) batch.getHorasLimiteSla() * 60L;
     }
 
     private ConfiguracionACO configurar(int batchCount) {
         ConfiguracionACO cfg = new ConfiguracionACO();
         if (batchCount > 100) {
-            cfg.antCount = 8;
-            cfg.iterations = 54;
+            cfg.cantidadHormigas = 8;
+            cfg.iteraciones = 54;
         } else if (batchCount > 30) {
-            cfg.antCount = 10;
-            cfg.iterations = 84;
+            cfg.cantidadHormigas = 10;
+            cfg.iteraciones = 84;
         } else {
-            cfg.antCount = 14;
-            cfg.iterations = 108;
+            cfg.cantidadHormigas = 14;
+            cfg.iteraciones = 108;
         }
-        cfg.maxNoImprovement = 8;
+        cfg.maxSinMejora = 8;
         cfg.alpha = 1.0;
         cfg.beta = 2.0;
-        cfg.evaporation = 0.30;
+        cfg.evaporacion = 0.30;
         cfg.q = 100.0;
-        cfg.initialPheromone = 1.0;
+        cfg.feromonaInicial = 1.0;
         return cfg;
     }
 
@@ -214,7 +214,7 @@ public class ColoniaACO {
 
         Map<String, List<LoteEnvio>> grupos = new LinkedHashMap<>();
         for (LoteEnvio batch : base) {
-            grupos.computeIfAbsent(groupKey(batch), k -> new ArrayList<>()).add(batch);
+            grupos.computeIfAbsent(claveGrupo(batch), k -> new ArrayList<>()).add(batch);
         }
 
         for (List<LoteEnvio> grupo : grupos.values()) {
@@ -222,10 +222,10 @@ public class ColoniaACO {
 
             LoteEnvio rep = grupo.get(0);
             for (LoteEnvio b : grupo) {
-                if (b.getQuantity() > rep.getQuantity()) rep = b;
+                if (b.getCantidad() > rep.getCantidad()) rep = b;
             }
             List<RutaCandidata> rutasGrupo = generador.obtenerRutas(
-                    rep, simFlight, simAirport, GROUP_ROUTE_CANDIDATES);
+                    rep, simFlight, simAirport, CANDIDATOS_RUTA_GRUPO);
 
             for (LoteEnvio batch : grupo) {
                 if (System.nanoTime() >= deadline) break;
@@ -234,14 +234,14 @@ public class ColoniaACO {
                 if (elegida == null) {
                     // Ninguna ruta del grupo le sirve: recomputar para este envío.
                     List<RutaCandidata> propias = generador.obtenerRutas(
-                            batch, simFlight, simAirport, GROUP_ROUTE_CANDIDATES);
+                            batch, simFlight, simAirport, CANDIDATOS_RUTA_GRUPO);
                     elegida = seleccionarRuta(enrutador, heuristica, batch, propias, simFlight, simAirport);
                 }
                 if (elegida == null) continue;   // sinRuta → se difiere al backlog
 
                 if (ENABLE_J3_DEFER
-                        && elegida.getSlackMin() > MARGEN_DEFER_MIN
-                        && elegida.getScarcityCost() > UMBRAL_CONGESTION_DEFER) {
+                        && elegida.getHolguraMin() > MARGEN_DIFERIR_MIN
+                        && elegida.getCostoEscasez() > UMBRAL_CONGESTION_DEFER) {
                     diferidos.add(batch);
                     continue;
                 }
@@ -282,7 +282,7 @@ public class ColoniaACO {
         double bestCost = Double.MAX_VALUE;
         for (RutaCandidata r : candidatos) {
             if (!r.isCumpleSLA()) continue;                                  // F1
-            if (!enrutador.rutaSirveParaBatch(r, batch, simFlight, simAirport,
+            if (!enrutador.rutaSirveParaLote(r, batch, simFlight, simAirport,
                     reservaBase, reservaAlmacenBase)) continue;
             double c = heuristica.costoSeleccion(batch, r);
             if (c < bestCost) { bestCost = c; best = r; }
@@ -290,12 +290,12 @@ public class ColoniaACO {
         return best;
     }
 
-    private String groupKey(LoteEnvio batch) {
-        long readyBucket = batch.getReadyTime() == null
+    private String claveGrupo(LoteEnvio batch) {
+        long readyBucket = batch.getTiempoListo() == null
                 ? 0L
-                : OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime()) / GeneradorRutas.CACHE_BUCKET_MIN;
-        return batch.getOriginCode() + '|' + batch.getDestCode()
-                + '|' + readyBucket + '|' + batch.getSlaLimitHours();
+                : OperadorReparacionVoraz.aMinutoEpochPublico(batch.getTiempoListo()) / GeneradorRutas.CACHE_BUCKET_MIN;
+        return batch.getCodigoOrigen() + '|' + batch.getCodigoDestino()
+                + '|' + readyBucket + '|' + batch.getHorasLimiteSla();
     }
 
     private boolean mejorQue(SolucionBloque candidata, SolucionBloque actual) {
@@ -310,6 +310,6 @@ public class ColoniaACO {
         if (candidata.tardados != actual.tardados) {
             return candidata.tardados < actual.tardados;
         }
-        return candidata.cost < actual.cost;
+        return candidata.costo < actual.costo;
     }
 }

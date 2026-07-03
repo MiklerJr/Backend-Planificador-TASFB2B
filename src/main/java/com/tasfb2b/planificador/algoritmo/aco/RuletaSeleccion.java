@@ -25,7 +25,7 @@ final class RuletaSeleccion {
         this.random = random;
     }
 
-    OpcionEnvio elegirBatch(List<OpcionEnvio> opciones) {
+    OpcionEnvio elegirLote(List<OpcionEnvio> opciones) {
         if (opciones.isEmpty()) return null;
         if (random.nextDouble() < EXPLORATION_RATE) {
             return opciones.get(random.nextInt(opciones.size()));
@@ -33,14 +33,14 @@ final class RuletaSeleccion {
 
         double total = 0.0;
         for (OpcionEnvio opcion : opciones) {
-            total += opcion.weight;
+            total += opcion.peso;
         }
         if (total <= 0.0) return opciones.get(0);
 
         double pick = random.nextDouble() * total;
         double acc = 0.0;
         for (OpcionEnvio opcion : opciones) {
-            acc += opcion.weight;
+            acc += opcion.peso;
             if (acc >= pick) return opcion;
         }
         return opciones.get(opciones.size() - 1);
@@ -49,9 +49,9 @@ final class RuletaSeleccion {
     Decision elegirRuta(OpcionEnvio opcion) {
         List<Decision> decisiones = new ArrayList<>(opcion.rutas.size());
         for (RutaCandidata ruta : opcion.rutas) {
-            decisiones.add(new Decision(opcion.ref.batch, ruta,
-                    RastroFeromonas.claveFeromona(opcion.batchKey, ruta), opcion.batchKey,
-                    heuristica.heuristica(opcion.ref.batch, ruta, opcion.alternativasOnTime)));
+            decisiones.add(new Decision(opcion.ref.lote, ruta,
+                    RastroFeromonas.claveFeromona(opcion.claveLote, ruta), opcion.claveLote,
+                    heuristica.heuristica(opcion.ref.lote, ruta, opcion.alternativasATiempo)));
         }
         return elegirDecision(decisiones);
     }
@@ -69,7 +69,7 @@ final class RuletaSeleccion {
         if (total <= 0.0) {
             Decision best = null;
             for (Decision d : decisiones) {
-                if (best == null || d.heuristic > best.heuristic) best = d;
+                if (best == null || d.heuristica > best.heuristica) best = d;
             }
             return best;
         }

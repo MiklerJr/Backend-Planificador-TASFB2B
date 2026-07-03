@@ -4,15 +4,15 @@ import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandi
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 final class Asignacion {
-    final LoteEnvio batch;
-    final RutaCandidata route;
-    final String key;
-    final String batchKey;
+    final LoteEnvio lote;
+    final RutaCandidata ruta;
+    final String clave;
+    final String claveLote;
 
-    Asignacion(LoteEnvio batch, RutaCandidata route, String key, String batchKey) {
-        this.batch = batch;
-        this.route = route;
-        this.key = key;
-        this.batchKey = batchKey;
+    Asignacion(LoteEnvio lote, RutaCandidata ruta, String clave, String claveLote) {
+        this.lote = lote;
+        this.ruta = ruta;
+        this.clave = clave;
+        this.claveLote = claveLote;
     }
 }

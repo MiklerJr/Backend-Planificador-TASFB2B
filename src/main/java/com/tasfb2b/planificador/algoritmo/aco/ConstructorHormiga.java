@@ -20,9 +20,9 @@ import java.util.Set;
  */
 final class ConstructorHormiga {
 
-    private static final int MAX_ROUTE_CANDIDATES = 3;
+    private static final int MAX_CANDIDATOS_RUTA = 3;
     private static final int DECISION_FRONTIER = 16;
-    private static final int REGRET_FRONTIER = 4;
+    private static final int FRONTERA_REGRET = 4;
 
     private final OperadorReparacionVoraz enrutador;
     private final GeneradorRutas generador;
@@ -67,24 +67,24 @@ final class ConstructorHormiga {
                 continue;
             }
 
-            OpcionEnvio opcion = ruleta.elegirBatch(opciones);
+            OpcionEnvio opcion = ruleta.elegirLote(opciones);
             if (opcion == null) break;
 
             Decision elegida = ruleta.elegirRuta(opcion);
             if (elegida == null) {
                 pendientes.remove(opcion.ref);
-                evalCache.remove(opcion.ref.batch);
+                evalCache.remove(opcion.ref.lote);
                 continue;
             }
 
-            enrutador.aplicarCandidatoBloque(elegida.batch, elegida.route, simFlight, simAirport);
-            asignaciones.add(new Asignacion(elegida.batch, elegida.route, elegida.key, elegida.batchKey));
+            enrutador.aplicarCandidatoBloque(elegida.lote, elegida.ruta, simFlight, simAirport);
+            asignaciones.add(new Asignacion(elegida.lote, elegida.ruta, elegida.clave, elegida.claveLote));
             pendientes.remove(opcion.ref);
 
-            evalCache.remove(elegida.batch);
-            Set<Long> tocadas = enrutador.clavesOcupadas(elegida.route, elegida.batch);
+            evalCache.remove(elegida.lote);
+            Set<Long> tocadas = enrutador.clavesOcupadas(elegida.ruta, elegida.lote);
             if (!tocadas.isEmpty() && !evalCache.isEmpty()) {
-                evalCache.values().removeIf(opt -> !Collections.disjoint(opt.occupiedKeys, tocadas));
+                evalCache.values().removeIf(opt -> !Collections.disjoint(opt.clavesOcupadas, tocadas));
             }
         }
 
@@ -98,32 +98,32 @@ final class ConstructorHormiga {
                                               Map<LoteEnvio, OpcionEnvio> evalCache) {
         List<OpcionEnvio> opciones = new ArrayList<>();
         List<RefEnvio> sinRuta = new ArrayList<>();
-        for (RefEnvio ref : pendientes.frontier(REGRET_FRONTIER, random)) {
-            OpcionEnvio cached = evalCache.get(ref.batch);
+        for (RefEnvio ref : pendientes.frontier(FRONTERA_REGRET, random)) {
+            OpcionEnvio cached = evalCache.get(ref.lote);
             if (cached != null) {
                 opciones.add(cached);
                 continue;
             }
             List<RutaCandidata> rutas = generador.obtenerRutas(
-                    ref.batch, simFlight, simAirport, MAX_ROUTE_CANDIDATES);
+                    ref.lote, simFlight, simAirport, MAX_CANDIDATOS_RUTA);
             if (rutas.isEmpty()) {
                 sinRuta.add(ref);
                 continue;
             }
-            int alternativasOnTime = 0;
+            int alternativasATiempo = 0;
             for (RutaCandidata r : rutas) {
-                if (r.isCumpleSLA()) alternativasOnTime++;
+                if (r.isCumpleSLA()) alternativasATiempo++;
             }
-            double regret = heuristica.regret(ref.batch, rutas, alternativasOnTime);
-            double heuristic = heuristica.heuristicaBatch(ref.batch)
-                    * (1.0 + heuristica.heuristica(ref.batch, rutas.get(0), alternativasOnTime))
+            double regret = heuristica.regret(ref.lote, rutas, alternativasATiempo);
+            double heuristic = heuristica.heuristicaLote(ref.lote)
+                    * (1.0 + heuristica.heuristica(ref.lote, rutas.get(0), alternativasATiempo))
                     * (1.0 + Math.min(2.0, regret));
-            String bKey = batchKeys.get(ref.batch);
-            double weighted = feromonas.pesoBatch(bKey, heuristic);
-            Set<Long> occupiedKeys = generador.clavesDeRutas(ref.batch, rutas);
-            OpcionEnvio opt = new OpcionEnvio(ref, rutas, alternativasOnTime, regret,
+            String bKey = batchKeys.get(ref.lote);
+            double weighted = feromonas.pesoLote(bKey, heuristic);
+            Set<Long> occupiedKeys = generador.clavesDeRutas(ref.lote, rutas);
+            OpcionEnvio opt = new OpcionEnvio(ref, rutas, alternativasATiempo, regret,
                     heuristic, weighted, bKey, occupiedKeys);
-            evalCache.put(ref.batch, opt);
+            evalCache.put(ref.lote, opt);
             opciones.add(opt);
         }
         for (RefEnvio ref : sinRuta) {
@@ -166,12 +166,12 @@ final class ConstructorHormiga {
 
         void remove(RefEnvio ref) {
             if (ref == null || items.isEmpty()) return;
-            if (ref.index >= 0 && ref.index < items.size() && items.get(ref.index) == ref.batch) {
-                removeAt(ref.index);
+            if (ref.indice >= 0 && ref.indice < items.size() && items.get(ref.indice) == ref.lote) {
+                removeAt(ref.indice);
                 return;
             }
             for (int i = 0; i < items.size(); i++) {
-                if (items.get(i) == ref.batch) {
+                if (items.get(i) == ref.lote) {
                     removeAt(i);
                     return;
                 }
