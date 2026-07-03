@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.controller.JobQueryController;
-import com.tasfb2b.planificador.dto.jobs.JobsListResponse;
+import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
+import com.tasfb2b.planificador.dto.trabajos.ListaTrabajosResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -16,28 +16,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Contrato de {@code GET /jobs} (Tanda 1B): el cuerpo (antes armado a mano en el controller) ahora
- * es un {@link JobsListResponse} tipado con {@code total} y un {@code JobResumen} por job vivo.
+ * es un {@link ListaTrabajosResponse} tipado con {@code total} y un {@code ResumenTrabajo} por job vivo.
  */
-class JobsListEndpointTest {
+class ListaTrabajosEndpointTest {
 
     @Test
     void listaTodosLosJobsConSuResumen() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState j1 = jobs.crear("2", 14);
-        JobState j2 = jobs.crear("3", 75);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo j1 = jobs.crear("2", 14);
+        EstadoTrabajo j2 = jobs.crear("3", 75);
 
-        JobsListResponse body = controller.listarJobs(false).getBody();
+        ListaTrabajosResponse body = controller.listarJobs(false).getBody();
         assertEquals(2, body.getTotal());
         assertEquals(2, body.getJobs().size());
 
         List<String> ids = body.getJobs().stream()
-                .map(JobsListResponse.JobResumen::getJobId)
+                .map(ListaTrabajosResponse.ResumenTrabajo::getJobId)
                 .collect(Collectors.toList());
         assertTrue(ids.contains(j1.getJobId()));
         assertTrue(ids.contains(j2.getJobId()));
 
-        JobsListResponse.JobResumen resumen = body.getJobs().stream()
+        ListaTrabajosResponse.ResumenTrabajo resumen = body.getJobs().stream()
                 .filter(r -> r.getJobId().equals(j2.getJobId()))
                 .findFirst().orElseThrow();
         assertEquals("3", resumen.getEscenario());
@@ -50,18 +50,18 @@ class JobsListEndpointTest {
      */
     @Test
     void resumenExponeEnVivo() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState operacion = jobs.crear("1", 1);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo operacion = jobs.crear("1", 1);
         operacion.enVivo = true;
-        JobState simulacion = jobs.crear("1", 1);   // E1 normal: enVivo queda false (default)
+        EstadoTrabajo simulacion = jobs.crear("1", 1);   // E1 normal: enVivo queda false (default)
 
-        List<JobsListResponse.JobResumen> resumenes = controller.listarJobs(false).getBody().getJobs();
+        List<ListaTrabajosResponse.ResumenTrabajo> resumenes = controller.listarJobs(false).getBody().getJobs();
 
-        JobsListResponse.JobResumen rOperacion = resumenes.stream()
+        ListaTrabajosResponse.ResumenTrabajo rOperacion = resumenes.stream()
                 .filter(r -> r.getJobId().equals(operacion.getJobId()))
                 .findFirst().orElseThrow();
-        JobsListResponse.JobResumen rSimulacion = resumenes.stream()
+        ListaTrabajosResponse.ResumenTrabajo rSimulacion = resumenes.stream()
                 .filter(r -> r.getJobId().equals(simulacion.getJobId()))
                 .findFirst().orElseThrow();
 
@@ -71,17 +71,17 @@ class JobsListEndpointTest {
 
     @Test
     void listaVaciaCuandoNoHayJobs() {
-        JobsListResponse body = controllerCon(new JobsRegistry()).listarJobs(false).getBody();
+        ListaTrabajosResponse body = controllerCon(new RegistroTrabajos()).listarJobs(false).getBody();
         assertEquals(0, body.getTotal());
         assertTrue(body.getJobs().isEmpty());
     }
 
     // ----------------------------------------------------------------------- helpers
 
-    private static JobQueryController controllerCon(JobsRegistry jobs) {
+    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        JobQueryService jobQuery = new JobQueryService(jobs, null);
-        return new JobQueryController(service, jobQuery);
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
+        return new ConsultaTrabajosController(service, jobQuery);
     }
 }

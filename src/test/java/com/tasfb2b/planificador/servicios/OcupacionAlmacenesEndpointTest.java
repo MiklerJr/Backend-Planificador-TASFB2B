@@ -1,12 +1,12 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
 import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacen;
-import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenRow;
+import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenFila;
 import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenesResponse;
 import org.junit.jupiter.api.Test;
 
@@ -24,15 +24,15 @@ class OcupacionAlmacenesEndpointTest {
 
     @Test
     void jobInexistenteDevuelve404() {
-        JobQueryController controller = controllerCon(new JobsRegistry());
+        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
         assertEquals(404, controller.ocupacionAlmacenesJob("no-existe", 0, 0).getStatusCode().value());
     }
 
     @Test
     void sinBloquesDevuelveListaVacia() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("3", 75);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("3", 75);
 
         OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId(), 0, 0).getBody();
         assertEquals(job.getJobId(), body.getJobId());
@@ -42,14 +42,14 @@ class OcupacionAlmacenesEndpointTest {
 
     @Test
     void cadaFilaLlevaLaOcupacionMasLaPosicionDelBloque() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("3", 75);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("3", 75);
         job.publicarBloque(bloqueConOcupacion(2, "2026-01-02T05:00", "2026-01-02T06:00"));
 
         OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId(), 0, 0).getBody();
         assertEquals(1, body.getTotal());
-        OcupacionAlmacenRow row = body.getAlmacenes().get(0);
+        OcupacionAlmacenFila row = body.getAlmacenes().get(0);
         assertEquals("SEQM", row.getAeropuerto());
         assertEquals("2026-01-02", row.getFecha());
         assertEquals(430, row.getCapacidadMaxima());
@@ -78,10 +78,10 @@ class OcupacionAlmacenesEndpointTest {
         return b;
     }
 
-    private static JobQueryController controllerCon(JobsRegistry jobs) {
+    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        JobQueryService jobQuery = new JobQueryService(jobs, null);
-        return new JobQueryController(service, jobQuery);
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
+        return new ConsultaTrabajosController(service, jobQuery);
     }
 }

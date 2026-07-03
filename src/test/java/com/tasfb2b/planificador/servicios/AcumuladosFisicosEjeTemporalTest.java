@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +38,7 @@ class AcumuladosFisicosEjeTemporalTest {
      */
     @Test
     void noCuentaUnaEntregaCuyoArriboAunNoOcurreSegunElRelojUtc() {
-        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        Map<String, LoteEnvio> auditAcc = new LinkedHashMap<>();
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         BloqueSimulacion bloque = new BloqueSimulacion();
 
@@ -57,7 +57,7 @@ class AcumuladosFisicosEjeTemporalTest {
      */
     @Test
     void cuentaLaEntregaCuandoElRelojUtcAlcanzaElArribo() {
-        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        Map<String, LoteEnvio> auditAcc = new LinkedHashMap<>();
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         auditAcc.put("B2", batchSinRuta(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         BloqueSimulacion bloque = new BloqueSimulacion();
@@ -76,7 +76,7 @@ class AcumuladosFisicosEjeTemporalTest {
      */
     @Test
     void elRelojUtcDistingueAlMinutoSiLaEntregaYaOcurrio() {
-        Map<String, LuggageBatch> auditAcc = new LinkedHashMap<>();
+        Map<String, LoteEnvio> auditAcc = new LinkedHashMap<>();
         auditAcc.put("B1", batchConArribo(LocalDateTime.of(DIA, LocalTime.of(16, 0))));
         auditAcc.put("B2", batchSinRuta(LocalDateTime.of(DIA, LocalTime.of(15, 59))));
         BloqueSimulacion bloque = new BloqueSimulacion();
@@ -91,21 +91,21 @@ class AcumuladosFisicosEjeTemporalTest {
     // ----------------------------------------------------------------------- helpers
 
     /** Registra los batches en el AcumuladorAuditoria (Fase 5b) y llena los acumulados físicos del bloque. */
-    private static void llenar(BloqueSimulacion bloque, Map<String, LuggageBatch> auditAcc) {
+    private static void llenar(BloqueSimulacion bloque, Map<String, LoteEnvio> auditAcc) {
         PlanificadorService.AcumuladorAuditoria acc = new PlanificadorService.AcumuladorAuditoria(false);
-        for (LuggageBatch b : auditAcc.values()) acc.registrar(b);
+        for (LoteEnvio b : auditAcc.values()) acc.registrar(b);
         acc.llenarAcumuladosFisicos(bloque);
     }
 
     /** Batch de 7 maletas (ready 07:00 UTC) con un único tramo de 60 min que aterriza en {@code arriboUtc}. */
-    private static LuggageBatch batchConArribo(LocalDateTime arriboUtc) {
-        Edge tramo = new Edge();
+    private static LoteEnvio batchConArribo(LocalDateTime arriboUtc) {
+        Arista tramo = new Arista();
         tramo.idx = 0;
         tramo.id = "F1";
         tramo.durationMinutes = 60;
-        long depMin = GreedyRepairOperator.toEpochMinPublic(arriboUtc.minusMinutes(60));
+        long depMin = OperadorReparacionVoraz.toEpochMinPublic(arriboUtc.minusMinutes(60));
 
-        LuggageBatch b = new LuggageBatch("B1", 7, 24, "AAA", "BBB",
+        LoteEnvio b = new LoteEnvio("B1", 7, 24, "AAA", "BBB",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
         b.setAssignedRoute(List.of(tramo));
         b.setAssignedDepartures(List.of(depMin));
@@ -114,7 +114,7 @@ class AcumuladosFisicosEjeTemporalTest {
     }
 
     /** Batch de 5 maletas sin ruta: solo aporta su {@code readyTime} (UTC) al reloj de la simulación. */
-    private static LuggageBatch batchSinRuta(LocalDateTime readyUtc) {
-        return new LuggageBatch("B2", 5, 24, "AAA", "BBB", readyUtc);
+    private static LoteEnvio batchSinRuta(LocalDateTime readyUtc) {
+        return new LoteEnvio("B2", 5, 24, "AAA", "BBB", readyUtc);
     }
 }

@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.ingesta.IngestaService;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.controller.EscenarioController;
-import com.tasfb2b.planificador.exception.ParametroInvalidoException;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
+import com.tasfb2b.planificador.controlador.EscenarioController;
+import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -14,10 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Validaciones de los parámetros de arranque de escenarios (antes fallaban EN SILENCIO: k≤0 se
  * degradaba a K=1 sin avisar, sa/ta inválidos caían a defaults). Hoy el controller lanza
- * {@link ParametroInvalidoException}, que el {@code GlobalExceptionHandler} traduce a un 400 con el
- * cuerpo {@code {"error": ...}} (ese mapeo HTTP se cubre en {@code GlobalExceptionHandlerTest}).
+ * {@link ParametroInvalidoException}, que el {@code ManejadorExcepcionesGlobal} traduce a un 400 con el
+ * cuerpo {@code {"error": ...}} (ese mapeo HTTP se cubre en {@code ManejadorExcepcionesGlobalTest}).
  * Aquí verificamos que la validación efectivamente DISPARA la excepción con el mensaje correcto.
- * El rango de fechaInicio se valida contra el dataset (omitido aquí: sin DataLoader el helper no
+ * El rango de fechaInicio se valida contra el dataset (omitido aquí: sin CargadorDatos el helper no
  * puede conocer el rango).
  */
 class ValidacionParametrosEscenarioTest {
@@ -72,7 +72,7 @@ class ValidacionParametrosEscenarioTest {
     // ----------------------------------------------------------------------- helpers
 
     private static PlanificadorService serviceSinDataset() {
-        return new PlanificadorService(null, null, null, new JobsRegistry(),
+        return new PlanificadorService(null, null, null, new RegistroTrabajos(),
                 null, null);
     }
 }

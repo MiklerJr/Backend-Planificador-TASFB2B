@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
@@ -22,15 +22,15 @@ class SerieAlmacenesEndpointTest {
 
     @Test
     void jobInexistenteDevuelve404() {
-        JobQueryController controller = controllerCon(new JobsRegistry());
+        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
         assertEquals(404, controller.serieAlmacenesJob("no-existe", 0).getStatusCode().value());
     }
 
     @Test
     void paginaPorIndiceDeBloqueIgualQueBloques() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         job.publicarSerieAlmacenes(List.of(slot("SKBO", "2026-01-02T13:00", 117)));
         job.publicarSerieAlmacenes(List.of(slot("SEQM", "2026-01-02T14:00", 80)));
@@ -59,11 +59,11 @@ class SerieAlmacenesEndpointTest {
 
     // ----------------------------------------------------------------------- helpers
 
-    private static JobQueryController controllerCon(JobsRegistry jobs) {
+    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        JobQueryService jobQuery = new JobQueryService(jobs, null);
-        return new JobQueryController(service, jobQuery);
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
+        return new ConsultaTrabajosController(service, jobQuery);
     }
 
     private static OcupacionAlmacenSlot slot(String aeropuerto, String hora, int ocupacion) {

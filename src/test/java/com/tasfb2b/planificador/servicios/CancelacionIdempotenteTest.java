@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobState;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.CodificadorClaveVuelo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import org.junit.jupiter.api.Test;
 
@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * dos barreras que evitan que una MISMA orden se procese dos veces (lo que disparaba doble consulta
  * a BD + doble reencolado/reproceso):
  * <ol>
- *   <li><b>Dedup en el encolado</b> ({@link JobState#encolarCancelacionVuelo}): una orden idéntica ya
+ *   <li><b>Dedup en el encolado</b> ({@link EstadoTrabajo#encolarCancelacionVuelo}): una orden idéntica ya
  *       pendiente no se vuelve a encolar.</li>
- *   <li><b>Set de vuelo-días cancelados</b> ({@link GreedyRepairOperator#addCancelledFlight}): aun si
+ *   <li><b>Set de vuelo-días cancelados</b> ({@link OperadorReparacionVoraz#addCancelledFlight}): aun si
  *       un duplicado llegara al worker, no produce ningún edge-día NUEVO, por lo que
  *       {@code aplicarCancelacionesVuelo} salta el reencolado (que ahora se hace sobre
  *       {@code edgesCancelados}, no sobre {@code matches}).</li>
@@ -35,7 +35,7 @@ class CancelacionIdempotenteTest {
 
     @Test
     void encolarOrdenIdenticaDosVecesNoDuplicaLaCola() {
-        JobState job = new JobState("job-1", "1", 1);
+        EstadoTrabajo job = new EstadoTrabajo("job-1", "1", 1);
 
         CancelacionVueloRequest o1 = orden("AAA", "BBB", LocalDateTime.of(2026, 1, 1, 8, 30));
         CancelacionVueloRequest o2 = orden("AAA", "BBB", LocalDateTime.of(2026, 1, 1, 8, 30)); // idéntica
@@ -52,9 +52,9 @@ class CancelacionIdempotenteTest {
 
     @Test
     void marcarElMismoVueloDiaDosVecesNoLoCancelaDeNuevo() {
-        Graph graph = grafoMinimo();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        long key = FlightKeyEncoder.flightKey(graph.edges.get(0).idx, 0L);
+        Grafo graph = grafoMinimo();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        long key = CodificadorClaveVuelo.flightKey(graph.edges.get(0).idx, 0L);
 
         assertTrue(op.addCancelledFlight(key), "primera marca: vuelo-día NUEVO cancelado");
         assertFalse(op.addCancelledFlight(key),
@@ -69,13 +69,13 @@ class CancelacionIdempotenteTest {
         return o;
     }
 
-    private static Graph grafoMinimo() {
-        Graph g = new Graph();
-        Node aaa = new Node("AAA");
-        Node bbb = new Node("BBB");
+    private static Grafo grafoMinimo() {
+        Grafo g = new Grafo();
+        Nodo aaa = new Nodo("AAA");
+        Nodo bbb = new Nodo("BBB");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
-        Edge e = new Edge();
+        Arista e = new Arista();
         e.idx = 0;
         e.id = "F1";
         e.from = aaa;

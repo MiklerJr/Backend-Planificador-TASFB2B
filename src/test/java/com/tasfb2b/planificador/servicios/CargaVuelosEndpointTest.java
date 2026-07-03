@@ -1,12 +1,12 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
-import com.tasfb2b.planificador.dto.vuelos.CargaVueloRow;
+import com.tasfb2b.planificador.dto.vuelos.CargaVueloFila;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelosResponse;
 import org.junit.jupiter.api.Test;
 
@@ -28,15 +28,15 @@ class CargaVuelosEndpointTest {
 
     @Test
     void jobInexistenteDevuelve404() {
-        JobQueryController controller = controllerCon(new JobsRegistry());
+        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
         assertEquals(404, controller.cargaVuelosJob("no-existe", 0, 0).getStatusCode().value());
     }
 
     @Test
     void sinBloquesDevuelveListaVacia() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         CargaVuelosResponse body = controller.cargaVuelosJob(job.getJobId(), 0, 0).getBody();
         assertEquals(job.getJobId(), body.getJobId());
@@ -46,14 +46,14 @@ class CargaVuelosEndpointTest {
 
     @Test
     void cadaFilaLlevaLaCargaDelVueloMasLaPosicionDelBloque() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCarga(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
         CargaVuelosResponse body = controller.cargaVuelosJob(job.getJobId(), 0, 0).getBody();
         assertEquals(1, body.getTotal());
-        CargaVueloRow row = body.getVuelos().get(0);
+        CargaVueloFila row = body.getVuelos().get(0);
         assertEquals("1501", row.getVueloId());
         assertEquals("SKBO", row.getOrigen());
         assertEquals("SEQM", row.getDestino());
@@ -68,9 +68,9 @@ class CargaVuelosEndpointTest {
 
     @Test
     void paginaPorBloquesRecorriendoTodoSinPerderNiDuplicar() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
         // 3 bloques con 2+1+2 = 5 filas; vueloId único por fila para detectar duplicados/pérdidas.
         job.publicarBloque(bloqueConCargas(0, 2));
         job.publicarBloque(bloqueConCargas(1, 1));
@@ -88,7 +88,7 @@ class CargaVuelosEndpointTest {
             assertEquals(3, pag.getBloquesPublicados());
             assertTrue(pag.getTotal() >= 1, "una página de la ventana RAM nunca es vacía si quedan datos");
             assertEquals(pag.getVuelos().size(), pag.getTotal());
-            for (CargaVueloRow r : pag.getVuelos()) {
+            for (CargaVueloFila r : pag.getVuelos()) {
                 vistos.add(r.getVueloId());
                 bloquesVistos.add(r.getBloqueIdx());
             }
@@ -106,9 +106,9 @@ class CargaVuelosEndpointTest {
 
     @Test
     void limitSeClampeaAlTopeDelServidor() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCargas(0, 2));
 
         // limit gigante: el servicio lo clampea a maxFilasPagina (5000 por defecto en tests) ⇒ no OOM.
@@ -157,10 +157,10 @@ class CargaVuelosEndpointTest {
         return b;
     }
 
-    private static JobQueryController controllerCon(JobsRegistry jobs) {
+    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        JobQueryService jobQuery = new JobQueryService(jobs, null);
-        return new JobQueryController(service, jobQuery);
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
+        return new ConsultaTrabajosController(service, jobQuery);
     }
 }

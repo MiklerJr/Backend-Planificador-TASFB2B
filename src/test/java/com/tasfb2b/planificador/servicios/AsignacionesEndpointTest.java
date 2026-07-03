@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
 import com.tasfb2b.planificador.dto.simulacion.AsignacionMaleta;
 import com.tasfb2b.planificador.dto.simulacion.AsignacionesResponse;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
@@ -23,16 +23,16 @@ class AsignacionesEndpointTest {
 
     @Test
     void jobInexistenteDevuelve404() {
-        JobQueryController controller = controllerCon(new JobsRegistry());
+        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
         assertEquals(404, controller.asignacionesJob("no-existe", 0, null, null, false)
                 .getStatusCode().value());
     }
 
     @Test
     void sinFiltrosDevuelveTodasYEchoaFiltrosNull() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConAsignacion(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
         AsignacionesResponse body = controller.asignacionesJob(job.getJobId(), 0, null, null, false)
@@ -50,9 +50,9 @@ class AsignacionesEndpointTest {
 
     @Test
     void elFiltroPorAeropuertoRecortaYSeNormalizaAMayusculas() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConAsignacion(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
         // Coincide con el origen "SKBO" (se normaliza a mayúsculas).
@@ -84,10 +84,10 @@ class AsignacionesEndpointTest {
         return b;
     }
 
-    private static JobQueryController controllerCon(JobsRegistry jobs) {
+    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        JobQueryService jobQuery = new JobQueryService(jobs, null);
-        return new JobQueryController(service, jobQuery);
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
+        return new ConsultaTrabajosController(service, jobQuery);
     }
 }

@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
 import com.tasfb2b.planificador.dto.almacenes.*;
 import org.junit.jupiter.api.Test;

@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.CodificadorClaveVuelo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
@@ -40,11 +40,11 @@ class TelemetriaBloqueParcialTest {
 
     @Test
     void cargaVueloReportaElAcumuladoGlobalDelVueloDiaAunqueElDeltaDelBloqueSeaPequeno() {
-        Graph graph = grafoUnVuelo();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        Edge vuelo = graph.edges.get(0);
-        long depMin = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(10, 0)));
-        long key = FlightKeyEncoder.flightKey(vuelo.idx, depMin);
+        Grafo graph = grafoUnVuelo();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        Arista vuelo = graph.edges.get(0);
+        long depMin = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(10, 0)));
+        long key = CodificadorClaveVuelo.flightKey(vuelo.idx, depMin);
 
         // Bloque 1: 45 maletas commiteadas a la ocupación GLOBAL del vuelo-día.
         Map<Long, Integer> bloque1 = new HashMap<>(Map.of(key, 45));
@@ -74,11 +74,11 @@ class TelemetriaBloqueParcialTest {
 
     @Test
     void ocupacionAlmacenReportaElPicoConcurrenteAcumuladoAunqueElDeltaDelBloqueSeaPequeno() {
-        Graph graph = grafoUnVuelo();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        Node bbb = graph.nodes.get("BBB");
-        long slotMin = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
-        long slotKey = GreedyRepairOperator.claveAlmacenDeSlot(bbb.idx, slotMin);
+        Grafo graph = grafoUnVuelo();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        Nodo bbb = graph.nodes.get("BBB");
+        long slotMin = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
+        long slotKey = OperadorReparacionVoraz.claveAlmacenDeSlot(bbb.idx, slotMin);
 
         // Bloque 1: 480 maletas concurrentes en el slot de las 12:00, commiteadas a global.
         Map<Long, Integer> almacenBloque1 = new HashMap<>(Map.of(slotKey, 480));
@@ -114,12 +114,12 @@ class TelemetriaBloqueParcialTest {
     }
 
     /** AAA→BBB (10:00-12:00), capacidad 50; almacenes de 500. */
-    private static Graph grafoUnVuelo() {
-        Graph g = new Graph();
-        Node aaa = node("AAA"), bbb = node("BBB");
+    private static Grafo grafoUnVuelo() {
+        Grafo g = new Grafo();
+        Nodo aaa = node("AAA"), bbb = node("BBB");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
-        Edge e = new Edge();
+        Arista e = new Arista();
         e.idx = 0;
         e.id = "F1";
         e.from = aaa;
@@ -135,8 +135,8 @@ class TelemetriaBloqueParcialTest {
         return g;
     }
 
-    private static Node node(String code) {
-        Node n = new Node(code);
+    private static Nodo node(String code) {
+        Nodo n = new Nodo(code);
         n.capacity = CAPACIDAD_ALMACEN;
         return n;
     }

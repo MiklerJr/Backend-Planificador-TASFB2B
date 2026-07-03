@@ -1,13 +1,13 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.controller.JobQueryController;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
+import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
-import com.tasfb2b.planificador.dto.jobs.IndicadoresResponse;
+import com.tasfb2b.planificador.dto.trabajos.IndicadoresResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -24,15 +24,15 @@ class IndicadoresEndpointTest {
 
     @Test
     void jobInexistenteDevuelve404() {
-        JobQueryController controller = controllerCon(new JobsRegistry());
+        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
         assertEquals(404, controller.indicadoresJob("no-existe").getStatusCode().value());
     }
 
     @Test
     void traeUmbralesYTelemetriaVaciaSinBloques() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryController controller = controllerCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosController controller = controllerCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         IndicadoresResponse body = controller.indicadoresJob(job.getJobId()).getBody();
         assertEquals(job.getJobId(), body.getJobId());
@@ -44,15 +44,15 @@ class IndicadoresEndpointTest {
 
     @Test
     void tomaLosBloquesMasRecientesAcotadoPorElLimite() {
-        JobsRegistry jobs = new JobsRegistry();
+        RegistroTrabajos jobs = new RegistroTrabajos();
         // Config con tope de 1 fila ⇒ el snapshot debe quedarse con el bloque más reciente (tail).
         PlanificadorProperties props = new PlanificadorProperties();
         props.getConsulta().setMaxFilasPagina(1);
-        JobQueryService jobQuery = new JobQueryService(jobs, null, null, null, props);
-        JobQueryController controller = new JobQueryController(
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null, null, null, props);
+        ConsultaTrabajosController controller = new ConsultaTrabajosController(
                 new PlanificadorService(null, null, null, jobs, null, null), jobQuery);
 
-        JobState job = jobs.crear("2", 14);
+        EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCarga(0, "viejo"));
         job.publicarBloque(bloqueConCarga(1, "reciente"));
 
@@ -81,10 +81,10 @@ class IndicadoresEndpointTest {
         return b;
     }
 
-    private static JobQueryController controllerCon(JobsRegistry jobs) {
+    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        JobQueryService jobQuery = new JobQueryService(jobs, null);
-        return new JobQueryController(service, jobQuery);
+        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
+        return new ConsultaTrabajosController(service, jobQuery);
     }
 }

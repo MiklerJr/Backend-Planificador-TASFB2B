@@ -1,12 +1,12 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tasfb2b.planificador.dto.dataset.AeropuertoDTO;
-import com.tasfb2b.planificador.dto.jobs.DashboardResponse;
-import com.tasfb2b.planificador.dto.jobs.EstadoJobResponse;
+import com.tasfb2b.planificador.dto.datos.AeropuertoDTO;
+import com.tasfb2b.planificador.dto.trabajos.TableroResponse;
+import com.tasfb2b.planificador.dto.trabajos.EstadoTrabajoResponse;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -26,9 +26,9 @@ class JsonContratoTest {
 
     @Test
     void estadoOmiteOpcionalesNullYConservaSiempreSeedYVuelosCancelados() throws Exception {
-        JobsRegistry jobs = new JobsRegistry();
+        RegistroTrabajos jobs = new RegistroTrabajos();
         PlanificadorService service = serviceCon(jobs);
-        JobState job = jobs.crear("2", 14);   // recién encolado: sin fechaInicio/fin/error/alerta
+        EstadoTrabajo job = jobs.crear("2", 14);   // recién encolado: sin fechaInicio/fin/error/alerta
 
         String json = mapper.writeValueAsString(service.getEstadoJob(job.getJobId()));
 
@@ -45,9 +45,9 @@ class JsonContratoTest {
 
     @Test
     void dashboardEmiteUltimoBloqueNullYOmiteFechaInicio() throws Exception {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryService jobQuery = jobQueryCon(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosService jobQuery = jobQueryCon(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         String json = mapper.writeValueAsString(jobQuery.getDashboardJob(job.getJobId()));
 
@@ -79,12 +79,12 @@ class JsonContratoTest {
 
     // ----------------------------------------------------------------------- helpers
 
-    private static PlanificadorService serviceCon(JobsRegistry jobs) {
+    private static PlanificadorService serviceCon(RegistroTrabajos jobs) {
         return new PlanificadorService(null, null, null, jobs, null, null);
     }
 
-    private static JobQueryService jobQueryCon(JobsRegistry jobs) {
-        // getDashboardJob solo usa el registry; DataLoader no interviene → null.
-        return new JobQueryService(jobs, null);
+    private static ConsultaTrabajosService jobQueryCon(RegistroTrabajos jobs) {
+        // getDashboardJob solo usa el registry; CargadorDatos no interviene → null.
+        return new ConsultaTrabajosService(jobs, null);
     }
 }

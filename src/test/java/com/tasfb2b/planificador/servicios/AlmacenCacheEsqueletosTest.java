@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * seguridad ante cambios de dataset: el archivo solo se carga si la huella coincide; corrupto o
  * truncado se ignora sin excepción (degrada al comportamiento previo: caché fría).
  */
-class SkeletonCacheStoreTest {
+class AlmacenCacheEsqueletosTest {
 
     private static final String HUELLA = "huella-dataset-a";
 
@@ -34,8 +34,8 @@ class SkeletonCacheStoreTest {
         Path archivo = dir.resolve("skeleton-cache.bin");
         Map<Long, List<int[]>> original = cacheEjemplo();
 
-        SkeletonCacheStore.escribir(archivo, HUELLA, original);
-        Map<Long, List<int[]>> leida = SkeletonCacheStore.leerSiCoincide(archivo, HUELLA);
+        AlmacenCacheEsqueletos.escribir(archivo, HUELLA, original);
+        Map<Long, List<int[]>> leida = AlmacenCacheEsqueletos.leerSiCoincide(archivo, HUELLA);
 
         assertEquals(original.keySet(), leida.keySet());
         for (Long clave : original.keySet()) {
@@ -50,9 +50,9 @@ class SkeletonCacheStoreTest {
     @Test
     void huellaDistintaDescartaElArchivo(@TempDir Path dir) throws Exception {
         Path archivo = dir.resolve("skeleton-cache.bin");
-        SkeletonCacheStore.escribir(archivo, HUELLA, cacheEjemplo());
+        AlmacenCacheEsqueletos.escribir(archivo, HUELLA, cacheEjemplo());
 
-        assertTrue(SkeletonCacheStore.leerSiCoincide(archivo, "huella-dataset-b").isEmpty(),
+        assertTrue(AlmacenCacheEsqueletos.leerSiCoincide(archivo, "huella-dataset-b").isEmpty(),
                 "esqueletos de otro dataset (p. ej. ingesta de por medio) no deben cargarse");
     }
 
@@ -60,17 +60,17 @@ class SkeletonCacheStoreTest {
     void archivoCorruptoOTruncadoSeIgnoraSinExcepcion(@TempDir Path dir) throws Exception {
         Path basura = dir.resolve("basura.bin");
         Files.write(basura, new byte[]{1, 2, 3, 4, 5, 6, 7, 8});
-        assertTrue(SkeletonCacheStore.leerSiCoincide(basura, HUELLA).isEmpty(), "magic desconocido");
+        assertTrue(AlmacenCacheEsqueletos.leerSiCoincide(basura, HUELLA).isEmpty(), "magic desconocido");
 
         Path truncado = dir.resolve("truncado.bin");
-        SkeletonCacheStore.escribir(truncado, HUELLA, cacheEjemplo());
+        AlmacenCacheEsqueletos.escribir(truncado, HUELLA, cacheEjemplo());
         byte[] completo = Files.readAllBytes(truncado);
         Files.write(truncado, java.util.Arrays.copyOf(completo, completo.length - 6));
-        assertTrue(SkeletonCacheStore.leerSiCoincide(truncado, HUELLA).isEmpty(),
+        assertTrue(AlmacenCacheEsqueletos.leerSiCoincide(truncado, HUELLA).isEmpty(),
                 "un archivo cortado a mitad de escritura degrada a caché vacía, nunca lanza");
 
         Path inexistente = dir.resolve("no-existe.bin");
-        assertTrue(SkeletonCacheStore.leerSiCoincide(inexistente, HUELLA).isEmpty());
+        assertTrue(AlmacenCacheEsqueletos.leerSiCoincide(inexistente, HUELLA).isEmpty());
     }
 
     @Test
@@ -78,7 +78,7 @@ class SkeletonCacheStoreTest {
         Path archivo = dir.resolve("skeleton-cache.bin");
         MotorGrafoCache motorCache = new MotorGrafoCache();
         // dataLoader null ⇒ huella constante (dataset vacío); suficiente para la semántica de guardado.
-        SkeletonCacheStore store = new SkeletonCacheStore(null, motorCache, archivo.toString());
+        AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, motorCache, archivo.toString());
 
         motorCache.skeletonCache().put(1L, List.of(new int[]{0, 1}));
         store.guardarSiCrecio();
@@ -99,7 +99,7 @@ class SkeletonCacheStoreTest {
     void borrarEliminaElArchivoYPermiteReescribirDesdeCero(@TempDir Path dir) {
         Path archivo = dir.resolve("skeleton-cache.bin");
         MotorGrafoCache motorCache = new MotorGrafoCache();
-        SkeletonCacheStore store = new SkeletonCacheStore(null, motorCache, archivo.toString());
+        AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, motorCache, archivo.toString());
 
         motorCache.skeletonCache().put(1L, List.of(new int[]{0}));
         store.guardarSiCrecio();
@@ -117,13 +117,13 @@ class SkeletonCacheStoreTest {
     void cargarAlArranquePueblaLaCacheCompartidaSiLaHuellaCoincide(@TempDir Path dir) throws Exception {
         Path archivo = dir.resolve("skeleton-cache.bin");
         MotorGrafoCache previa = new MotorGrafoCache();
-        SkeletonCacheStore storePrevia = new SkeletonCacheStore(null, previa, archivo.toString());
+        AlmacenCacheEsqueletos storePrevia = new AlmacenCacheEsqueletos(null, previa, archivo.toString());
         previa.skeletonCache().put(42L, List.of(new int[]{3, 7}));
         storePrevia.guardarSiCrecio();
 
         // "Reinicio": MotorGrafoCache nuevo (vacío) + mismo dataset (misma huella: dataLoader null).
         MotorGrafoCache trasReinicio = new MotorGrafoCache();
-        SkeletonCacheStore store = new SkeletonCacheStore(null, trasReinicio, archivo.toString());
+        AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, trasReinicio, archivo.toString());
         store.cargarAlArranque();
 
         assertEquals(1, trasReinicio.skeletonCache().size());
@@ -138,7 +138,7 @@ class SkeletonCacheStoreTest {
     @Test
     void archivoVacioDesactivaLaPersistenciaSinNPE() {
         // Instancia no-op (la usan los constructores de conveniencia de los tests de servicios).
-        SkeletonCacheStore store = new SkeletonCacheStore(null, null, "");
+        AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, null, "");
         store.cargarAlArranque();
         store.guardarSiCrecio();
         store.borrar();   // ninguna debe lanzar

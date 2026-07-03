@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.dto.dataset.DemandaResumenResponse;
-import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.dto.datos.DemandaResumenResponse;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -10,8 +10,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Anti-OOM de {@code GET /demanda/resumen}: la agregación se hace en BD ({@link DataLoader#agregarDemandaEnRango})
- * y el rango se ACOTA defensivamente al span máximo configurado. Aquí se sustituye {@link DataLoader}
+ * Anti-OOM de {@code GET /demanda/resumen}: la agregación se hace en BD ({@link CargadorDatos#agregarDemandaEnRango})
+ * y el rango se ACOTA defensivamente al span máximo configurado. Aquí se sustituye {@link CargadorDatos}
  * por un stub (sin BD) que reporta el rango del dataset y captura con qué ventana se invocó la
  * agregación, para verificar la guarda y que los totales se arman desde las filas O→D (no envío a envío).
  */
@@ -20,16 +20,16 @@ class DemandaResumenRangoTest {
     @Test
     void sinRangoAcotaElSpanAlMaximoConfigurado() {
         final LocalDateTime[] cap = new LocalDateTime[2];
-        DataLoader stub = new DataLoader(null) {
+        CargadorDatos stub = new CargadorDatos(null) {
             @Override public LocalDateTime getPrimeraVentana() { return LocalDateTime.parse("2026-01-02T00:00"); }
             @Override public LocalDateTime getUltimaVentana() { return LocalDateTime.parse("2029-01-05T00:00"); }
-            @Override public List<DataLoader.DemandaAgrupada> agregarDemandaEnRango(LocalDateTime d, LocalDateTime h) {
+            @Override public List<CargadorDatos.DemandaAgrupada> agregarDemandaEnRango(LocalDateTime d, LocalDateTime h) {
                 cap[0] = d; cap[1] = h;
-                return List.of(new DataLoader.DemandaAgrupada("SKBO", "SEQM", 10, 25),
-                               new DataLoader.DemandaAgrupada("SEQM", "SKBO", 4, 9));
+                return List.of(new CargadorDatos.DemandaAgrupada("SKBO", "SEQM", 10, 25),
+                               new CargadorDatos.DemandaAgrupada("SEQM", "SKBO", 4, 9));
             }
         };
-        DatasetMetadataService svc = new DatasetMetadataService(stub);   // default 31 días
+        MetadatosDatosService svc = new MetadatosDatosService(stub);   // default 31 días
 
         DemandaResumenResponse r = svc.getDemandaResumen(null, null, 20);
 
@@ -46,15 +46,15 @@ class DemandaResumenRangoTest {
     @Test
     void rangoExplicitoDentroDelSpanSeRespeta() {
         final LocalDateTime[] cap = new LocalDateTime[2];
-        DataLoader stub = new DataLoader(null) {
+        CargadorDatos stub = new CargadorDatos(null) {
             @Override public LocalDateTime getPrimeraVentana() { return LocalDateTime.parse("2026-01-02T00:00"); }
             @Override public LocalDateTime getUltimaVentana() { return LocalDateTime.parse("2029-01-05T00:00"); }
-            @Override public List<DataLoader.DemandaAgrupada> agregarDemandaEnRango(LocalDateTime d, LocalDateTime h) {
+            @Override public List<CargadorDatos.DemandaAgrupada> agregarDemandaEnRango(LocalDateTime d, LocalDateTime h) {
                 cap[0] = d; cap[1] = h;
                 return List.of();
             }
         };
-        DatasetMetadataService svc = new DatasetMetadataService(stub);
+        MetadatosDatosService svc = new MetadatosDatosService(stub);
 
         LocalDateTime desde = LocalDateTime.parse("2026-03-01T00:00");
         LocalDateTime hasta = LocalDateTime.parse("2026-03-05T00:00");   // span de 4 días < 31

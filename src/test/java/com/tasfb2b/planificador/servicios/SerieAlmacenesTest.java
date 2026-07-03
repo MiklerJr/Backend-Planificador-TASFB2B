@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import org.junit.jupiter.api.Test;
 
@@ -42,8 +42,8 @@ class SerieAlmacenesTest {
      */
     @Test
     void laSerieReproduceSlotASlotLaEstadiaCompletaQueCobroElModelo() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
         enrutar(op, batch("B1", 20, LocalTime.of(7, 0)), blockFlight, blockAirport);
@@ -64,8 +64,8 @@ class SerieAlmacenesTest {
         // Realismo: cada slot del DTO coincide EXACTAMENTE con la ocupación global del modelo.
         for (OcupacionAlmacenSlot s : serie) {
             assertEquals(20, s.getOcupacion(), "B1 ocupa 20 maletas en " + s.getAeropuerto() + "@" + s.getHora());
-            long slotMin = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.parse(s.getHora()));
-            long slotKey = GreedyRepairOperator.claveAlmacenDeSlot(
+            long slotMin = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.parse(s.getHora()));
+            long slotKey = OperadorReparacionVoraz.claveAlmacenDeSlot(
                     graph.nodes.get(s.getAeropuerto()).idx, slotMin);
             assertEquals(op.ocupacionGlobalAlmacen(slotKey), s.getOcupacion(),
                     "el DTO reporta lo mismo que valida el motor (slot " + s.getHora() + ")");
@@ -76,16 +76,16 @@ class SerieAlmacenesTest {
     /** La espera en ORIGEN de un envío sin ruta (backlog) también aparece en la serie. */
     @Test
     void laSerieIncluyeLaEsperaEnOrigenDeEnviosSinRutaDelBacklog() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
         enrutar(op, batch("B1", 20, LocalTime.of(7, 0)), blockFlight, blockAirport);
         op.commitBlock(blockFlight, blockAirport);
 
         // B2 (5 maletas, ready 07:30) queda SIN ruta; el reloj UTC avanza a 10:00 con B3.
-        LuggageBatch b2 = batch("B2", 5, LocalTime.of(7, 30));
-        LuggageBatch b3 = batch("B3", 1, LocalTime.of(10, 0));
+        LoteEnvio b2 = batch("B2", 5, LocalTime.of(7, 30));
+        LoteEnvio b3 = batch("B3", 1, LocalTime.of(10, 0));
         op.reconstruirEsperaOrigenBacklog(List.of(b2), List.of(b3));
 
         PlanificadorService service = serviceSinDataset();
@@ -112,23 +112,23 @@ class SerieAlmacenesTest {
         return serie.stream().filter(s -> s.getAeropuerto().equals(aeropuerto)).toList();
     }
 
-    private static void enrutar(GreedyRepairOperator op, LuggageBatch b,
+    private static void enrutar(OperadorReparacionVoraz op, LoteEnvio b,
                                 Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
-        RouteCandidate ruta = op.generarCandidatosRuta(b, blockFlight, blockAirport, 3).stream()
-                .filter(RouteCandidate::isCumpleSLA)
+        RutaCandidata ruta = op.generarCandidatosRuta(b, blockFlight, blockAirport, 3).stream()
+                .filter(RutaCandidata::isCumpleSLA)
                 .findFirst().orElseThrow();
         op.aplicarCandidatoRuta(b, ruta);
         op.aplicarCandidatoBloque(b, ruta, blockFlight, blockAirport);
     }
 
-    private static LuggageBatch batch(String id, int qty, LocalTime ready) {
-        return new LuggageBatch(id, qty, 24, "AAA", "CCC", LocalDateTime.of(DIA, ready));
+    private static LoteEnvio batch(String id, int qty, LocalTime ready) {
+        return new LoteEnvio(id, qty, 24, "AAA", "CCC", LocalDateTime.of(DIA, ready));
     }
 
     /** AAA→BBB (08:30-09:30) y BBB→CCC (18:00-19:00): escala de 8h30 en BBB, sin ruta directa. */
-    private static Graph grafoEscalaLarga() {
-        Graph g = new Graph();
-        Node aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
+    private static Grafo grafoEscalaLarga() {
+        Grafo g = new Grafo();
+        Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
         g.nodes.put("CCC", ccc);
@@ -137,14 +137,14 @@ class SerieAlmacenesTest {
         return g;
     }
 
-    private static Node node(String code) {
-        Node n = new Node(code);
+    private static Nodo node(String code) {
+        Nodo n = new Nodo(code);
         n.capacity = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Graph g, int idx, Node from, Node to, String id, String dep, String arr) {
-        Edge e = new Edge();
+    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
+        Arista e = new Arista();
         e.idx = idx;
         e.id = id;
         e.from = from;

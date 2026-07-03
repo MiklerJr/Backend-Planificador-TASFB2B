@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.services;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
+package com.tasfb2b.planificador.servicios;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
 
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
@@ -18,9 +18,9 @@ class PlanificadorVuelosUsadosTest {
 
     @Test
     void agregaEnviosYMaletasDelMismoVuelo() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryService jobQuery = jobQueryConJobs(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 40, tramo("LA2450", "SPIM", "SKBO",
@@ -41,9 +41,9 @@ class PlanificadorVuelosUsadosTest {
 
     @Test
     void distingueMismoVueloEnHorariosDistintos() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryService jobQuery = jobQueryConJobs(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
@@ -64,9 +64,9 @@ class PlanificadorVuelosUsadosTest {
 
     @Test
     void desdeMayorABloquesPublicadosDevuelveListaVacia() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryService jobQuery = jobQueryConJobs(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
@@ -87,9 +87,9 @@ class PlanificadorVuelosUsadosTest {
      */
     @Test
     void flightKeyYFechasUsanElEjeUtcNoElLocal() {
-        JobsRegistry jobs = new JobsRegistry();
-        JobQueryService jobQuery = jobQueryConJobs(jobs);
-        JobState job = jobs.crear("2", 14);
+        RegistroTrabajos jobs = new RegistroTrabajos();
+        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
+        EstadoTrabajo job = jobs.crear("2", 14);
 
         TramoRuta tramo = tramo("LA2450", "SPIM", "SKBO",
                 "2026-05-19T10:00:00", "2026-05-19T13:00:00");
@@ -105,9 +105,9 @@ class PlanificadorVuelosUsadosTest {
                 "sanidad: la hora local difiere de la UTC, así que el eje queda fijado");
     }
 
-    private static JobQueryService jobQueryConJobs(JobsRegistry jobs) {
-        // getVuelosUsadosJob solo usa el registry; DataLoader no interviene → null.
-        return new JobQueryService(jobs, null);
+    private static ConsultaTrabajosService jobQueryConJobs(RegistroTrabajos jobs) {
+        // getVuelosUsadosJob solo usa el registry; CargadorDatos no interviene → null.
+        return new ConsultaTrabajosService(jobs, null);
     }
 
     private static BloqueSimulacion bloque(

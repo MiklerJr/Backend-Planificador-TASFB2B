@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import org.junit.jupiter.api.Test;
 
@@ -35,7 +35,7 @@ class EstadoInicialWarmupTest {
 
     @Test
     void incluyeSoloLosEnviosActivosAlRelojDelFinDelWarmup() {
-        Map<String, LuggageBatch> auditWarmup = new LinkedHashMap<>();
+        Map<String, LoteEnvio> auditWarmup = new LinkedHashMap<>();
         // D es el registro más reciente del warm-up: fija el reloj UTC en 12:00.
         auditWarmup.put("D", batchSinRuta("D", LocalDateTime.of(DIA, LocalTime.of(12, 0))));
         // A: aterrizó a las 09:00 (antes del reloj) → entregado, fuera del snapshot.
@@ -69,27 +69,27 @@ class EstadoInicialWarmupTest {
         PlanificadorService service =
                 new PlanificadorService(null, null, null, null, null, null);
         assertTrue(service.construirEstadoInicial(List.of()).isEmpty());
-        assertTrue(service.construirEstadoInicial((java.util.Collection<LuggageBatch>) null).isEmpty());
+        assertTrue(service.construirEstadoInicial((java.util.Collection<LoteEnvio>) null).isEmpty());
     }
 
     // ----------------------------------------------------------------------- helpers
 
     /** Batch de 10 maletas con un tramo único que despega a {@code salida} y dura {@code durMin}. */
-    private static LuggageBatch batchConVuelo(String id, LocalTime ready, LocalTime salida, int durMin) {
-        Edge tramo = new Edge();
+    private static LoteEnvio batchConVuelo(String id, LocalTime ready, LocalTime salida, int durMin) {
+        Arista tramo = new Arista();
         tramo.idx = 0;
         tramo.id = "F-" + id;
         tramo.durationMinutes = durMin;
 
-        LuggageBatch b = new LuggageBatch(id, 10, 24, "AAA", "BBB", LocalDateTime.of(DIA, ready));
+        LoteEnvio b = new LoteEnvio(id, 10, 24, "AAA", "BBB", LocalDateTime.of(DIA, ready));
         b.setAssignedRoute(List.of(tramo));
         b.setAssignedDepartures(List.of(
-                GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, salida))));
+                OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, salida))));
         b.setCumpleSLA(true);
         return b;
     }
 
-    private static LuggageBatch batchSinRuta(String id, LocalDateTime ready) {
-        return new LuggageBatch(id, 5, 24, "AAA", "BBB", ready);
+    private static LoteEnvio batchSinRuta(String id, LocalDateTime ready) {
+        return new LoteEnvio(id, 5, 24, "AAA", "BBB", ready);
     }
 }
