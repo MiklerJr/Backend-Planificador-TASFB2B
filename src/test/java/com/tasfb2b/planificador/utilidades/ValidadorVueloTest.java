@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.util;
+package com.tasfb2b.planificador.utilidades;
 
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.validator.VueloValidator;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.validador.ValidadorVuelo;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Coherencia de vuelos al cargar: capacidad &gt; 0 y origen ≠ destino. Las horas de salida y
  * llegada pueden diferir (vuelos que cruzan de un día a otro son válidos).
  */
-class VueloValidatorTest {
+class ValidadorVueloTest {
 
     private static Vuelo vuelo(Integer capacidad, String origen, String destino) {
         Vuelo v = new Vuelo();
@@ -27,7 +27,7 @@ class VueloValidatorTest {
 
     @Test
     void vueloNormalEsCoherente() {
-        assertTrue(VueloValidator.esCoherente(vuelo(250, "SKBO", "SEQM")));
+        assertTrue(ValidadorVuelo.esCoherente(vuelo(250, "SKBO", "SEQM")));
     }
 
     @Test
@@ -36,27 +36,27 @@ class VueloValidatorTest {
         Vuelo v = vuelo(100, "SKBO", "LATI");
         v.setFechaHoraSalida(LocalDateTime.of(2026, 1, 1, 23, 30));
         v.setFechaHoraLlegada(LocalDateTime.of(2026, 1, 2, 5, 10));
-        assertTrue(VueloValidator.esCoherente(v));
+        assertTrue(ValidadorVuelo.esCoherente(v));
     }
 
     @Test
     void capacidadCeroONegativaNoEsCoherente() {
-        assertFalse(VueloValidator.esCoherente(vuelo(0, "SKBO", "SEQM")));
-        assertFalse(VueloValidator.esCoherente(vuelo(-5, "SKBO", "SEQM")));
+        assertFalse(ValidadorVuelo.esCoherente(vuelo(0, "SKBO", "SEQM")));
+        assertFalse(ValidadorVuelo.esCoherente(vuelo(-5, "SKBO", "SEQM")));
     }
 
     @Test
     void capacidadNulaNoEsCoherente() {
-        assertFalse(VueloValidator.esCoherente(vuelo(null, "SKBO", "SEQM")));
+        assertFalse(ValidadorVuelo.esCoherente(vuelo(null, "SKBO", "SEQM")));
     }
 
     @Test
     void origenIgualADestinoNoEsCoherente() {
-        assertFalse(VueloValidator.esCoherente(vuelo(250, "SKBO", "SKBO")));
+        assertFalse(ValidadorVuelo.esCoherente(vuelo(250, "SKBO", "SKBO")));
     }
 
     @Test
     void vueloNuloNoEsCoherente() {
-        assertFalse(VueloValidator.esCoherente(null));
+        assertFalse(ValidadorVuelo.esCoherente(null));
     }
 }
