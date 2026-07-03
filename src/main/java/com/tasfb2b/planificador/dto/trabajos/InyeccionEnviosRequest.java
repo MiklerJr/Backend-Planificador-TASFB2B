@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.jobs;
+package com.tasfb2b.planificador.dto.trabajos;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;

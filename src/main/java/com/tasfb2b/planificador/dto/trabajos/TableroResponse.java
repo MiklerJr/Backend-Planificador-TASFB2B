@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.jobs;
+package com.tasfb2b.planificador.dto.trabajos;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
@@ -6,7 +6,7 @@ import lombok.Data;
 import com.tasfb2b.planificador.dto.simulacion.Metricas;
 
 @Data
-public class DashboardResponse {
+public class TableroResponse {
     private String jobId;
     private String escenario;
     private String algoritmo;

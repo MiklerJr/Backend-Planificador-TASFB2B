@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.jobs;
+package com.tasfb2b.planificador.dto.trabajos;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -6,15 +6,15 @@ import lombok.NoArgsConstructor;
 
 import java.util.List;
 
-import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenRow;
-import com.tasfb2b.planificador.dto.vuelos.CargaVueloRow;
+import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacenFila;
+import com.tasfb2b.planificador.dto.vuelos.CargaVueloFila;
 
 @Data
 public class IndicadoresResponse {
     private String jobId;
     private Umbrales umbrales;
-    private List<CargaVueloRow> vuelos;
-    private List<OcupacionAlmacenRow> almacenes;
+    private List<CargaVueloFila> vuelos;
+    private List<OcupacionAlmacenFila> almacenes;
 
     @Data
     @NoArgsConstructor

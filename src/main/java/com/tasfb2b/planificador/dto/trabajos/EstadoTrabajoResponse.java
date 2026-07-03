@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.jobs;
+package com.tasfb2b.planificador.dto.trabajos;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
@@ -9,7 +9,7 @@ import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 
 @Data
-public class EstadoJobResponse {
+public class EstadoTrabajoResponse {
     private String jobId;
     private String escenario;
     private String algoritmo;

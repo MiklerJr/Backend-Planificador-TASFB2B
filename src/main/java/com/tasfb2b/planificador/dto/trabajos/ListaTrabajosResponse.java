@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.jobs;
+package com.tasfb2b.planificador.dto.trabajos;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
@@ -6,12 +6,12 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-public class JobsListResponse {
-    private List<JobResumen> jobs;
+public class ListaTrabajosResponse {
+    private List<ResumenTrabajo> jobs;
     private int total;
 
     @Data
-    public static class JobResumen {
+    public static class ResumenTrabajo {
         private String jobId;
         private String escenario;
         private String algoritmo;
