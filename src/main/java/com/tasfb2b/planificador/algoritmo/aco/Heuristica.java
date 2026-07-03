@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 import java.util.List;
 
@@ -11,7 +11,7 @@ import java.util.List;
  */
 final class Heuristica {
 
-    double heuristica(LuggageBatch batch, RouteCandidate route, int alternativasOnTime) {
+    double heuristica(LoteEnvio batch, RutaCandidata route, int alternativasOnTime) {
         double slaMin = Math.max(1.0, batch.getSlaLimitHours() * 60.0);
         double slackRatio = Math.max(0.0, Math.min(1.0, route.getSlackMin() / slaMin));
         // J1: NO premiar velocidad/holgura (eso desperdiciaba capacidad escasa). En su
@@ -27,13 +27,13 @@ final class Heuristica {
         return slaScore * scarcityAlt * congestion * capacityScore * routeShape + urgency;
     }
 
-    double heuristicaBatch(LuggageBatch batch) {
+    double heuristicaBatch(LoteEnvio batch) {
         double urgency = 1.0 / Math.max(1.0, batch.getSlaLimitHours());
         double volume = 1.0 + Math.log1p(Math.max(1, batch.getQuantity())) / 8.0;
         return urgency * volume;
     }
 
-    double regret(LuggageBatch batch, List<RouteCandidate> rutas, int alternativasOnTime) {
+    double regret(LoteEnvio batch, List<RutaCandidata> rutas, int alternativasOnTime) {
         if (rutas.isEmpty()) return 0.0;
         double best = routeDesirability(batch, rutas.get(0), alternativasOnTime);
         double second = rutas.size() > 1
@@ -43,17 +43,17 @@ final class Heuristica {
         return scarcity + Math.max(0.0, (best - second) / Math.max(1.0, best));
     }
 
-    private double routeDesirability(LuggageBatch batch, RouteCandidate route, int alternativasOnTime) {
+    private double routeDesirability(LoteEnvio batch, RutaCandidata route, int alternativasOnTime) {
         return heuristica(batch, route, alternativasOnTime);
     }
 
-    double costoSeleccion(LuggageBatch batch, RouteCandidate r) {
+    double costoSeleccion(LoteEnvio batch, RutaCandidata r) {
         double slaMin = Math.max(1.0, batch.getSlaLimitHours() * 60.0);
         double slackRatio = Math.max(0.0, Math.min(1.0, r.getSlackMin() / slaMin));
         return r.getScarcityCost() * slackRatio + r.getTransitMin() * 1e-4;
     }
 
-    static int compararRutaBase(RouteCandidate a, RouteCandidate b) {
+    static int compararRutaBase(RutaCandidata a, RutaCandidata b) {
         int c = Boolean.compare(b.isCumpleSLA(), a.isCumpleSLA());
         if (c != 0) return c;
         c = Long.compare(Math.max(0L, -a.getSlackMin()), Math.max(0L, -b.getSlackMin()));

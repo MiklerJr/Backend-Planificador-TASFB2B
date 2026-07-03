@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,7 +48,7 @@ final class RuletaSeleccion {
 
     Decision elegirRuta(OpcionEnvio opcion) {
         List<Decision> decisiones = new ArrayList<>(opcion.rutas.size());
-        for (RouteCandidate ruta : opcion.rutas) {
+        for (RutaCandidata ruta : opcion.rutas) {
             decisiones.add(new Decision(opcion.ref.batch, ruta,
                     RastroFeromonas.claveFeromona(opcion.batchKey, ruta), opcion.batchKey,
                     heuristica.heuristica(opcion.ref.batch, ruta, opcion.alternativasOnTime)));

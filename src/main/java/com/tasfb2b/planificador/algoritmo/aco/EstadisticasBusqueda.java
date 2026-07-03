@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
 final class EstadisticasBusqueda {
     int dijkstraCalls;

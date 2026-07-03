@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 import java.util.HashMap;
 import java.util.Iterator;
@@ -57,7 +57,7 @@ final class RastroFeromonas {
         return pher * Math.pow(Math.max(d.heuristic, 0.000001), cfg.beta);
     }
 
-    static String claveBatch(LuggageBatch batch) {
+    static String claveBatch(LoteEnvio batch) {
         return "B|"
                 + batch.getOriginCode() + '|'
                 + batch.getDestCode() + '|'
@@ -66,7 +66,7 @@ final class RastroFeromonas {
                 + batch.getSlaLimitHours();
     }
 
-    static String claveFeromona(String batchKey, RouteCandidate route) {
+    static String claveFeromona(String batchKey, RutaCandidata route) {
         return batchKey + '#' + route.signature();
     }
 }

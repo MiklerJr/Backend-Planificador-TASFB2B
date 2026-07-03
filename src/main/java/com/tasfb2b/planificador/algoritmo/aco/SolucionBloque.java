@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
 
 import java.util.List;
 
@@ -18,7 +18,7 @@ final class SolucionBloque {
         int ok = 0;
         double totalCost = 0.0;
         for (Asignacion a : asignaciones) {
-            RouteCandidate r = a.route;
+            RutaCandidata r = a.route;
             if (r.isCumpleSLA()) ok++;
             long late = Math.max(0L, -r.getSlackMin());
             totalCost += r.getTransitMin()

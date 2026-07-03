@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -45,26 +45,26 @@ public class ColoniaACO {
         this.props = props;
     }
 
-    public int procesar(Graph graph,
-                         GreedyRepairOperator enrutador,
-                         List<LuggageBatch> batches,
+    public int procesar(Grafo graph,
+                         OperadorReparacionVoraz enrutador,
+                         List<LoteEnvio> batches,
                          Map<Long, Integer> blockFlight,
                          Map<Long, Integer> blockAirport) {
         return procesar(graph, enrutador, batches, blockFlight, blockAirport, null, 0L);
     }
 
-    public int procesar(Graph graph,
-                         GreedyRepairOperator enrutador,
-                         List<LuggageBatch> batches,
+    public int procesar(Grafo graph,
+                         OperadorReparacionVoraz enrutador,
+                         List<LoteEnvio> batches,
                          Map<Long, Integer> blockFlight,
                          Map<Long, Integer> blockAirport,
                          Random rng) {
         return procesar(graph, enrutador, batches, blockFlight, blockAirport, rng, 0L);
     }
 
-    public int procesar(Graph graph,
-                         GreedyRepairOperator enrutador,
-                         List<LuggageBatch> batches,
+    public int procesar(Grafo graph,
+                         OperadorReparacionVoraz enrutador,
+                         List<LoteEnvio> batches,
                          Map<Long, Integer> blockFlight,
                          Map<Long, Integer> blockAirport,
                          Random rng,
@@ -73,10 +73,10 @@ public class ColoniaACO {
 
         Random random = rng != null ? rng : new Random();
         ConfiguracionACO cfg = configurar(batches.size());
-        List<LuggageBatch> base = ordenarPorUrgencia(batches);
+        List<LoteEnvio> base = ordenarPorUrgencia(batches);
 
-        Map<LuggageBatch, String> batchKeys = new IdentityHashMap<>(base.size() * 2);
-        for (LuggageBatch b : base) batchKeys.put(b, RastroFeromonas.claveBatch(b));
+        Map<LoteEnvio, String> batchKeys = new IdentityHashMap<>(base.size() * 2);
+        for (LoteEnvio b : base) batchKeys.put(b, RastroFeromonas.claveBatch(b));
 
         long inicio = System.nanoTime();
         long deadline = tiempoLimiteMs > 0
@@ -95,7 +95,7 @@ public class ColoniaACO {
         int sinMejora = 0;
         int solucionesEvaluadas = 0;
 
-        Set<LuggageBatch> diferidos = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<LoteEnvio> diferidos = Collections.newSetFromMap(new IdentityHashMap<>());
         SolucionBloque baseDeterministica = construirSolucionBase(
                 enrutador, generador, heuristica, base, blockFlight, blockAirport, deadline, batchKeys, diferidos);
         if (baseDeterministica != null) {
@@ -105,10 +105,10 @@ public class ColoniaACO {
             feromonas.depositar(baseDeterministica, cfg.q * BASE_PHEROMONE_BOOST);
         }
 
-        List<LuggageBatch> baseAnts = base;
+        List<LoteEnvio> baseAnts = base;
         if (!diferidos.isEmpty()) {
             baseAnts = new ArrayList<>(base.size() - diferidos.size());
-            for (LuggageBatch b : base) if (!diferidos.contains(b)) baseAnts.add(b);
+            for (LoteEnvio b : base) if (!diferidos.contains(b)) baseAnts.add(b);
         }
 
         for (int iter = 0; iter < cfg.iterations && System.nanoTime() < deadline; iter++) {
@@ -132,7 +132,7 @@ public class ColoniaACO {
             if (cfg.maxNoImprovement > 0 && sinMejora >= cfg.maxNoImprovement) break;
         }
 
-        for (LuggageBatch b : batches) {
+        for (LoteEnvio b : batches) {
             b.clearRoute();
             b.setCumpleSLA(false);
         }
@@ -163,18 +163,18 @@ public class ColoniaACO {
         return enrutados;
     }
 
-    List<LuggageBatch> ordenarPorUrgencia(List<LuggageBatch> batches) {
-        List<LuggageBatch> copia = new ArrayList<>(batches);
+    List<LoteEnvio> ordenarPorUrgencia(List<LoteEnvio> batches) {
+        List<LoteEnvio> copia = new ArrayList<>(batches);
         copia.sort(Comparator
                 .comparingLong(ColoniaACO::deadlineEpochMin)
-                .thenComparing(Comparator.comparingInt(LuggageBatch::getQuantity).reversed())
-                .thenComparing(LuggageBatch::getOriginCode)
-                .thenComparing(LuggageBatch::getDestCode));
+                .thenComparing(Comparator.comparingInt(LoteEnvio::getQuantity).reversed())
+                .thenComparing(LoteEnvio::getOriginCode)
+                .thenComparing(LoteEnvio::getDestCode));
         return copia;
     }
 
-    private static long deadlineEpochMin(LuggageBatch batch) {
-        return GreedyRepairOperator.toEpochMinPublic(batch.getReadyTime())
+    private static long deadlineEpochMin(LoteEnvio batch) {
+        return OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime())
                 + (long) batch.getSlaLimitHours() * 60L;
     }
 
@@ -199,41 +199,41 @@ public class ColoniaACO {
         return cfg;
     }
 
-    private SolucionBloque construirSolucionBase(GreedyRepairOperator enrutador,
+    private SolucionBloque construirSolucionBase(OperadorReparacionVoraz enrutador,
                                                  GeneradorRutas generador,
                                                  Heuristica heuristica,
-                                                 List<LuggageBatch> base,
+                                                 List<LoteEnvio> base,
                                                  Map<Long, Integer> blockFlight,
                                                  Map<Long, Integer> blockAirport,
                                                  long deadline,
-                                                 Map<LuggageBatch, String> batchKeys,
-                                                 Set<LuggageBatch> diferidos) {
+                                                 Map<LoteEnvio, String> batchKeys,
+                                                 Set<LoteEnvio> diferidos) {
         Map<Long, Integer> simFlight = new HashMap<>(blockFlight);
         Map<Long, Integer> simAirport = new HashMap<>(blockAirport);
         List<Asignacion> asignaciones = new ArrayList<>();
 
-        Map<String, List<LuggageBatch>> grupos = new LinkedHashMap<>();
-        for (LuggageBatch batch : base) {
+        Map<String, List<LoteEnvio>> grupos = new LinkedHashMap<>();
+        for (LoteEnvio batch : base) {
             grupos.computeIfAbsent(groupKey(batch), k -> new ArrayList<>()).add(batch);
         }
 
-        for (List<LuggageBatch> grupo : grupos.values()) {
+        for (List<LoteEnvio> grupo : grupos.values()) {
             if (System.nanoTime() >= deadline) break;
 
-            LuggageBatch rep = grupo.get(0);
-            for (LuggageBatch b : grupo) {
+            LoteEnvio rep = grupo.get(0);
+            for (LoteEnvio b : grupo) {
                 if (b.getQuantity() > rep.getQuantity()) rep = b;
             }
-            List<RouteCandidate> rutasGrupo = generador.obtenerRutas(
+            List<RutaCandidata> rutasGrupo = generador.obtenerRutas(
                     rep, simFlight, simAirport, GROUP_ROUTE_CANDIDATES);
 
-            for (LuggageBatch batch : grupo) {
+            for (LoteEnvio batch : grupo) {
                 if (System.nanoTime() >= deadline) break;
 
-                RouteCandidate elegida = seleccionarRuta(enrutador, heuristica, batch, rutasGrupo, simFlight, simAirport);
+                RutaCandidata elegida = seleccionarRuta(enrutador, heuristica, batch, rutasGrupo, simFlight, simAirport);
                 if (elegida == null) {
                     // Ninguna ruta del grupo le sirve: recomputar para este envío.
-                    List<RouteCandidate> propias = generador.obtenerRutas(
+                    List<RutaCandidata> propias = generador.obtenerRutas(
                             batch, simFlight, simAirport, GROUP_ROUTE_CANDIDATES);
                     elegida = seleccionarRuta(enrutador, heuristica, batch, propias, simFlight, simAirport);
                 }
@@ -255,14 +255,14 @@ public class ColoniaACO {
         return new SolucionBloque(asignaciones, base.size());
     }
 
-    private RouteCandidate seleccionarRuta(GreedyRepairOperator enrutador,
+    private RutaCandidata seleccionarRuta(OperadorReparacionVoraz enrutador,
                                            Heuristica heuristica,
-                                           LuggageBatch batch,
-                                           List<RouteCandidate> candidatos,
+                                           LoteEnvio batch,
+                                           List<RutaCandidata> candidatos,
                                            Map<Long, Integer> simFlight,
                                            Map<Long, Integer> simAirport) {
         double reservaAlmacen = props.getStorageAware().getReservaAlmacenBase();
-        RouteCandidate best = mejorPorCosto(enrutador, heuristica, batch, candidatos, simFlight, simAirport,
+        RutaCandidata best = mejorPorCosto(enrutador, heuristica, batch, candidatos, simFlight, simAirport,
                 RESERVA_BASE, reservaAlmacen);
         if (best == null && (RESERVA_BASE > 0.0 || reservaAlmacen > 0.0)) {
             best = mejorPorCosto(enrutador, heuristica, batch, candidatos, simFlight, simAirport, 0.0, 0.0);
@@ -270,17 +270,17 @@ public class ColoniaACO {
         return best;
     }
 
-    private RouteCandidate mejorPorCosto(GreedyRepairOperator enrutador,
+    private RutaCandidata mejorPorCosto(OperadorReparacionVoraz enrutador,
                                          Heuristica heuristica,
-                                         LuggageBatch batch,
-                                         List<RouteCandidate> candidatos,
+                                         LoteEnvio batch,
+                                         List<RutaCandidata> candidatos,
                                          Map<Long, Integer> simFlight,
                                          Map<Long, Integer> simAirport,
                                          double reservaBase,
                                          double reservaAlmacenBase) {
-        RouteCandidate best = null;
+        RutaCandidata best = null;
         double bestCost = Double.MAX_VALUE;
-        for (RouteCandidate r : candidatos) {
+        for (RutaCandidata r : candidatos) {
             if (!r.isCumpleSLA()) continue;                                  // F1
             if (!enrutador.rutaSirveParaBatch(r, batch, simFlight, simAirport,
                     reservaBase, reservaAlmacenBase)) continue;
@@ -290,10 +290,10 @@ public class ColoniaACO {
         return best;
     }
 
-    private String groupKey(LuggageBatch batch) {
+    private String groupKey(LoteEnvio batch) {
         long readyBucket = batch.getReadyTime() == null
                 ? 0L
-                : GreedyRepairOperator.toEpochMinPublic(batch.getReadyTime()) / GeneradorRutas.CACHE_BUCKET_MIN;
+                : OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime()) / GeneradorRutas.CACHE_BUCKET_MIN;
         return batch.getOriginCode() + '|' + batch.getDestCode()
                 + '|' + readyBucket + '|' + batch.getSlaLimitHours();
     }

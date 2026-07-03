@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
 public class ConfiguracionACO {
     public double alpha = 2.0;   // peso de la feromona (α)

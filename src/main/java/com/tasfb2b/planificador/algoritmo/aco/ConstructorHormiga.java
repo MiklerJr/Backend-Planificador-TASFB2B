@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.algorithm.aco;
+package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -24,14 +24,14 @@ final class ConstructorHormiga {
     private static final int DECISION_FRONTIER = 16;
     private static final int REGRET_FRONTIER = 4;
 
-    private final GreedyRepairOperator enrutador;
+    private final OperadorReparacionVoraz enrutador;
     private final GeneradorRutas generador;
     private final Heuristica heuristica;
     private final RuletaSeleccion ruleta;
     private final RastroFeromonas feromonas;
     private final Random random;
 
-    ConstructorHormiga(GreedyRepairOperator enrutador,
+    ConstructorHormiga(OperadorReparacionVoraz enrutador,
                        GeneradorRutas generador,
                        Heuristica heuristica,
                        RuletaSeleccion ruleta,
@@ -45,17 +45,17 @@ final class ConstructorHormiga {
         this.random = random;
     }
 
-    SolucionBloque construir(List<LuggageBatch> base,
+    SolucionBloque construir(List<LoteEnvio> base,
                              Map<Long, Integer> blockFlight,
                              Map<Long, Integer> blockAirport,
-                             Map<LuggageBatch, String> batchKeys,
+                             Map<LoteEnvio, String> batchKeys,
                              long deadline) {
         Map<Long, Integer> simFlight = new HashMap<>(blockFlight);
         Map<Long, Integer> simAirport = new HashMap<>(blockAirport);
         BolsaPendientes pendientes = new BolsaPendientes(base);
         List<Asignacion> asignaciones = new ArrayList<>();
 
-        Map<LuggageBatch, OpcionEnvio> evalCache = new IdentityHashMap<>(base.size() * 2);
+        Map<LoteEnvio, OpcionEnvio> evalCache = new IdentityHashMap<>(base.size() * 2);
 
         while (!pendientes.isEmpty() && System.nanoTime() < deadline) {
             List<OpcionEnvio> opciones = evaluarFrontier(
@@ -94,8 +94,8 @@ final class ConstructorHormiga {
     private List<OpcionEnvio> evaluarFrontier(BolsaPendientes pendientes,
                                               Map<Long, Integer> simFlight,
                                               Map<Long, Integer> simAirport,
-                                              Map<LuggageBatch, String> batchKeys,
-                                              Map<LuggageBatch, OpcionEnvio> evalCache) {
+                                              Map<LoteEnvio, String> batchKeys,
+                                              Map<LoteEnvio, OpcionEnvio> evalCache) {
         List<OpcionEnvio> opciones = new ArrayList<>();
         List<RefEnvio> sinRuta = new ArrayList<>();
         for (RefEnvio ref : pendientes.frontier(REGRET_FRONTIER, random)) {
@@ -104,14 +104,14 @@ final class ConstructorHormiga {
                 opciones.add(cached);
                 continue;
             }
-            List<RouteCandidate> rutas = generador.obtenerRutas(
+            List<RutaCandidata> rutas = generador.obtenerRutas(
                     ref.batch, simFlight, simAirport, MAX_ROUTE_CANDIDATES);
             if (rutas.isEmpty()) {
                 sinRuta.add(ref);
                 continue;
             }
             int alternativasOnTime = 0;
-            for (RouteCandidate r : rutas) {
+            for (RutaCandidata r : rutas) {
                 if (r.isCumpleSLA()) alternativasOnTime++;
             }
             double regret = heuristica.regret(ref.batch, rutas, alternativasOnTime);
@@ -133,9 +133,9 @@ final class ConstructorHormiga {
     }
 
     private static final class BolsaPendientes {
-        private final List<LuggageBatch> items;
+        private final List<LoteEnvio> items;
 
-        BolsaPendientes(List<LuggageBatch> source) {
+        BolsaPendientes(List<LoteEnvio> source) {
             this.items = new ArrayList<>(source);
         }
 
