@@ -1,27 +1,27 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class AlnsSolution {
+public class SolucionAlns {
 
-    private List<LuggageBatch> batches;
+    private List<LoteEnvio> batches;
 
     private double pesoTransit    = 1.0;
     private double pesoTarde      = 5000.0;
     private double pesoUsoAlmacen = 0.0;   // 0 = desactivado
 
-    public AlnsSolution(List<LuggageBatch> batches) {
+    public SolucionAlns(List<LoteEnvio> batches) {
         this.batches = batches;
     }
 
-    public AlnsSolution(List<LuggageBatch> batches, double pesoTransit, double pesoTarde) {
+    public SolucionAlns(List<LoteEnvio> batches, double pesoTransit, double pesoTarde) {
         this.batches      = batches;
         this.pesoTransit  = pesoTransit;
         this.pesoTarde    = pesoTarde;
     }
 
-    public AlnsSolution(List<LuggageBatch> batches,
+    public SolucionAlns(List<LoteEnvio> batches,
                         double pesoTransit, double pesoTarde, double pesoUsoAlmacen) {
         this.batches        = batches;
         this.pesoTransit    = pesoTransit;
@@ -40,7 +40,7 @@ public class AlnsSolution {
 
     public double calculateCost() {
         double totalCost = 0.0;
-        for (LuggageBatch batch : batches) {
+        for (LoteEnvio batch : batches) {
             double transitTime = batch.getTotalTransitTimeMins();
             totalCost += pesoTransit * transitTime;
 
@@ -59,16 +59,16 @@ public class AlnsSolution {
         return totalCost;
     }
 
-    public AlnsSolution cloneSolution() {
-        List<LuggageBatch> clonedBatches = new ArrayList<>();
-        for (LuggageBatch b : this.batches) {
+    public SolucionAlns cloneSolution() {
+        List<LoteEnvio> clonedBatches = new ArrayList<>();
+        for (LoteEnvio b : this.batches) {
             clonedBatches.add(b.cloneBatch());
         }
-        AlnsSolution clon = new AlnsSolution(clonedBatches, pesoTransit, pesoTarde, pesoUsoAlmacen);
+        SolucionAlns clon = new SolucionAlns(clonedBatches, pesoTransit, pesoTarde, pesoUsoAlmacen);
         return clon;
     }
 
-    public List<LuggageBatch> getBatches() {
+    public List<LoteEnvio> getBatches() {
         return batches;
     }
 }

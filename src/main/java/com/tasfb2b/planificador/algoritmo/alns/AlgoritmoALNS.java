@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.Random;
 
 @Slf4j
-public class AlgorithmALNS {
+public class AlgoritmoALNS {
 
     // ── Hiperparámetros ──────────────────────────────────────────────────────
     public double destroyFactor = 0.20;   // fracción de lotes destruidos por iter
@@ -31,17 +31,17 @@ public class AlgorithmALNS {
     private static final double REACTION_FACTOR    = 0.15; // r ∈ (0,1]
 
     // ── Estado del algoritmo ─────────────────────────────────────────────────
-    private final Graph                  graph;
-    private final GreedyRepairOperator   enrutador;
-    private final List<DestroyOperator>  destroyOps;
+    private final Grafo                  graph;
+    private final OperadorReparacionVoraz   enrutador;
+    private final List<OperadorDestruccion>  destroyOps;
 
     // Pesos adaptativos: un elemento por operador de destroy
     private final double[] weights;
     private final double[] scores;  // acumulado en el segmento actual
     private final int[]    uses;    // usos en el segmento actual
 
-    private AlnsSolution     currentSolution;
-    private AlnsSolution     bestSolution;
+    private SolucionAlns     currentSolution;
+    private SolucionAlns     bestSolution;
     private Map<Long,Integer> currentFlight;
     private Map<Long,Integer> currentAirport;
     private Map<Long,Integer> bestFlight;
@@ -55,23 +55,23 @@ public class AlgorithmALNS {
         if (rng == null) return;
         this.rng = rng;
         if (destroyOps != null) {
-            for (DestroyOperator op : destroyOps) op.setRandom(rng);
+            for (OperadorDestruccion op : destroyOps) op.setRandom(rng);
         }
     }
 
     // ────────────────────────────────────────────────────────────────────────
 
-    public AlgorithmALNS(Graph graph,
-                          GreedyRepairOperator enrutador,
-                          List<LuggageBatch> batches,
+    public AlgoritmoALNS(Grafo graph,
+                          OperadorReparacionVoraz enrutador,
+                          List<LoteEnvio> batches,
                           Map<Long,Integer> blockFlight,
                           Map<Long,Integer> blockAirport) {
         this(graph, enrutador, batches, blockFlight, blockAirport, null);
     }
 
-    public AlgorithmALNS(Graph graph,
-                          GreedyRepairOperator enrutador,
-                          List<LuggageBatch> batches,
+    public AlgoritmoALNS(Grafo graph,
+                          OperadorReparacionVoraz enrutador,
+                          List<LoteEnvio> batches,
                           Map<Long,Integer> blockFlight,
                           Map<Long,Integer> blockAirport,
                           PlanificadorProperties props) {
@@ -95,8 +95,8 @@ public class AlgorithmALNS {
             this.destroyOps = construirOperadoresDestroy(props.getAlns().getOperadoresDestroy(), graph);
         } else {
             this.destroyOps = List.of(
-                    new CapacityDestroyOperator(graph),
-                    new WorstRouteDestroyOperator(graph)
+                    new OperadorDestruccionCapacidad(graph),
+                    new OperadorDestruccionPeorRuta(graph)
             );
         }
 
@@ -107,12 +107,12 @@ public class AlgorithmALNS {
         Arrays.fill(weights, 1.0);
 
         if (props != null) {
-            this.currentSolution = new AlnsSolution(batches,
+            this.currentSolution = new SolucionAlns(batches,
                     props.getObjetivo().getPesoTransit(),
                     props.getObjetivo().getPesoTarde(),
                     props.getObjetivo().getPesoUsoAlmacen());
         } else {
-            this.currentSolution = new AlnsSolution(batches);
+            this.currentSolution = new SolucionAlns(batches);
         }
         this.currentFlight   = new HashMap<>(blockFlight);
         this.currentAirport  = new HashMap<>(blockAirport);
@@ -148,15 +148,15 @@ public class AlgorithmALNS {
             uses[selectedIdx]++;
 
             // ── 2. Clonar estado actual ───────────────────────────────────────
-            AlnsSolution     candidate = currentSolution.cloneSolution();
+            SolucionAlns     candidate = currentSolution.cloneSolution();
             Map<Long,Integer> cFlight  = new HashMap<>(currentFlight);
             Map<Long,Integer> cAirport = new HashMap<>(currentAirport);
 
             // ── 3. Destrucción ────────────────────────────────────────────────
-            List<LuggageBatch> unassigned =
+            List<LoteEnvio> unassigned =
                     destroyOps.get(selectedIdx).destroy(candidate, destroyFactor);
 
-            for (LuggageBatch b : unassigned) {
+            for (LoteEnvio b : unassigned) {
                 enrutador.releaseFromBlock(b, cFlight, cAirport);
                 b.clearRoute();
             }
@@ -227,25 +227,25 @@ public class AlgorithmALNS {
         return rng.nextDouble() < Math.exp((current - candidate) / temp);
     }
 
-    public AlnsSolution      getBestSolution()     { return bestSolution; }
+    public SolucionAlns      getBestSolution()     { return bestSolution; }
     public Map<Long,Integer> getBestBlockFlight()  { return bestFlight;   }
     public Map<Long,Integer> getBestBlockAirport() { return bestAirport;  }
 
-    private static List<DestroyOperator> construirOperadoresDestroy(List<String> nombres, Graph graph) {
-        java.util.ArrayList<DestroyOperator> ops = new java.util.ArrayList<>(nombres.size());
+    private static List<OperadorDestruccion> construirOperadoresDestroy(List<String> nombres, Grafo graph) {
+        java.util.ArrayList<OperadorDestruccion> ops = new java.util.ArrayList<>(nombres.size());
         for (String n : nombres) {
             switch (n.toLowerCase().trim()) {
-                case "capacity"           -> ops.add(new CapacityDestroyOperator(graph));
-                case "worst-route"        -> ops.add(new WorstRouteDestroyOperator(graph));
-                case "random"             -> ops.add(new RandomDestroyOperator(graph));
-                case "airport-congestion" -> ops.add(new AirportCongestionDestroyOperator(graph));
+                case "capacity"           -> ops.add(new OperadorDestruccionCapacidad(graph));
+                case "worst-route"        -> ops.add(new OperadorDestruccionPeorRuta(graph));
+                case "random"             -> ops.add(new OperadorDestruccionAleatoria(graph));
+                case "airport-congestion" -> ops.add(new OperadorDestruccionCongestionAeropuerto(graph));
                 default -> log.warn("Operador destroy desconocido en config: '{}' (ignorado)", n);
             }
         }
         if (ops.isEmpty()) {
             log.warn("Lista de operadores destroy vacía tras parseo — usando defaults");
-            ops.add(new CapacityDestroyOperator(graph));
-            ops.add(new WorstRouteDestroyOperator(graph));
+            ops.add(new OperadorDestruccionCapacidad(graph));
+            ops.add(new OperadorDestruccionPeorRuta(graph));
         }
         return ops;
     }

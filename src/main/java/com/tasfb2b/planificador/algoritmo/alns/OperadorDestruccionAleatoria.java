@@ -1,17 +1,17 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
-public class RandomDestroyOperator implements DestroyOperator {
+public class OperadorDestruccionAleatoria implements OperadorDestruccion {
 
     private Random rng = new Random();
 
-    public RandomDestroyOperator(Graph graph) { }
+    public OperadorDestruccionAleatoria(Grafo graph) { }
 
     @Override
     public void setRandom(Random rng) {
@@ -19,12 +19,12 @@ public class RandomDestroyOperator implements DestroyOperator {
     }
 
     @Override
-    public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
-        List<LuggageBatch> all    = solution.getBatches();
+    public List<LoteEnvio> destroy(SolucionAlns solution, double factor) {
+        List<LoteEnvio> all    = solution.getBatches();
         int                target = Math.max(1, (int)(all.size() * factor));
 
-        List<LuggageBatch> candidatos = new ArrayList<>();
-        for (LuggageBatch b : all) {
+        List<LoteEnvio> candidatos = new ArrayList<>();
+        for (LoteEnvio b : all) {
             if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) {
                 candidatos.add(b);
             }

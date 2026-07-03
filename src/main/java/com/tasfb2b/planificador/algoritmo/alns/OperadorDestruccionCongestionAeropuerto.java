@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,13 +14,13 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 
-public class AirportCongestionDestroyOperator implements DestroyOperator {
+public class OperadorDestruccionCongestionAeropuerto implements OperadorDestruccion {
 
     private static final int TOP_AIRPORTS = 5;
 
     private Random rng = new Random();
 
-    public AirportCongestionDestroyOperator(Graph graph) { }
+    public OperadorDestruccionCongestionAeropuerto(Grafo graph) { }
 
     @Override
     public void setRandom(Random rng) {
@@ -28,15 +28,15 @@ public class AirportCongestionDestroyOperator implements DestroyOperator {
     }
 
     @Override
-    public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
-        List<LuggageBatch> all    = solution.getBatches();
+    public List<LoteEnvio> destroy(SolucionAlns solution, double factor) {
+        List<LoteEnvio> all    = solution.getBatches();
         int                target = Math.max(1, (int)(all.size() * factor));
 
         // 1. Contar uso por aeropuerto (todas las escalas + destinos finales).
         Map<String, Integer> uso = new HashMap<>();
-        for (LuggageBatch b : all) {
+        for (LoteEnvio b : all) {
             if (b.getAssignedRoute() == null || b.getAssignedRoute().isEmpty()) continue;
-            for (Edge e : b.getAssignedRoute()) {
+            for (Arista e : b.getAssignedRoute()) {
                 if (e.to != null && e.to.code != null) {
                     uso.merge(e.to.code, b.getQuantity(), Integer::sum);
                 }
@@ -53,11 +53,11 @@ public class AirportCongestionDestroyOperator implements DestroyOperator {
                 .collect(Collectors.toSet());
 
         // 3. Batches cuyas rutas pasan por al menos uno de los congestionados.
-        List<LuggageBatch> candidatos = new ArrayList<>();
-        for (LuggageBatch b : all) {
+        List<LoteEnvio> candidatos = new ArrayList<>();
+        for (LoteEnvio b : all) {
             if (b.getAssignedRoute() == null || b.getAssignedRoute().isEmpty()) continue;
             boolean pasa = false;
-            for (Edge e : b.getAssignedRoute()) {
+            for (Arista e : b.getAssignedRoute()) {
                 if (e.to != null && congestionados.contains(e.to.code)) {
                     pasa = true;
                     break;

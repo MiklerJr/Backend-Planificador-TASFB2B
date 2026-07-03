@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 
-public class LuggageBatch {
+public class LoteEnvio {
     private String id;
     private int quantity;
     private int slaLimitHours;
@@ -16,16 +16,16 @@ public class LuggageBatch {
     private Integer clienteId;
     private boolean sintetico;
 
-    private List<Edge> assignedRoute;
+    private List<Arista> assignedRoute;
     private List<Long> assignedDepartures; // epoch-minutes, paralelo a assignedRoute
     private boolean cumpleSLA;
 
-    private List<Edge> prefijoFijo;
+    private List<Arista> prefijoFijo;
     private List<Long> prefijoFijoDepartures;
     private String currentOriginCode;
     private LocalDateTime currentReadyTime;
 
-    public LuggageBatch(String id, int quantity, int slaLimitHours,
+    public LoteEnvio(String id, int quantity, int slaLimitHours,
                         String originCode, String destCode, LocalDateTime readyTime) {
         this.id            = id;
         this.quantity      = quantity;
@@ -39,7 +39,7 @@ public class LuggageBatch {
         this.currentReadyTime  = readyTime;
     }
 
-    public void setAssignedRoute(List<Edge> route) {
+    public void setAssignedRoute(List<Arista> route) {
         this.assignedRoute = route;
     }
 
@@ -78,9 +78,9 @@ public class LuggageBatch {
         return prefijoFijo != null && !prefijoFijo.isEmpty();
     }
 
-    public List<Edge> getRutaCompleta() {
+    public List<Arista> getRutaCompleta() {
         if (!tienePrefijo()) return assignedRoute;
-        List<Edge> full = new ArrayList<>(prefijoFijo.size()
+        List<Arista> full = new ArrayList<>(prefijoFijo.size()
                 + (assignedRoute != null ? assignedRoute.size() : 0));
         full.addAll(prefijoFijo);
         if (assignedRoute != null) full.addAll(assignedRoute);
@@ -104,8 +104,8 @@ public class LuggageBatch {
         return tienePrefijo() ? currentReadyTime : readyTime;
     }
 
-    public List<Edge> getPrefijoFijo()                 { return prefijoFijo; }
-    public void setPrefijoFijo(List<Edge> p)           { this.prefijoFijo = p; }
+    public List<Arista> getPrefijoFijo()                 { return prefijoFijo; }
+    public void setPrefijoFijo(List<Arista> p)           { this.prefijoFijo = p; }
     public List<Long> getPrefijoFijoDepartures()       { return prefijoFijoDepartures; }
     public void setPrefijoFijoDepartures(List<Long> d) { this.prefijoFijoDepartures = d; }
     public String getCurrentOriginCode()               { return currentOriginCode; }
@@ -113,8 +113,8 @@ public class LuggageBatch {
     public LocalDateTime getCurrentReadyTime()         { return currentReadyTime; }
     public void setCurrentReadyTime(LocalDateTime t)   { this.currentReadyTime = t; }
 
-    public LuggageBatch cloneBatch() {
-        LuggageBatch clone = new LuggageBatch(id, quantity, slaLimitHours,
+    public LoteEnvio cloneBatch() {
+        LoteEnvio clone = new LoteEnvio(id, quantity, slaLimitHours,
                                                originCode, destCode, readyTime);
         clone.setClienteId(this.clienteId);
         clone.setSintetico(this.sintetico);
@@ -141,7 +141,7 @@ public class LuggageBatch {
     public String getOriginCode()             { return originCode; }
     public String getDestCode()               { return destCode; }
     public LocalDateTime getReadyTime()       { return readyTime; }
-    public List<Edge> getAssignedRoute()      { return assignedRoute; }
+    public List<Arista> getAssignedRoute()      { return assignedRoute; }
     public List<Long> getAssignedDepartures() { return assignedDepartures; }
     public boolean isCumpleSLA()              { return cumpleSLA; }
     public void setCumpleSLA(boolean v)       { this.cumpleSLA = v; }

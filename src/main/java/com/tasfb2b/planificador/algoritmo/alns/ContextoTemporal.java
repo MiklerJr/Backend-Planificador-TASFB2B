@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
 import java.time.LocalDateTime;
 
-public class TemporalContext {
+public class ContextoTemporal {
 
     // ── Eje de datos (inmutable durante el bloque) ──────────────────────────
     public final LocalDateTime scStart;
@@ -19,7 +19,7 @@ public class TemporalContext {
     public long taRealMs;
     public double tasaSinRutaPrevia = 0.0;
 
-    public TemporalContext(LocalDateTime scStart, LocalDateTime scEnd,
+    public ContextoTemporal(LocalDateTime scStart, LocalDateTime scEnd,
                            int scMinutos, int saMinutos, int k, int bloqueIdx) {
         this.scStart   = scStart;
         this.scEnd     = scEnd;

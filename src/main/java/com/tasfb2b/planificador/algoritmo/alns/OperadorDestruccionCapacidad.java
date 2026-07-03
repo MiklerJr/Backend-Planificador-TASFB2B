@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -9,11 +9,11 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
-public class CapacityDestroyOperator implements DestroyOperator {
+public class OperadorDestruccionCapacidad implements OperadorDestruccion {
 
     private Random rng = new Random();
 
-    public CapacityDestroyOperator(Graph graph) { }
+    public OperadorDestruccionCapacidad(Grafo graph) { }
 
     @Override
     public void setRandom(Random rng) {
@@ -21,14 +21,14 @@ public class CapacityDestroyOperator implements DestroyOperator {
     }
 
     @Override
-    public List<LuggageBatch> destroy(AlnsSolution solution, double factor) {
-        List<LuggageBatch> all     = solution.getBatches();
-        List<LuggageBatch> removed = new ArrayList<>();
-        Set<LuggageBatch>  removedSet = new HashSet<>();
+    public List<LoteEnvio> destroy(SolucionAlns solution, double factor) {
+        List<LoteEnvio> all     = solution.getBatches();
+        List<LoteEnvio> removed = new ArrayList<>();
+        Set<LoteEnvio>  removedSet = new HashSet<>();
         int target = Math.max(1, (int)(all.size() * factor));
 
         // Prioridad 1: tardadas — siempre destruir para intentar mejorar
-        for (LuggageBatch b : all) {
+        for (LoteEnvio b : all) {
             if (!b.isCumpleSLA() && hasRoute(b)) {
                 removed.add(b);
                 removedSet.add(b);
@@ -37,12 +37,12 @@ public class CapacityDestroyOperator implements DestroyOperator {
 
         // Prioridad 2: completar con selección aleatoria de lotes enrutados
         if (removed.size() < target) {
-            List<LuggageBatch> candidatos = new ArrayList<>();
-            for (LuggageBatch b : all) {
+            List<LoteEnvio> candidatos = new ArrayList<>();
+            for (LoteEnvio b : all) {
                 if (hasRoute(b) && !removedSet.contains(b)) candidatos.add(b);
             }
             Collections.shuffle(candidatos, rng);
-            for (LuggageBatch b : candidatos) {
+            for (LoteEnvio b : candidatos) {
                 if (removed.size() >= target) break;
                 removed.add(b);
             }
@@ -51,7 +51,7 @@ public class CapacityDestroyOperator implements DestroyOperator {
         return removed;
     }
 
-    private boolean hasRoute(LuggageBatch b) {
+    private boolean hasRoute(LoteEnvio b) {
         return b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
     }
 }

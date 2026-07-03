@@ -1,29 +1,29 @@
-package com.tasfb2b.planificador.algorithm.grafo;
+package com.tasfb2b.planificador.algoritmo.grafo;
 
 import java.util.Objects;
 
-public class Node {
+public class Nodo {
 
     public String code;
     public double lat;
     public double lon;
     public int capacity; // capacidad máxima de almacén del aeropuerto
-    public int idx = -1; // índice entero asignado por GreedyRepairOperator (evita lookups HashMap)
+    public int idx = -1; // índice entero asignado por OperadorReparacionVoraz (evita lookups HashMap)
 
     public int storageCapacity;
     public int storageUsed = 0;
 
-    public Node(String code) {
+    public Nodo(String code) {
         this.code = code;
     }
 
-    public Node(String code, double lat, double lon) {
+    public Nodo(String code, double lat, double lon) {
         this.code = code;
         this.lat = lat;
         this.lon = lon;
     }
 
-    public Node(String code, double lat, double lon, int storageCapacity) {
+    public Nodo(String code, double lat, double lon, int storageCapacity) {
         this.code = code;
         this.storageCapacity = storageCapacity;
     }
@@ -43,7 +43,7 @@ public class Node {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Node node)) return false;
+        if (!(o instanceof Nodo node)) return false;
         return Objects.equals(code, node.code);
     }
 

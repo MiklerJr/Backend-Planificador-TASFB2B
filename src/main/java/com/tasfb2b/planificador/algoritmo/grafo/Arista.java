@@ -1,14 +1,14 @@
-package com.tasfb2b.planificador.algorithm.grafo;
+package com.tasfb2b.planificador.algoritmo.grafo;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 
-public class Edge {
+public class Arista {
 
     public String id; 
-    public Node from;
-    public Node to;
+    public Nodo from;
+    public Nodo to;
     public double cost;      
     
     public int capacity;
@@ -16,12 +16,12 @@ public class Edge {
 
     public LocalDateTime departureTime;
     public LocalDateTime arrivalTime;
-    public Duration      duration;          // precomputado en AlgorithmMapper (maneja medianoche)
+    public Duration      duration;          // precomputado en MapeadorAlgoritmo (maneja medianoche)
     public LocalTime     departureLocalTime; // precomputado para evitar toLocalTime() en el bucle
     public int           depMinuteOfDay;     // hora*60+min, evita LocalTime en el loop caliente
     public int           durationMinutes;    // duración en minutos, evita Duration en el loop caliente
 
-    public int    idx;              // índice único asignado por AlgorithmMapper (para claves long)
+    public int    idx;              // índice único asignado por MapeadorAlgoritmo (para claves long)
     public double pheromone = 1.0;
     public double heuristicCache;
 

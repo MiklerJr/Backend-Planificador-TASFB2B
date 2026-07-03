@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -12,41 +12,41 @@ import java.util.List;
 import java.util.function.Consumer;
 
 @Slf4j
-public class BacklogManager {
+public class GestorBacklog {
 
-    private final Deque<LuggageBatch> sinRuta         = new ArrayDeque<>();
-    private final Deque<LuggageBatch> replanificables = new ArrayDeque<>();
+    private final Deque<LoteEnvio> sinRuta         = new ArrayDeque<>();
+    private final Deque<LoteEnvio> replanificables = new ArrayDeque<>();
     private int     sinRutaDefinitivo = 0;
     private int     picoHistorico     = 0;
     private final int     maxSize;
     private final boolean purgarVencidas;
-    private final Consumer<LuggageBatch> onDescarte;
+    private final Consumer<LoteEnvio> onDescarte;
 
-    public BacklogManager(int maxSize, boolean purgarVencidas) {
+    public GestorBacklog(int maxSize, boolean purgarVencidas) {
         this(maxSize, purgarVencidas, null);
     }
 
-    public BacklogManager(int maxSize, boolean purgarVencidas, Consumer<LuggageBatch> onDescarte) {
+    public GestorBacklog(int maxSize, boolean purgarVencidas, Consumer<LoteEnvio> onDescarte) {
         this.maxSize        = Math.max(0, maxSize);
         this.purgarVencidas = purgarVencidas;
         this.onDescarte     = onDescarte;
     }
 
-    public void addSinRuta(LuggageBatch batch) {
+    public void addSinRuta(LoteEnvio batch) {
         sinRuta.addLast(batch);
         actualizarPico();
         aplicarTope();
     }
 
-    public void addReplanificable(LuggageBatch batch) {
+    public void addReplanificable(LoteEnvio batch) {
         replanificables.addLast(batch);
         actualizarPico();
         aplicarTope();
     }
 
-    public List<LuggageBatch> pollPendientes() {
+    public List<LoteEnvio> pollPendientes() {
         if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
-        List<LuggageBatch> result = new ArrayList<>(sinRuta.size() + replanificables.size());
+        List<LoteEnvio> result = new ArrayList<>(sinRuta.size() + replanificables.size());
         result.addAll(sinRuta);
         result.addAll(replanificables);
         sinRuta.clear();
@@ -54,17 +54,17 @@ public class BacklogManager {
         return result;
     }
 
-    public List<LuggageBatch> peekPendientes() {
+    public List<LoteEnvio> peekPendientes() {
         if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
-        List<LuggageBatch> result = new ArrayList<>(sinRuta.size() + replanificables.size());
+        List<LoteEnvio> result = new ArrayList<>(sinRuta.size() + replanificables.size());
         result.addAll(sinRuta);
         result.addAll(replanificables);
         return result;
     }
 
-    public List<LuggageBatch> pollPendientes(int max) {
+    public List<LoteEnvio> pollPendientes(int max) {
         if (max <= 0) return List.of();
-        List<LuggageBatch> result = new ArrayList<>(Math.min(max, size()));
+        List<LoteEnvio> result = new ArrayList<>(Math.min(max, size()));
         // Prioridad: sinRuta primero (críticos), luego replanificables.
         while (!sinRuta.isEmpty() && result.size() < max) {
             result.add(sinRuta.pollFirst());
@@ -75,19 +75,19 @@ public class BacklogManager {
         return result;
     }
 
-    public List<LuggageBatch> pollPendientesUrgentes(int max) {
+    public List<LoteEnvio> pollPendientesUrgentes(int max) {
         int total = sinRuta.size() + replanificables.size();
         if (max <= 0 || max >= total) {
             return pollPendientes();
         }
-        List<LuggageBatch> todos = new ArrayList<>(total);
+        List<LoteEnvio> todos = new ArrayList<>(total);
         todos.addAll(sinRuta);
         todos.addAll(replanificables);
         sinRuta.clear();
         replanificables.clear();
         todos.sort(Comparator.comparing(
                 b -> b.getReadyTime().plusHours(b.getSlaLimitHours())));
-        List<LuggageBatch> out = new ArrayList<>(todos.subList(0, max));
+        List<LoteEnvio> out = new ArrayList<>(todos.subList(0, max));
         // Re-encolar los menos urgentes (ya ordenados por deadline) para el próximo bloque.
         for (int i = max; i < todos.size(); i++) {
             sinRuta.addLast(todos.get(i));
@@ -104,11 +104,11 @@ public class BacklogManager {
         return n;
     }
 
-    private int purgarLista(Deque<LuggageBatch> deque, LocalDateTime scNow) {
+    private int purgarLista(Deque<LoteEnvio> deque, LocalDateTime scNow) {
         int count = 0;
-        Iterator<LuggageBatch> it = deque.iterator();
+        Iterator<LoteEnvio> it = deque.iterator();
         while (it.hasNext()) {
-            LuggageBatch b = it.next();
+            LoteEnvio b = it.next();
             LocalDateTime deadline = b.getReadyTime().plusHours(b.getSlaLimitHours());
             if (deadline.isBefore(scNow)) {
                 it.remove();
@@ -121,7 +121,7 @@ public class BacklogManager {
     private void aplicarTope() {
         if (maxSize <= 0) return;
         while (sinRuta.size() + replanificables.size() > maxSize) {
-            LuggageBatch b;
+            LoteEnvio b;
             if (!sinRuta.isEmpty())              b = sinRuta.pollFirst();
             else if (!replanificables.isEmpty()) b = replanificables.pollFirst();
             else break;
@@ -129,7 +129,7 @@ public class BacklogManager {
         }
     }
 
-    private boolean descartarDefinitivamente(LuggageBatch b) {
+    private boolean descartarDefinitivamente(LoteEnvio b) {
         if (onDescarte != null) onDescarte.accept(b);
         return b.getAssignedRoute() == null || b.getAssignedRoute().isEmpty();
     }
