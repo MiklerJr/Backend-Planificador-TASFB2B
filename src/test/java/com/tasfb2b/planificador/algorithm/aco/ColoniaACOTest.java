@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class AcoBlockEngineTest {
+class ColoniaACOTest {
 
     @Test
     void dijkstraHijoGeneraCandidatosSinAplicarCapacidad() {
@@ -82,7 +82,7 @@ class AcoBlockEngineTest {
     void acoPadreAsignaElBloqueUsandoCandidatosDijkstra() {
         Graph graph = graphConRutasAlternativas();
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         List<LuggageBatch> batches = List.of(
                 batch("B1", 20, "AAA", "CCC", 24),
@@ -103,7 +103,7 @@ class AcoBlockEngineTest {
     void acoNoSobrepasaCapacidadAunConMemoizacionDeFrontier() {
         Graph graph = graphConRutasAlternativas();
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         // Varios batches del mismo OD (AAA->CCC) ejercitan el camino de
         // memoizacion del frontier (Fase B) y saturan el vuelo directo F1
@@ -136,7 +136,7 @@ class AcoBlockEngineTest {
 
     @Test
     void ordenarPorUrgenciaPriorizaDeadlineAbsolutoNoHorasDeSla() {
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         // "viejo": readyTime antiguo (día 1) con SLA largo (48h) → deadline día 3 07:00.
         // "nuevo": readyTime reciente (día 3) con SLA corto (24h) → deadline día 4 07:00.
@@ -160,7 +160,7 @@ class AcoBlockEngineTest {
         // 2 tramos. Demuestra que la capacidad escasa se reserva para quien la necesita.
         Graph graph = graphConRutasAlternativas();
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         LuggageBatch urgente = batch("U", 20, "AAA", "CCC", 4);
         LuggageBatch flexible = batch("F", 20, "AAA", "CCC", 24);
@@ -367,7 +367,7 @@ class AcoBlockEngineTest {
     void acoNoConfirmaRutasTardiasLasDifiere() {
         Graph graph = graphConRutasAlternativas();
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         // SLA de 1h es imposible: la ruta directa AAA->CCC ya llega ~3h despues
         // del readyTime. Por la Politica 1 (F1) el motor NO confirma rutas tardias:
@@ -387,7 +387,7 @@ class AcoBlockEngineTest {
     void acoPadreConTaAgotadoNoRompeYDejaRestantesSinRuta() {
         Graph graph = graphConRutasAlternativas();
         GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         List<LuggageBatch> batches = List.of(
                 batch("B1", 20, "AAA", "CCC", 24),

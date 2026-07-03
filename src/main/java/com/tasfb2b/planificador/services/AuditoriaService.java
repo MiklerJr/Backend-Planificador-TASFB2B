@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.services;
 
-import com.tasfb2b.planificador.algorithm.aco.CostFunction;
+import com.tasfb2b.planificador.algorithm.aco.ConstantesOperativas;
 import com.tasfb2b.planificador.algorithm.grafo.Edge;
 import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
 import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
@@ -33,7 +33,7 @@ import java.util.zip.ZipOutputStream;
 @Service
 public class AuditoriaService {
 
-    private static final int TIEMPO_MIN_ESCALA = CostFunction.TIEMPO_MIN_ESCALA;
+    private static final int TIEMPO_MIN_ESCALA = ConstantesOperativas.TIEMPO_MIN_ESCALA;
     private static final long DEST_STORAGE_MIN = 10L;
     private static final String CSV_HEADER =
             "idEnvio,origen,destino,clienteId,cantidad,tipoEnvio,registroHHMM,deadlineMin,exitoso,motivoFalla,"

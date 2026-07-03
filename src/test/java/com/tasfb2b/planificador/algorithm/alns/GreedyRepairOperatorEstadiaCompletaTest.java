@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.algorithm.alns;
 
-import com.tasfb2b.planificador.algorithm.aco.AcoBlockEngine;
+import com.tasfb2b.planificador.algorithm.aco.ColoniaACO;
 import com.tasfb2b.planificador.algorithm.grafo.Edge;
 import com.tasfb2b.planificador.algorithm.grafo.Graph;
 import com.tasfb2b.planificador.algorithm.grafo.Node;
@@ -101,7 +101,7 @@ class GreedyRepairOperatorEstadiaCompletaTest {
     void acoPadreNoSobrepasaCapacidadDeAlmacenEnSlotsIntermedios() {
         Graph graph = grafoEscalaLarga();
         GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        AcoBlockEngine engine = new AcoBlockEngine(new PlanificadorProperties());
+        ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
         LuggageBatch batch = batch("B1", 20, 24);
 
         Map<Long, Integer> blockFlight = new HashMap<>();

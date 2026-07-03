@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.util;
 
-import com.tasfb2b.planificador.algorithm.aco.CostFunction;
+import com.tasfb2b.planificador.algorithm.aco.ConstantesOperativas;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
 import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacen;
 import com.tasfb2b.planificador.model.dataset.Vuelo;
@@ -20,8 +20,8 @@ public final class SimulacionFormat {
 
     public static String semaforoPorPorcentaje(double porcentaje) {
         double ratio = porcentaje / 100.0;
-        if (ratio <= CostFunction.UMBRAL_VERDE) return "VERDE";
-        if (ratio <= CostFunction.UMBRAL_AMBAR) return "AMBAR";
+        if (ratio <= ConstantesOperativas.UMBRAL_VERDE) return "VERDE";
+        if (ratio <= ConstantesOperativas.UMBRAL_AMBAR) return "AMBAR";
         return "ROJO";
     }
 

@@ -52,7 +52,7 @@ public class PlanificadorService {
     private final PlanificadorProperties props;
     private final JobsRegistry jobs;
     private final AuditoriaService auditoria;
-    private final AcoBlockEngine acoEngine;
+    private final ColoniaACO acoEngine;
     private final PersistenciaSolucionService persistencia;
     private final SolucionBdReader solucionBdReader;
     private final MotorGrafoCache motorCache;
@@ -76,7 +76,7 @@ public class PlanificadorService {
                                PlanificadorProperties props,
                                JobsRegistry jobs,
                                AuditoriaService auditoria,
-                               AcoBlockEngine acoEngine,
+                               ColoniaACO acoEngine,
                                PersistenciaSolucionService persistencia,
                                SolucionBdReader solucionBdReader,
                                MotorGrafoCache motorCache,
@@ -95,7 +95,7 @@ public class PlanificadorService {
 
     PlanificadorService(DataLoader dataLoader, AlgorithmMapper mapper, PlanificadorProperties props,
                         JobsRegistry jobs, AuditoriaService auditoria,
-                        AcoBlockEngine acoEngine) {
+                        ColoniaACO acoEngine) {
         this(dataLoader, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null),
                 new MotorGrafoCache(), new SkeletonCacheStore(null, null, ""));
@@ -1471,7 +1471,7 @@ public class PlanificadorService {
 
         if (MOTOR_ACO.equalsIgnoreCase(motor)) {
             if (acoEngine == null) {
-                throw new IllegalStateException("AcoBlockEngine no inyectado — motor 'aco' no disponible");
+                throw new IllegalStateException("ColoniaACO no inyectado — motor 'aco' no disponible");
             }
             acoEngine.procesar(graph, enrutador, bloqueBatches, blockFlight, blockAirport, rngSim, presupuestoMs);
             finalBatches = bloqueBatches;

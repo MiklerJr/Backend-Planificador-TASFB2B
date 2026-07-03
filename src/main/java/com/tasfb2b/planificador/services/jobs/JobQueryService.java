@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.services.jobs;
 
-import com.tasfb2b.planificador.algorithm.aco.CostFunction;
+import com.tasfb2b.planificador.algorithm.aco.ConstantesOperativas;
 import com.tasfb2b.planificador.config.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import com.tasfb2b.planificador.dto.jobs.*;
@@ -107,7 +107,7 @@ public class JobQueryService {
         IndicadoresResponse body = new IndicadoresResponse();
         body.setJobId(jobId);
         body.setUmbrales(new IndicadoresResponse.Umbrales(
-                CostFunction.UMBRAL_VERDE, CostFunction.UMBRAL_AMBAR));
+                ConstantesOperativas.UMBRAL_VERDE, ConstantesOperativas.UMBRAL_AMBAR));
         body.setVuelos(cargaVuelosRecientes(job, maxFilasPagina));
         body.setAlmacenes(ocupacionRecientes(job, maxFilasPagina));
         return body;
