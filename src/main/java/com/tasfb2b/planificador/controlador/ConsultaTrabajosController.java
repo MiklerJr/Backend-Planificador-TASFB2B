@@ -32,21 +32,21 @@ public class ConsultaTrabajosController {
     }
 
     @GetMapping("/jobs")
-    public ResponseEntity<ListaTrabajosResponse> listarJobs(
+    public ResponseEntity<ListaTrabajosResponse> listarTrabajos(
             @RequestParam(defaultValue = "true") boolean activos) {
         return ResponseEntity.ok(service.listarJobsResponse(activos));
     }
 
     @GetMapping("/jobs/{jobId}/estado-inicial")
-    public ResponseEntity<EstadoInicialResponse> estadoInicialJob(@PathVariable String jobId) {
-        EstadoTrabajo job = service.getJob(jobId);
+    public ResponseEntity<EstadoInicialResponse> estadoInicialTrabajo(@PathVariable String jobId) {
+        EstadoTrabajo job = service.getTrabajo(jobId);
         if (job == null) return ResponseEntity.notFound().build();
         if (job.estadoInicial == null) return ResponseEntity.noContent().build();
-        return ResponseEntity.ok(service.buildEstadoInicialResponse(job));
+        return ResponseEntity.ok(service.construirEstadoInicialResponse(job));
     }
 
     @GetMapping("/jobs/{jobId}/almacenes/serie")
-    public ResponseEntity<SerieAlmacenesResponse> serieAlmacenesJob(
+    public ResponseEntity<SerieAlmacenesResponse> serieAlmacenesTrabajo(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde) {
         SerieAlmacenesResponse body = service.getSerieAlmacenes(jobId, desde);
@@ -55,79 +55,79 @@ public class ConsultaTrabajosController {
     }
 
     @GetMapping("/jobs/{jobId}/estado")
-    public ResponseEntity<EstadoTrabajoResponse> estadoJob(@PathVariable String jobId) {
-        EstadoTrabajoResponse body = service.getEstadoJob(jobId);
+    public ResponseEntity<EstadoTrabajoResponse> estadoTrabajo(@PathVariable String jobId) {
+        EstadoTrabajoResponse body = service.getEstadoTrabajo(jobId);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/alerta-colapso")
-    public ResponseEntity<AlertaColapso> alertaColapsoJob(@PathVariable String jobId) {
-        EstadoTrabajo job = service.getJob(jobId);
+    public ResponseEntity<AlertaColapso> alertaColapsoTrabajo(@PathVariable String jobId) {
+        EstadoTrabajo job = service.getTrabajo(jobId);
         if (job == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(job.alertaColapso != null ? job.alertaColapso : AlertaColapso.verde());
     }
 
     @GetMapping("/jobs/{jobId}/dashboard")
-    public ResponseEntity<TableroResponse> dashboardJob(@PathVariable String jobId) {
-        TableroResponse body = jobQuery.getDashboardJob(jobId);
+    public ResponseEntity<TableroResponse> tableroTrabajo(@PathVariable String jobId) {
+        TableroResponse body = jobQuery.getTableroTrabajo(jobId);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/indicadores")
-    public ResponseEntity<IndicadoresResponse> indicadoresJob(@PathVariable String jobId) {
-        IndicadoresResponse body = jobQuery.getIndicadoresJob(jobId);
+    public ResponseEntity<IndicadoresResponse> indicadoresTrabajo(@PathVariable String jobId) {
+        IndicadoresResponse body = jobQuery.getIndicadoresTrabajo(jobId);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/vuelos/carga")
-    public ResponseEntity<CargaVuelosResponse> cargaVuelosJob(
+    public ResponseEntity<CargaVuelosResponse> cargaVuelosTrabajo(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde,
             @RequestParam(defaultValue = "0") int limit) {
-        CargaVuelosResponse body = jobQuery.getCargaVuelosJob(jobId, desde, limit);
+        CargaVuelosResponse body = jobQuery.getCargaVuelosTrabajo(jobId, desde, limit);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/vuelos/usados")
-    public ResponseEntity<VuelosUsadosResponse> vuelosUsadosJob(
+    public ResponseEntity<VuelosUsadosResponse> vuelosUsadosTrabajo(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde) {
-        VuelosUsadosResponse body = jobQuery.getVuelosUsadosJob(jobId, desde);
+        VuelosUsadosResponse body = jobQuery.getVuelosUsadosTrabajo(jobId, desde);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/almacenes/ocupacion")
-    public ResponseEntity<OcupacionAlmacenesResponse> ocupacionAlmacenesJob(
+    public ResponseEntity<OcupacionAlmacenesResponse> ocupacionAlmacenesTrabajo(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde,
             @RequestParam(defaultValue = "0") int limit) {
-        OcupacionAlmacenesResponse body = jobQuery.getOcupacionAlmacenesJob(jobId, desde, limit);
+        OcupacionAlmacenesResponse body = jobQuery.getOcupacionAlmacenesTrabajo(jobId, desde, limit);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/asignaciones")
-    public ResponseEntity<AsignacionesResponse> asignacionesJob(
+    public ResponseEntity<AsignacionesResponse> asignacionesTrabajo(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde,
             @RequestParam(required = false) String aeropuerto,
             @RequestParam(required = false) String vueloId,
             @RequestParam(defaultValue = "false") boolean soloEnrutadas) {
-        AsignacionesResponse body = jobQuery.getAsignacionesJob(jobId, desde, aeropuerto, vueloId, soloEnrutadas);
+        AsignacionesResponse body = jobQuery.getAsignacionesTrabajo(jobId, desde, aeropuerto, vueloId, soloEnrutadas);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/envios/{idEnvio}")
-    public ResponseEntity<EnvioEstadoResponse> envioJob(
+    public ResponseEntity<EnvioEstadoResponse> envioTrabajo(
             @PathVariable String jobId, @PathVariable String idEnvio,
             @RequestParam(required = false) String en) {
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();   // 404 job
+        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();   // 404 job
         java.time.LocalDateTime instante;
         try {
             instante = (en == null || en.isBlank()) ? null : java.time.LocalDateTime.parse(en);
@@ -140,10 +140,10 @@ public class ConsultaTrabajosController {
     }
 
     @GetMapping("/jobs/{jobId}/bloques")
-    public ResponseEntity<Map<String, Object>> bloquesJob(
+    public ResponseEntity<Map<String, Object>> bloquesTrabajo(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde) {
-        EstadoTrabajo job = service.getJob(jobId);
+        EstadoTrabajo job = service.getTrabajo(jobId);
         if (job == null) return ResponseEntity.notFound().build();
 
         Map<String, Object> body = new HashMap<>();
@@ -156,8 +156,8 @@ public class ConsultaTrabajosController {
     }
 
     @GetMapping("/jobs/{jobId}/resultado")
-    public ResponseEntity<SimulacionResponse> resultadoJob(@PathVariable String jobId) {
-        EstadoTrabajo job = service.getJob(jobId);
+    public ResponseEntity<SimulacionResponse> resultadoTrabajo(@PathVariable String jobId) {
+        EstadoTrabajo job = service.getTrabajo(jobId);
         if (job == null)             return ResponseEntity.notFound().build();
         if (job.resultado == null)   return ResponseEntity.noContent().build(); // 204 = aún ejecutando
         return ResponseEntity.ok(job.resultado);

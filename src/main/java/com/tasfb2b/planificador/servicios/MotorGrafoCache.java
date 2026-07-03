@@ -15,7 +15,7 @@ import java.util.function.Supplier;
 public class MotorGrafoCache {
 
     private volatile Grafo grafo;
-    private final Map<Long, List<int[]>> skeletonCache = new ConcurrentHashMap<>();
+    private final Map<Long, List<int[]>> cacheEsqueletos = new ConcurrentHashMap<>();
 
     public Grafo obtenerGrafo(Supplier<Grafo> constructor) {
         Grafo g = grafo;
@@ -31,13 +31,13 @@ public class MotorGrafoCache {
         return g;
     }
 
-    public Map<Long, List<int[]>> skeletonCache() {
-        return skeletonCache;
+    public Map<Long, List<int[]>> cacheEsqueletos() {
+        return cacheEsqueletos;
     }
 
     public synchronized void invalidar() {
         grafo = null;
-        skeletonCache.clear();
+        cacheEsqueletos.clear();
         log.info("Caché de grafo y esqueletos invalidada (recarga de dataset).");
     }
 }

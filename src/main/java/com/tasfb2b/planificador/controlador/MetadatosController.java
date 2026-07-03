@@ -29,8 +29,8 @@ public class MetadatosController {
     }
 
     @GetMapping("/dataset/info")
-    public ResponseEntity<DatosInfoResponse> datasetInfo() {
-        return ResponseEntity.ok(datasetMetadata.getDatasetInfo());
+    public ResponseEntity<DatosInfoResponse> datosInfo() {
+        return ResponseEntity.ok(datasetMetadata.getDatosInfo());
     }
 
     @GetMapping("/aeropuertos")

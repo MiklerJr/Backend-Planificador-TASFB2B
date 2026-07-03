@@ -20,25 +20,25 @@ public class MetadatosDatosService {
 
     static final int DEFAULT_DEMANDA_MAX_DIAS = 31;
 
-    private final CargadorDatos dataLoader;
+    private final CargadorDatos cargadorDatos;
     private final int demandaMaxDias;
 
     @Autowired
-    public MetadatosDatosService(CargadorDatos dataLoader, PlanificadorProperties props) {
-        this.dataLoader = dataLoader;
+    public MetadatosDatosService(CargadorDatos cargadorDatos, PlanificadorProperties props) {
+        this.cargadorDatos = cargadorDatos;
         this.demandaMaxDias = (props != null && props.getConsulta() != null
                 && props.getConsulta().getDemandaMaxDias() > 0)
                 ? props.getConsulta().getDemandaMaxDias()
                 : DEFAULT_DEMANDA_MAX_DIAS;
     }
 
-    public MetadatosDatosService(CargadorDatos dataLoader) {
-        this(dataLoader, null);
+    public MetadatosDatosService(CargadorDatos cargadorDatos) {
+        this(cargadorDatos, null);
     }
 
     public Map<String, AeropuertoDTO> getAeropuertosInfo() {
         Map<String, AeropuertoDTO> info = new LinkedHashMap<>();
-        for (Aeropuerto a : dataLoader.getAeropuertos()) {
+        for (Aeropuerto a : cargadorDatos.getAeropuertos()) {
             AeropuertoDTO dto = new AeropuertoDTO();
             dto.setCodigo(a.getCodigo());
             dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
@@ -51,7 +51,7 @@ public class MetadatosDatosService {
     }
 
     public List<VueloBackend> getVuelosPlaneados() {
-        List<Vuelo> vuelos = dataLoader.getVuelos();
+        List<Vuelo> vuelos = cargadorDatos.getVuelos();
         List<VueloBackend> out = new ArrayList<>(vuelos.size());
         for (Vuelo v : vuelos) {
             VueloBackend vb = new VueloBackend();
@@ -67,9 +67,9 @@ public class MetadatosDatosService {
         return out;
     }
 
-    public DatosInfoResponse getDatasetInfo() {
-        LocalDateTime primera = dataLoader.getPrimeraVentana();
-        LocalDateTime ultima  = dataLoader.getUltimaVentana();
+    public DatosInfoResponse getDatosInfo() {
+        LocalDateTime primera = cargadorDatos.getPrimeraVentana();
+        LocalDateTime ultima  = cargadorDatos.getUltimaVentana();
         long diasDisponibles = 0L;
         if (primera != null && ultima != null) {
             diasDisponibles = java.time.Duration.between(primera, ultima).toDays();
@@ -80,19 +80,19 @@ public class MetadatosDatosService {
         out.setUltimaVentana(ultima  != null ? ultima.toString()  : null);
         out.setDiasDisponibles(diasDisponibles);
         // totalMaletas queda por compatibilidad: historicamente equivale a filas/envios.
-        out.setTotalMaletas(dataLoader.getTotalMaletas());
-        out.setTotalEnvios(dataLoader.getTotalEnvios());
-        out.setTotalMaletasIndividuales(dataLoader.getTotalMaletasIndividuales());
-        out.setTotalAeropuertos(dataLoader.getAeropuertos().size());
-        out.setTotalVuelos(dataLoader.getVuelos().size());
+        out.setTotalMaletas(cargadorDatos.getTotalMaletas());
+        out.setTotalEnvios(cargadorDatos.getTotalEnvios());
+        out.setTotalMaletasIndividuales(cargadorDatos.getTotalMaletasIndividuales());
+        out.setTotalAeropuertos(cargadorDatos.getAeropuertos().size());
+        out.setTotalVuelos(cargadorDatos.getVuelos().size());
         return out;
     }
 
     public DemandaResumenResponse getDemandaResumen(LocalDateTime desde,
                                                     LocalDateTime hasta,
                                                     int top) {
-        LocalDateTime primera = dataLoader.getPrimeraVentana();
-        LocalDateTime ultima = dataLoader.getUltimaVentana();
+        LocalDateTime primera = cargadorDatos.getPrimeraVentana();
+        LocalDateTime ultima = cargadorDatos.getUltimaVentana();
         LocalDateTime inicio = desde != null ? desde : primera;
         LocalDateTime fin = hasta;
         if (inicio != null) {
@@ -123,7 +123,7 @@ public class MetadatosDatosService {
         long totalMaletas = 0L;
         long totalEnvios = 0L;
 
-        for (CargadorDatos.DemandaAgrupada fila : dataLoader.agregarDemandaEnRango(inicio, fin)) {
+        for (CargadorDatos.DemandaAgrupada fila : cargadorDatos.agregarDemandaEnRango(inicio, fin)) {
             String origen = safe(fila.origen());
             String destino = safe(fila.destino());
             totalEnvios += fila.envios();

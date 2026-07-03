@@ -38,20 +38,20 @@ public class AlmacenCacheEsqueletos {
     private static final int MAX_SKELETONS_LEIDOS = 64;
     private static final int MAX_TRAMOS_LEIDOS = 4096;
 
-    private final CargadorDatos dataLoader;
+    private final CargadorDatos cargadorDatos;
     private final MotorGrafoCache motorCache;
     private final String archivo;   // vacío ⇒ persistencia desactivada (no-op)
 
     private int clavesUltimoGuardado = 0;
 
     @Autowired
-    public AlmacenCacheEsqueletos(CargadorDatos dataLoader, MotorGrafoCache motorCache,
+    public AlmacenCacheEsqueletos(CargadorDatos cargadorDatos, MotorGrafoCache motorCache,
                               PlanificadorProperties props) {
-        this(dataLoader, motorCache, props.getCache().getSkeletonFile());
+        this(cargadorDatos, motorCache, props.getCache().getSkeletonFile());
     }
 
-    AlmacenCacheEsqueletos(CargadorDatos dataLoader, MotorGrafoCache motorCache, String archivo) {
-        this.dataLoader = dataLoader;
+    AlmacenCacheEsqueletos(CargadorDatos cargadorDatos, MotorGrafoCache motorCache, String archivo) {
+        this.cargadorDatos = cargadorDatos;
         this.motorCache = motorCache;
         this.archivo = archivo == null ? "" : archivo.trim();
     }
@@ -69,8 +69,8 @@ public class AlmacenCacheEsqueletos {
         if (desactivado()) return;
         Map<Long, List<int[]>> cargada = leerSiCoincide(path(), huellaDataset());
         if (cargada.isEmpty()) return;
-        motorCache.skeletonCache().putAll(cargada);
-        clavesUltimoGuardado = motorCache.skeletonCache().size();
+        motorCache.cacheEsqueletos().putAll(cargada);
+        clavesUltimoGuardado = motorCache.cacheEsqueletos().size();
         log.info("Caché de esqueletos cargada desde {}: {} claves (pre-warm de corridas previas reutilizado).",
                 archivo, cargada.size());
     }
@@ -78,10 +78,10 @@ public class AlmacenCacheEsqueletos {
     @PreDestroy
     public synchronized void guardarSiCrecio() {
         if (desactivado()) return;
-        int claves = motorCache.skeletonCache().size();
+        int claves = motorCache.cacheEsqueletos().size();
         if (claves <= clavesUltimoGuardado) return;
         try {
-            escribir(path(), huellaDataset(), motorCache.skeletonCache());
+            escribir(path(), huellaDataset(), motorCache.cacheEsqueletos());
             clavesUltimoGuardado = claves;
             log.info("Caché de esqueletos persistida en {} ({} claves).", archivo, claves);
         } catch (Exception ex) {
@@ -107,14 +107,14 @@ public class AlmacenCacheEsqueletos {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 no disponible", ex);   // imposible en un JRE estándar
         }
-        List<Aeropuerto> aeropuertos = dataLoader != null ? dataLoader.getAeropuertos() : null;
+        List<Aeropuerto> aeropuertos = cargadorDatos != null ? cargadorDatos.getAeropuertos() : null;
         if (aeropuertos != null) {
             for (Aeropuerto a : aeropuertos) {
                 md.update((a.getCodigo() + "|" + a.getOffsetHorario() + "|" + a.getCapacidad() + "\n")
                         .getBytes(StandardCharsets.UTF_8));
             }
         }
-        List<Vuelo> vuelos = dataLoader != null ? dataLoader.getVuelos() : null;
+        List<Vuelo> vuelos = cargadorDatos != null ? cargadorDatos.getVuelos() : null;
         if (vuelos != null) {
             for (Vuelo v : vuelos) {
                 md.update((v.getOrigen() + "|" + v.getDestino() + "|" + v.getFechaHoraSalida() + "|"

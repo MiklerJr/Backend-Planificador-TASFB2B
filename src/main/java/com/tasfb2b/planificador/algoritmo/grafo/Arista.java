@@ -6,30 +6,30 @@ import java.time.LocalTime;
 
 public class Arista {
 
-    public String id; 
-    public Nodo from;
-    public Nodo to;
-    public double cost;      
-    
-    public int capacity;
-    public int usedCapacity = 0;
+    public String id;
+    public Nodo origen;
+    public Nodo destino;
+    public double costo;
 
-    public LocalDateTime departureTime;
-    public LocalDateTime arrivalTime;
-    public Duration      duration;          // precomputado en MapeadorAlgoritmo (maneja medianoche)
-    public LocalTime     departureLocalTime; // precomputado para evitar toLocalTime() en el bucle
-    public int           depMinuteOfDay;     // hora*60+min, evita LocalTime en el loop caliente
-    public int           durationMinutes;    // duración en minutos, evita Duration en el loop caliente
+    public int capacidad;
+    public int capacidadUsada = 0;
 
-    public int    idx;              // índice único asignado por MapeadorAlgoritmo (para claves long)
-    public double pheromone = 1.0;
-    public double heuristicCache;
+    public LocalDateTime horaSalida;
+    public LocalDateTime horaLlegada;
+    public Duration      duracion;          // precomputado en MapeadorAlgoritmo (maneja medianoche)
+    public LocalTime     horaSalidaLocal; // precomputado para evitar toLocalTime() en el bucle
+    public int           minutoDelDiaSalida;     // hora*60+min, evita LocalTime en el loop caliente
+    public int           duracionMinutos;    // duración en minutos, evita Duration en el loop caliente
 
-    public boolean hasCapacity(int demand) {
-        return (usedCapacity + demand) <= capacity;
+    public int    indice;              // índice único asignado por MapeadorAlgoritmo (para claves long)
+    public double feromona = 1.0;
+    public double cacheHeuristica;
+
+    public boolean tieneCapacidad(int demand) {
+        return (capacidadUsada + demand) <= capacidad;
     }
 
-    public void useCapacity(int demand) {
-        this.usedCapacity += demand;
+    public void usarCapacidad(int demand) {
+        this.capacidadUsada += demand;
     }
 }

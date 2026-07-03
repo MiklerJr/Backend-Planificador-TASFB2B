@@ -5,30 +5,30 @@ import java.util.*;
 
 public class Grafo {
 
-    public Map<String, Nodo> nodes = new HashMap<>();
-    public List<Arista> edges = new ArrayList<>();
+    public Map<String, Nodo> nodos = new HashMap<>();
+    public List<Arista> aristas = new ArrayList<>();
 
-    private final Map<String, List<Arista>> adjList = new HashMap<>();
+    private final Map<String, List<Arista>> listaAdyacencia = new HashMap<>();
 
-    public void addNode(@NotBlank(message = "El aeropuerto debe tener un codigo de identificación") String codigo) {
-        if (!nodes.containsKey(codigo)) {
-            nodes.put(codigo, new Nodo(codigo));
+    public void agregarNodo(@NotBlank(message = "El aeropuerto debe tener un codigo de identificación") String codigo) {
+        if (!nodos.containsKey(codigo)) {
+            nodos.put(codigo, new Nodo(codigo));
         }
     }
 
-    public void addEdge(Arista edge) {
-        edges.add(edge);
-        if (edge.from != null) {
-            adjList.computeIfAbsent(edge.from.code, k -> new ArrayList<>()).add(edge);
+    public void agregarArista(Arista edge) {
+        aristas.add(edge);
+        if (edge.origen != null) {
+            listaAdyacencia.computeIfAbsent(edge.origen.codigo, k -> new ArrayList<>()).add(edge);
         }
     }
 
-    public List<Arista> getNeighbors(String nodeId) {
-        List<Arista> result = adjList.get(nodeId);
+    public List<Arista> getVecinos(String nodeId) {
+        List<Arista> result = listaAdyacencia.get(nodeId);
         return result != null ? result : Collections.emptyList();
     }
 
-    public List<Arista> getEdgesFrom(String nodeCode) {
-        return getNeighbors(nodeCode);
+    public List<Arista> getAristasDesde(String nodeCode) {
+        return getVecinos(nodeCode);
     }
 }

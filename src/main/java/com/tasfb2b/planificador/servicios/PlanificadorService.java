@@ -47,7 +47,7 @@ import java.nio.file.Path;
 public class PlanificadorService {
 
     // ── DEPENDENCIAS NUEVAS (ALNS Y ESCENARIOS) ─────────────────────────
-    private final CargadorDatos dataLoader;
+    private final CargadorDatos cargadorDatos;
     private final MapeadorAlgoritmo mapper;
     private final PlanificadorProperties props;
     private final RegistroTrabajos jobs;
@@ -56,7 +56,7 @@ public class PlanificadorService {
     private final PersistenciaSolucionService persistencia;
     private final LectorSolucionBd solucionBdReader;
     private final MotorGrafoCache motorCache;
-    private final AlmacenCacheEsqueletos skeletonStore;
+    private final AlmacenCacheEsqueletos almacenEsqueletos;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -71,7 +71,7 @@ public class PlanificadorService {
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
     @org.springframework.beans.factory.annotation.Autowired
-    public PlanificadorService(CargadorDatos dataLoader,
+    public PlanificadorService(CargadorDatos cargadorDatos,
                                MapeadorAlgoritmo mapper,
                                PlanificadorProperties props,
                                RegistroTrabajos jobs,
@@ -80,8 +80,8 @@ public class PlanificadorService {
                                PersistenciaSolucionService persistencia,
                                LectorSolucionBd solucionBdReader,
                                MotorGrafoCache motorCache,
-                               AlmacenCacheEsqueletos skeletonStore) {
-        this.dataLoader = dataLoader;
+                               AlmacenCacheEsqueletos almacenEsqueletos) {
+        this.cargadorDatos = cargadorDatos;
         this.mapper = mapper;
         this.props = props;
         this.jobs = jobs;
@@ -90,13 +90,13 @@ public class PlanificadorService {
         this.persistencia = persistencia;
         this.solucionBdReader = solucionBdReader;
         this.motorCache = motorCache;
-        this.skeletonStore = skeletonStore;
+        this.almacenEsqueletos = almacenEsqueletos;
     }
 
-    PlanificadorService(CargadorDatos dataLoader, MapeadorAlgoritmo mapper, PlanificadorProperties props,
+    PlanificadorService(CargadorDatos cargadorDatos, MapeadorAlgoritmo mapper, PlanificadorProperties props,
                         RegistroTrabajos jobs, AuditoriaService auditoria,
                         ColoniaACO acoEngine) {
-        this(dataLoader, mapper, props, jobs, auditoria, acoEngine,
+        this(cargadorDatos, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new LectorSolucionBd(null, null, null),
                 new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""));
     }
@@ -112,7 +112,7 @@ public class PlanificadorService {
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = params.getFechaInicio();
-        // Persistir los overrides para poder reiniciar idéntico (ver reiniciarJob).
+        // Persistir los overrides para poder reiniciar idéntico (ver reiniciarTrabajo).
         job.saMin = params.getSaMin();
         job.taSegundos = params.getTaSegundos();
         job.dias = params.getDias();
@@ -129,7 +129,7 @@ public class PlanificadorService {
                 job.resultado = res;
             } finally {
 
-                skeletonStore.guardarSiCrecio();
+                almacenEsqueletos.guardarSiCrecio();
             }
         });
         return job;
@@ -149,13 +149,13 @@ public class PlanificadorService {
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
-        job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarJob)
+        job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarTrabajo)
         jobs.ejecutar(job, () -> {
             try {
                 SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
                 job.resultado = res;
             } finally {
-                skeletonStore.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
+                almacenEsqueletos.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
             }
         });
         return job;
@@ -187,7 +187,7 @@ public class PlanificadorService {
                 SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaEff, enVivo);
                 job.resultado = res;
             } finally {
-                skeletonStore.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
+                almacenEsqueletos.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
             }
         });
         return job;
@@ -203,9 +203,9 @@ public class PlanificadorService {
         if (ta != null && ta <= 0) {
             return "ta (segundos) debe ser > 0 (recibido: " + ta + ")";
         }
-        if (fechaInicio != null && dataLoader != null) {
-            LocalDateTime primera = dataLoader.getPrimeraVentana();
-            LocalDateTime ultima = dataLoader.getUltimaVentana();
+        if (fechaInicio != null && cargadorDatos != null) {
+            LocalDateTime primera = cargadorDatos.getPrimeraVentana();
+            LocalDateTime ultima = cargadorDatos.getUltimaVentana();
             if (primera != null && ultima != null
                     && (fechaInicio.isBefore(primera) || !fechaInicio.isBefore(ultima))) {
                 return "fechaInicio fuera del rango del dataset [" + primera + ", " + ultima + ")";
@@ -227,19 +227,19 @@ public class PlanificadorService {
         return m;
     }
 
-    public EstadoTrabajo getJob(String jobId) {
+    public EstadoTrabajo getTrabajo(String jobId) {
         return jobs.get(jobId);
     }
 
-    public boolean cancelarJob(String jobId) {
+    public boolean cancelarTrabajo(String jobId) {
         return jobs.cancelar(jobId);
     }
 
-    public EstadoTrabajo reiniciarJob(String jobId) {
-        EstadoTrabajo viejo = getJob(jobId);
+    public EstadoTrabajo reiniciarTrabajo(String jobId) {
+        EstadoTrabajo viejo = getTrabajo(jobId);
         if (viejo == null) return null;
         if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(viejo.estado)) {
-            cancelarJob(jobId);
+            cancelarTrabajo(jobId);
         }
         return switch (viejo.getEscenario()) {
             case "1" -> iniciarEscenario1Async(viejo.algoritmo, viejo.seed, viejo.fechaInicio, viejo.enVivo);
@@ -325,9 +325,9 @@ public class PlanificadorService {
                 throw new ParametroInvalidoException("origen y destino no pueden ser iguales (RF02)");
             if (it.getCantidad() <= 0)
                 throw new ParametroInvalidoException("la cantidad debe ser > 0");
-            if (dataLoader.getAeropuerto(it.getOrigen()) == null)
+            if (cargadorDatos.getAeropuerto(it.getOrigen()) == null)
                 throw new ParametroInvalidoException("ICAO origen desconocido: " + it.getOrigen());
-            if (dataLoader.getAeropuerto(it.getDestino()) == null)
+            if (cargadorDatos.getAeropuerto(it.getDestino()) == null)
                 throw new ParametroInvalidoException("ICAO destino desconocido: " + it.getDestino());
         }
         if (!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) return -1;
@@ -357,14 +357,14 @@ public class PlanificadorService {
             LocalDateTime dep = orden.getFechaHoraSalida();
             int depMinDia = dep.getHour() * 60 + dep.getMinute();
             long epochDay = dep.toLocalDate().toEpochDay();
-            long epochMin = epochDay * CodificadorClaveVuelo.DAY_MIN;
+            long epochMin = epochDay * CodificadorClaveVuelo.MIN_DIA;
 
             List<Arista> matches = new ArrayList<>();
-            for (Arista e : graph.edges) {
-                if (e.from != null && e.to != null
-                        && origen.equalsIgnoreCase(e.from.code)
-                        && destino.equalsIgnoreCase(e.to.code)
-                        && e.depMinuteOfDay == depMinDia) {
+            for (Arista e : graph.aristas) {
+                if (e.origen != null && e.destino != null
+                        && origen.equalsIgnoreCase(e.origen.codigo)
+                        && destino.equalsIgnoreCase(e.destino.codigo)
+                        && e.minutoDelDiaSalida == depMinDia) {
                     matches.add(e);
                 }
             }
@@ -377,7 +377,7 @@ public class PlanificadorService {
 
             List<Arista> edgesCancelados = new ArrayList<>();
             for (Arista e : matches) {
-                if (enrutador.addCancelledFlight(CodificadorClaveVuelo.flightKey(e.idx, epochMin))) {
+                if (enrutador.agregarVueloCancelado(CodificadorClaveVuelo.claveVuelo(e.indice, epochMin))) {
                     cancelados++;
                     edgesCancelados.add(e);
                 }
@@ -414,10 +414,10 @@ public class PlanificadorService {
         while (itr.hasNext()) {
             InyeccionEnviosRequest.Item x = itr.next();
             LocalDateTime ready = x.getFechaHoraRegistro();              // UTC o null
-            if (ready != null && !ready.isBefore(ctx.scEnd)) continue;   // aún futura → esperar
-            LocalDateTime readyEff = (ready != null) ? ready : ctx.scStart;  // honra el pasado para el SLA
-            Aeropuerto o = dataLoader.getAeropuerto(x.getOrigen());
-            Aeropuerto d = dataLoader.getAeropuerto(x.getDestino());
+            if (ready != null && !ready.isBefore(ctx.scFin)) continue;   // aún futura → esperar
+            LocalDateTime readyEff = (ready != null) ? ready : ctx.scInicio;  // honra el pasado para el SLA
+            Aeropuerto o = cargadorDatos.getAeropuerto(x.getOrigen());
+            Aeropuerto d = cargadorDatos.getAeropuerto(x.getDestino());
             if (o == null || d == null) { itr.remove(); continue; }      // defensivo (ya validado al encolar)
             int sla = TipoEnvio.derivar(o, d) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
             String id = "INV-" + ctx.bloqueIdx + "-" + (n++);            // sintético; NO existe en ENVIO
@@ -425,7 +425,7 @@ public class PlanificadorService {
                     o.getCodigo(), d.getCodigo(), readyEff);
             b.setSintetico(true);
             if (x.getClienteId() != null) b.setClienteId(x.getClienteId());
-            backlog.addSinRuta(b);                                       // el flujo estándar lo recoge
+            backlog.agregarSinRuta(b);                                       // el flujo estándar lo recoge
             EnvioInyectadoInfo info = new EnvioInyectadoInfo(id, o.getCodigo(), d.getCodigo(),
                     x.getCantidad(), x.getClienteId(), sla, readyEff.toString(), ctx.bloqueIdx,
                     x.getRegistrador(), x.getSede());
@@ -450,7 +450,7 @@ public class PlanificadorService {
 
         List<LoteEnvio> afectados = solucionBdReader.afectadosPorVuelo(
                 idsVuelo, java.time.LocalDate.ofEpochDay(epochDay), indiceVuelo);
-        for (LoteEnvio b : afectados) backlog.addReplanificable(b);
+        for (LoteEnvio b : afectados) backlog.agregarReplanificable(b);
         return afectados.size();
     }
 
@@ -507,7 +507,7 @@ public class PlanificadorService {
     }
 
     public SerieAlmacenesResponse getSerieAlmacenes(String jobId, int desde) {
-        EstadoTrabajo job = getJob(jobId);
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -531,7 +531,7 @@ public class PlanificadorService {
         return body;
     }
 
-    public EstadoInicialResponse buildEstadoInicialResponse(EstadoTrabajo job) {
+    public EstadoInicialResponse construirEstadoInicialResponse(EstadoTrabajo job) {
         EstadoInicialResponse body = new EstadoInicialResponse();
         body.setJobId(job.getJobId());
         if (job.fechaInicio != null) body.setFechaInicio(job.fechaInicio.toString());
@@ -541,8 +541,8 @@ public class PlanificadorService {
         return body;
     }
 
-    public EstadoTrabajoResponse getEstadoJob(String jobId) {
-        EstadoTrabajo job = getJob(jobId);
+    public EstadoTrabajoResponse getEstadoTrabajo(String jobId) {
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         EstadoTrabajoResponse body = new EstadoTrabajoResponse();
@@ -624,7 +624,7 @@ public class PlanificadorService {
         List<ContextoTemporal> plan = construirPlanBloques(k, fechaInicio, saOverride, diasOverride);
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
+            SimulacionResponse r = construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
             r.setK(k);
             r.setSaMinutos(saMin);
             return r;
@@ -635,8 +635,8 @@ public class PlanificadorService {
                 : Collections.emptyList();
 
         Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.skeletonCache());
+                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
@@ -665,24 +665,24 @@ public class PlanificadorService {
 
         if (props.getScenario().isPrewarmSkeletons() && !plan.isEmpty()) {
             long t0Prewarm = System.currentTimeMillis();
-            List<Envio> demandaVentana = dataLoader.getMaletasEnRango(
-                    plan.get(0).scStart, plan.get(plan.size() - 1).scEnd);
+            List<Envio> demandaVentana = cargadorDatos.getMaletasEnRango(
+                    plan.get(0).scInicio, plan.get(plan.size() - 1).scFin);
             if (job != null && !cancelacionPedida(job)) job.estado = "calentando";
             log.info("Pre-warm iniciado: {} envíos en ventana | caché de esqueletos con {} claves precargadas",
-                    demandaVentana.size(), motorCache.skeletonCache().size());
+                    demandaVentana.size(), motorCache.cacheEsqueletos().size());
             int clavesCalentadas = enrutador.precalentarEsqueletos(
-                    mapper.mapToBatches(demandaVentana), PREWARM_ROUTE_CANDIDATES,
+                    mapper.mapearALotes(demandaVentana), PREWARM_ROUTE_CANDIDATES,
                     () -> cancelacionPedida(job));
             log.info("Pre-warm esqueletos (N3): {} claves desde {} envíos en {} ms",
                     clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
             if (job != null && !cancelacionPedida(job)) job.estado = "ejecutando";
-            skeletonStore.guardarSiCrecio();
+            almacenEsqueletos.guardarSiCrecio();
         }
 
         if (cancelacionPedida(job)) {
             log.info("E2 cancelado por usuario antes del primer bloque (warm-up/pre-warm)");
             bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
+            SimulacionResponse r = construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
             r.setK(k);
             r.setSaMinutos(saMin);
             return r;
@@ -719,7 +719,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scStart, ctx.scEnd);   // ventana realmente simulada
+                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);   // ventana realmente simulada
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
@@ -737,17 +737,17 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            backlog.purgarVencidas(ctx.scEnd);
+            backlog.purgarVencidas(ctx.scFin);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job,
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(), rv.colapsoAlmacen(), job,
                     auditAcc.sinRutaSize());
 
             if (rv.colapsoAlmacen()) {
                 colapsoAlmacenDetectado = true;
                 bloqueColapsoAlmacen = bloqueActual;
                 detalleColapsoE2 = rv.detalleColapso();
-                instanteColapsoE2 = ctx.scEnd;
+                instanteColapsoE2 = ctx.scFin;
                 log.warn("E2 COLAPSO por almacén lleno en bloque {}/{} — {}",
                         bloqueActual, totalBloques, rv.detalleColapso());
                 break;
@@ -789,14 +789,14 @@ public class PlanificadorService {
                 tiempoMs, bloqueActual, totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(), saMs,
-                backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
+                backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo());
         if (colapsoAlmacenDetectado) {
             log.warn("E2 detenido por COLAPSO de almacén en bloque {}", bloqueColapsoAlmacen);
         }
         logDiagnosticos(odStats, graph, enrutador);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
-                dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
+                cargadorDatos.getVuelos(), bloqueActual, plan.get(0).scInicio.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
                 colapsoAlmacenDetectado, bloqueColapsoAlmacen,
@@ -845,15 +845,15 @@ public class PlanificadorService {
                 : Collections.emptyList();
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
+            SimulacionResponse r = construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
             r.setK(k);
             r.setSaMinutos(saMin);
             return r;
         }
 
         Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.skeletonCache());
+                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
@@ -917,7 +917,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scStart, ctx.scEnd);   // ventana realmente simulada
+                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);   // ventana realmente simulada
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
@@ -935,17 +935,17 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            backlog.purgarVencidas(ctx.scEnd);
+            backlog.purgarVencidas(ctx.scFin);
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(), rv.colapsoAlmacen(), job,
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(), rv.colapsoAlmacen(), job,
                     auditAcc.sinRutaSize());
 
             if (rv.colapsoAlmacen()) {
                 colapsoAlmacenDetectado = true;
                 bloqueColapsoAlmacen = bloqueActual;
                 detalleColapsoE1 = rv.detalleColapso();
-                instanteColapsoE1 = ctx.scEnd;
+                instanteColapsoE1 = ctx.scFin;
                 log.warn("E1 COLAPSO por almacén lleno en bloque {}/{} — {}",
                         bloqueActual, totalBloques, rv.detalleColapso());
                 break;
@@ -982,14 +982,14 @@ public class PlanificadorService {
                 tiempoMs, bloqueActual, totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(), saMs,
-                backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo());
+                backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo());
         if (colapsoAlmacenDetectado) {
             log.warn("E1 detenido por COLAPSO de almacén en bloque {}", bloqueColapsoAlmacen);
         }
         logDiagnosticos(odStats, graph, enrutador);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
-                dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
+                cargadorDatos.getVuelos(), bloqueActual, plan.get(0).scInicio.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
                 colapsoAlmacenDetectado, bloqueColapsoAlmacen,
@@ -1041,15 +1041,15 @@ public class PlanificadorService {
                 : Collections.emptyList();
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
+            SimulacionResponse r = construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
             r.setK(k);
             r.setSaMinutos(saMin);
             return r;
         }
 
         Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.skeletonCache());
+                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
         SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
@@ -1110,7 +1110,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scStart, ctx.scEnd);   // ventana realmente simulada
+                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);   // ventana realmente simulada
                 // Publicación incremental para dibujo en tiempo real desde el front.
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
@@ -1130,11 +1130,11 @@ public class PlanificadorService {
                 plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
             }
 
-            int vencidos = backlog.purgarVencidas(ctx.scEnd);
+            int vencidos = backlog.purgarVencidas(ctx.scFin);
             boolean backlogDefinitivo = vencidos > 0;
 
             logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.size(),
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(),
                     backlogDefinitivo || rv.colapsoAlmacen(), job, auditAcc.sinRutaSize());
 
             if (rv.colapsoAlmacen()) {
@@ -1142,7 +1142,7 @@ public class PlanificadorService {
                 bloqueColapso = bloqueActual;
                 motivoParada = "almacen_lleno";
                 detalleColapsoE3 = rv.detalleColapso();
-                instanteColapsoE3 = ctx.scEnd;
+                instanteColapsoE3 = ctx.scFin;
                 log.warn("E3 ALMACÉN LLENO en bloque {}/{} — envío {}", bloqueActual, totalBloques, rv.detalleColapso());
                 break;
             }
@@ -1152,7 +1152,7 @@ public class PlanificadorService {
                 bloqueColapso = bloqueActual;
                 motivoParada = "backlog_definitivo";
                 detalleColapsoE3 = vencidos + " envío(s) del backlog con SLA vencido";
-                instanteColapsoE3 = ctx.scEnd;
+                instanteColapsoE3 = ctx.scFin;
                 break;
             }
 
@@ -1185,10 +1185,10 @@ public class PlanificadorService {
                 bloqueActual, totalEnvios, totalMaletas,
                 totalCumpleSLA, totalTardadas, totalSinRuta,
                 taStats.min(), taStats.promedio(), taStats.max(),
-                backlog.picoHistorico(), backlog.size(), backlog.sinRutaDefinitivo(), tiempoMs);
+                backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo(), tiempoMs);
 
         SimulacionResponse res = construirRespuestaFront(0, tiempoMs,
-                dataLoader.getVuelos(), bloqueActual, plan.get(0).scStart.toLocalDate());
+                cargadorDatos.getVuelos(), bloqueActual, plan.get(0).scInicio.toLocalDate());
         llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
                 totalCumpleSLA, totalTardadas, totalMaletas, 0, collapsoDetectado, bloqueColapso,
                 collapsoDetectado ? motivoParada : null, detalleColapsoE3, instanteColapsoE3);
@@ -1275,13 +1275,13 @@ public class PlanificadorService {
         }
         try {
             Grafo graph = motorCache.obtenerGrafo(
-                    () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+                    () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
             Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
             List<VueloCancelado> cancelaciones =
                     solucionBdReader.leerCancelaciones(indiceVuelo, rango.desde(), rango.hasta());
             List<LoteEnvio> sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, rango.desde(), rango.hasta());
             java.util.function.Consumer<java.util.function.Consumer<LoteEnvio>> fuenteEnrutados =
-                    sink -> solucionBdReader.forEachEnrutado(indiceVuelo, rango.desde(), rango.hasta(), sink);
+                    sink -> solucionBdReader.paraCadaEnrutado(indiceVuelo, rango.desde(), rango.hasta(), sink);
 
             Thread.interrupted();   // defensivo: el hilo HTTP no debería traer el flag, pero el ZIP usa NIO
             job.borrarZip();        // descarta el ZIP anterior de este job (regeneración) antes del nuevo
@@ -1339,7 +1339,7 @@ public class PlanificadorService {
         if (desde == null && hasta == null) return new ArrayList<>(sinRuta);
         List<LoteEnvio> out = new ArrayList<>();
         for (LoteEnvio b : sinRuta) {
-            LocalDateTime ready = b.getReadyTime();
+            LocalDateTime ready = b.getTiempoListo();
             if (ready == null) continue;
             if (desde != null && ready.isBefore(desde)) continue;
             if (hasta != null && !ready.isBefore(hasta)) continue;   // hasta exclusivo
@@ -1420,12 +1420,12 @@ public class PlanificadorService {
 
         List<Envio> maletasVentana = demandaEnVivo
                 ? Collections.emptyList()
-                : dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
-        List<LoteEnvio> bloqueBatches = mapper.mapToBatches(maletasVentana);
+                : cargadorDatos.getMaletasEnRango(ctx.scInicio, ctx.scFin);
+        List<LoteEnvio> bloqueBatches = mapper.mapearALotes(maletasVentana);
 
         List<LoteEnvio> afectadosCrudos = new ArrayList<>();
         if (backlog != null) {
-            List<LoteEnvio> pendientes = backlog.pollPendientesUrgentes(
+            List<LoteEnvio> pendientes = backlog.sacarPendientesUrgentes(
                     props.getBacklog().getMaxReprocesoPorBloque());
 
             List<LoteEnvio> normales = new ArrayList<>();
@@ -1434,9 +1434,9 @@ public class PlanificadorService {
                 if (b.tienePrefijo() || enrutador.rutaUsaVueloCancelado(b)) {
                     afectadosCrudos.add(b);   // carril Fase 2 (NO entra al motor)
                 } else {
-                    if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) {
-                        enrutador.releaseFromGlobal(b);
-                        b.clearRoute();
+                    if (b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty()) {
+                        enrutador.liberarDeGlobal(b);
+                        b.limpiarRuta();
                     }
                     normales.add(b);
                 }
@@ -1444,7 +1444,7 @@ public class PlanificadorService {
             if (!normales.isEmpty()) {
                 bloqueBatches = new ArrayList<>(bloqueBatches.size() + normales.size());
                 bloqueBatches.addAll(normales);
-                bloqueBatches.addAll(mapper.mapToBatches(maletasVentana));
+                bloqueBatches.addAll(mapper.mapearALotes(maletasVentana));
             }
         }
 
@@ -1475,28 +1475,28 @@ public class PlanificadorService {
             }
             acoEngine.procesar(graph, enrutador, bloqueBatches, blockFlight, blockAirport, rngSim, presupuestoMs);
             finalBatches = bloqueBatches;
-            enrutador.commitBlock(blockFlight, blockAirport);
+            enrutador.confirmarBloque(blockFlight, blockAirport);
         } else {
             List<LoteEnvio> intra = new ArrayList<>();
             List<LoteEnvio> inter = new ArrayList<>();
             for (LoteEnvio b : bloqueBatches) {
-                if (b.getSlaLimitHours() <= 24) intra.add(b);
+                if (b.getHorasLimiteSla() <= 24) intra.add(b);
                 else inter.add(b);
             }
             for (LoteEnvio b : intra) {
                 if (System.nanoTime() >= deadlineMotorNs) break;
-                enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport);
+                enrutador.reparar(solucionDummy, List.of(b), blockFlight, blockAirport);
             }
             for (LoteEnvio b : inter) {
                 if (System.nanoTime() >= deadlineMotorNs) break;
-                enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport);
+                enrutador.reparar(solucionDummy, List.of(b), blockFlight, blockAirport);
             }
 
             long restanteAlnsMs = Math.max(0L, (deadlineMotorNs - System.nanoTime()) / 1_000_000L);
             if (restanteAlnsMs > 0 && bloqueBatches.stream().anyMatch(b -> !b.isCumpleSLA())) {
                 AlgoritmoALNS alns = new AlgoritmoALNS(
                         graph, enrutador, bloqueBatches, blockFlight, blockAirport, props);
-                if (rngSim != null) alns.setRandom(rngSim);
+                if (rngSim != null) alns.setAleatorio(rngSim);
 
                 double umbralCerca = 0.10;
                 int iteraciones = (ctx.tasaSinRutaPrevia >= umbralCerca)
@@ -1505,14 +1505,14 @@ public class PlanificadorService {
 
                 alns.tiempoLimiteMs = restanteAlnsMs;
 
-                alns.run(iteraciones);
-                finalBatches = alns.getBestSolution().getBatches();
-                telemetryFlight = alns.getBestBlockFlight();
-                telemetryAirport = alns.getBestBlockAirport();
-                enrutador.commitBlock(telemetryFlight, telemetryAirport);
+                alns.ejecutar(iteraciones);
+                finalBatches = alns.getMejorSolucion().getLotes();
+                telemetryFlight = alns.getMejorBloqueVuelo();
+                telemetryAirport = alns.getMejorBloqueAeropuerto();
+                enrutador.confirmarBloque(telemetryFlight, telemetryAirport);
             } else {
                 finalBatches = bloqueBatches;
-                enrutador.commitBlock(blockFlight, blockAirport);
+                enrutador.confirmarBloque(blockFlight, blockAirport);
             }
         }
 
@@ -1558,11 +1558,11 @@ public class PlanificadorService {
         boolean colapsoAlmacen = false;
         String detalleColapso = null;
         for (LoteEnvio b : finalBatches) {
-            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
             if (enrutada && b.isCumpleSLA()) continue;   // on-time: ningún almacén lo bloqueó
             if (enrutador.sinRutaPorAlmacenLleno(b)) {
                 colapsoAlmacen = true;
-                detalleColapso = b.getId() + " " + b.getOriginCode() + "->" + b.getDestCode()
+                detalleColapso = b.getId() + " " + b.getCodigoOrigen() + "->" + b.getCodigoDestino()
                         + (enrutada ? " (desviado tardío por almacén lleno)" : "");
                 break;
             }
@@ -1572,20 +1572,20 @@ public class PlanificadorService {
             boolean motorAco = MOTOR_ACO.equalsIgnoreCase(motor);
             double umbralSlack = props.getBacklog().getUmbralReplanificacionSlack();
             for (LoteEnvio b : finalBatches) {
-                boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+                boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
                 if (!enrutada) {
-                    backlog.addSinRuta(b);
-                } else if (!motorAco && b.isCumpleSLA() && b.getSlaSlackRatio() < umbralSlack) {
+                    backlog.agregarSinRuta(b);
+                } else if (!motorAco && b.isCumpleSLA() && b.getRatioHolguraSla() < umbralSlack) {
                     // Próximo a tardar — candidato a replanificación preventiva.
-                    backlog.addReplanificable(b);
+                    backlog.agregarReplanificable(b);
                 }
             }
             LoteEnvio origenDesbordado = enrutador.reconstruirEsperaOrigenBacklog(
-                    backlog.peekPendientes(), bloqueBatches);
+                    backlog.verPendientes(), bloqueBatches);
             if (origenDesbordado != null && !colapsoAlmacen) {
                 colapsoAlmacen = true;
                 detalleColapso = "origen lleno " + origenDesbordado.getId()
-                        + " @" + origenDesbordado.getOriginCode();
+                        + " @" + origenDesbordado.getCodigoOrigen();
             }
         }
 
@@ -1596,10 +1596,10 @@ public class PlanificadorService {
         ctx.marcarFin(taFijoMs);
 
         BloqueSimulacion bloque = new BloqueSimulacion();
-        bloque.setHoraInicio(ctx.scStart.toString());
-        bloque.setHoraFin(ctx.scEnd.toString());
-        bloque.setHoraInicioUtc(ctx.scStart.toString());
-        bloque.setHoraFinUtc(ctx.scEnd.toString());
+        bloque.setHoraInicio(ctx.scInicio.toString());
+        bloque.setHoraFin(ctx.scFin.toString());
+        bloque.setHoraInicioUtc(ctx.scInicio.toString());
+        bloque.setHoraFinUtc(ctx.scFin.toString());
         bloque.setMaletasProcesadas(finalBatches.size());
         bloque.setMaletasEnrutadas(enrutadas);
         bloque.setAsignaciones(asignaciones);
@@ -1612,7 +1612,7 @@ public class PlanificadorService {
         if (auditAcc != null) auditAcc.llenarAcumuladosFisicos(bloque);
 
         var pre = enrutador.evaluarPreColapso(
-                telemetryAirport, backlog != null ? backlog.peekPendientes() : java.util.List.of());
+                telemetryAirport, backlog != null ? backlog.verPendientes() : java.util.List.of());
         com.tasfb2b.planificador.dto.trabajos.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
 
         if (!colapsoAlmacen && pre.utilAlmacenMax() > 1.0) {
@@ -1708,13 +1708,13 @@ public class PlanificadorService {
                 inicio, fin, k, saMin, scMin, horas);
 
         List<ContextoTemporal> plan = new ArrayList<>();
-        LocalDateTime scStart = inicio;
+        LocalDateTime scInicio = inicio;
         int idx = 0;
-        while (scStart.isBefore(fin)) {
-            LocalDateTime scEnd = scStart.plusMinutes(scMin);
-            if (scEnd.isAfter(fin)) scEnd = fin;
-            plan.add(new ContextoTemporal(scStart, scEnd, scMin, saMin, k, idx++));
-            scStart = scEnd;
+        while (scInicio.isBefore(fin)) {
+            LocalDateTime scFin = scInicio.plusMinutes(scMin);
+            if (scFin.isAfter(fin)) scFin = fin;
+            plan.add(new ContextoTemporal(scInicio, scFin, scMin, saMin, k, idx++));
+            scInicio = scFin;
         }
         return plan;
     }
@@ -1737,8 +1737,8 @@ public class PlanificadorService {
                                                         Integer saMinOverride,
                                                         Integer diasOverride,
                                                         int ventanasFallback) {
-        LocalDateTime primero = dataLoader.getPrimeraVentana();
-        LocalDateTime ultimo = dataLoader.getUltimaVentana();
+        LocalDateTime primero = cargadorDatos.getPrimeraVentana();
+        LocalDateTime ultimo = cargadorDatos.getUltimaVentana();
         if (primero == null || ultimo == null) return Collections.emptyList();
 
         int saMin = (saMinOverride != null && saMinOverride > 0)
@@ -1785,13 +1785,13 @@ public class PlanificadorService {
                 diasOverride != null ? " (dias=" + diasOverride + ")" : "");
 
         List<ContextoTemporal> plan = new ArrayList<>();
-        LocalDateTime scStart = inicio;
+        LocalDateTime scInicio = inicio;
         int idx = 0;
-        while (scStart.isBefore(fin)) {
-            LocalDateTime scEnd = scStart.plusMinutes(scMin);
-            if (scEnd.isAfter(fin)) scEnd = fin;
-            plan.add(new ContextoTemporal(scStart, scEnd, scMin, saMin, k, idx++));
-            scStart = scEnd;
+        while (scInicio.isBefore(fin)) {
+            LocalDateTime scFin = scInicio.plusMinutes(scMin);
+            if (scFin.isAfter(fin)) scFin = fin;
+            plan.add(new ContextoTemporal(scInicio, scFin, scMin, saMin, k, idx++));
+            scInicio = scFin;
         }
         return plan;
     }
@@ -1800,8 +1800,8 @@ public class PlanificadorService {
                                                        LocalDateTime fechaInicio,
                                                        Integer saMinOverride) {
         if (fechaInicio == null) return Collections.emptyList();
-        LocalDateTime primero = dataLoader.getPrimeraVentana();
-        LocalDateTime ultimo  = dataLoader.getUltimaVentana();
+        LocalDateTime primero = cargadorDatos.getPrimeraVentana();
+        LocalDateTime ultimo  = cargadorDatos.getUltimaVentana();
         if (primero == null || ultimo == null) return Collections.emptyList();
 
         int saMin = (saMinOverride != null && saMinOverride > 0)
@@ -1819,13 +1819,13 @@ public class PlanificadorService {
                 primero, fin, k, saMin, scMin);
 
         List<ContextoTemporal> plan = new ArrayList<>();
-        LocalDateTime scStart = primero;
+        LocalDateTime scInicio = primero;
         int idx = 0;
-        while (scStart.isBefore(fin)) {
-            LocalDateTime scEnd = scStart.plusMinutes(scMin);
-            if (scEnd.isAfter(fin)) scEnd = fin;
-            plan.add(new ContextoTemporal(scStart, scEnd, scMin, saMin, k, idx++));
-            scStart = scEnd;
+        while (scInicio.isBefore(fin)) {
+            LocalDateTime scFin = scInicio.plusMinutes(scMin);
+            if (scFin.isAfter(fin)) scFin = fin;
+            plan.add(new ContextoTemporal(scInicio, scFin, scMin, saMin, k, idx++));
+            scInicio = scFin;
         }
         return plan;
     }
@@ -1848,14 +1848,14 @@ public class PlanificadorService {
 
     private AsignacionMaleta construirAsignacionSintetica(String jobId, String idEnvio) {
         if (idEnvio == null || !idEnvio.startsWith("INV-")) return null;
-        EstadoTrabajo job = getJob(jobId);
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job != null) {
             AsignacionMaleta enRam = job.getRutaSintetica(idEnvio);
             if (enRam != null) return enRam;
         }
         if (!persistencia.reflejaEnBd(jobId)) return null;
         Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         return solucionBdReader.buscarPorEnvioInyectado(idEnvio, indiceVuelo)
                 .map(b -> buildAsignaciones(List.of(b)).get(0))
@@ -1865,7 +1865,7 @@ public class PlanificadorService {
     private AsignacionMaleta construirAsignacionDesdeBd(String jobId, String idEnvio) {
         if (!persistencia.reflejaEnBd(jobId)) return null;
         Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
+                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         return solucionBdReader.buscarPorEnvio(idEnvio, indiceVuelo)
                 .map(b -> buildAsignaciones(List.of(b)).get(0))
@@ -1873,7 +1873,7 @@ public class PlanificadorService {
     }
 
     private LocalDateTime ahoraDelJob(String jobId) {
-        EstadoTrabajo job = getJob(jobId);
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
         BloqueSimulacion ultimo = job.ultimoBloque();
         if (ultimo == null || ultimo.getHoraFin() == null) return null;
@@ -1888,14 +1888,14 @@ public class PlanificadorService {
             Grafo graph, OperadorReparacionVoraz enrutador,
             Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
         if (!b.tienePrefijo()) {
-            List<Arista> route = b.getAssignedRoute();
-            List<Long> deps  = b.getAssignedDepartures();
+            List<Arista> route = b.getRutaAsignada();
+            List<Long> deps  = b.getSalidasAsignadas();
             if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
-                enrutador.releaseFromGlobal(b);
-                b.clearRoute();
+                enrutador.liberarDeGlobal(b);
+                b.limpiarRuta();
                 return enrutarSufijo(b, enrutador, blockFlight, blockAirport);   // desde el origen
             }
-            long ahoraMin = OperadorReparacionVoraz.toEpochMinPublic(ctx.scEnd);
+            long ahoraMin = OperadorReparacionVoraz.aMinutoEpochPublico(ctx.scFin);
             int n = route.size();
             int k = n;
             for (int i = 0; i < n; i++) {
@@ -1905,39 +1905,39 @@ public class PlanificadorService {
                 return b;   // ya en el último vuelo / entregado: no tocar (el cancelado ya se voló)
             }
             if (k == 0) {
-                enrutador.releaseFromGlobal(b);   // aún no salió: re-enrutar completo desde el origen
-                b.clearRoute();
+                enrutador.liberarDeGlobal(b);   // aún no salió: re-enrutar completo desde el origen
+                b.limpiarRuta();
                 return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
             }
             Arista cortEdge = route.get(k - 1);
-            long arrCorte = deps.get(k - 1) + cortEdge.durationMinutes;
-            enrutador.releaseSuffixFromGlobal(b, k);
+            long arrCorte = deps.get(k - 1) + cortEdge.duracionMinutos;
+            enrutador.liberarSufijoDeGlobal(b, k);
             b.setPrefijoFijo(new ArrayList<>(route.subList(0, k)));
-            b.setPrefijoFijoDepartures(new ArrayList<>(deps.subList(0, k)));
-            b.setCurrentOriginCode(cortEdge.to.code);
-            b.setCurrentReadyTime(epochMinToLdt(arrCorte));
-            b.setAssignedRoute(new ArrayList<>());
-            b.setAssignedDepartures(null);
+            b.setPrefijoFijoSalidas(new ArrayList<>(deps.subList(0, k)));
+            b.setOrigenActual(cortEdge.destino.codigo);
+            b.setTiempoListoActual(epochMinToLdt(arrCorte));
+            b.setRutaAsignada(new ArrayList<>());
+            b.setSalidasAsignadas(null);
         }
         return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
     }
 
     private LoteEnvio enrutarSufijo(LoteEnvio b, OperadorReparacionVoraz enrutador,
             Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
-        LoteEnvio sintetico = new LoteEnvio(b.getId(), b.getQuantity(), b.getSlaLimitHours(),
-                b.origenEfectivo(), b.getDestCode(), b.readyEfectivo());
+        LoteEnvio sintetico = new LoteEnvio(b.getId(), b.getCantidad(), b.getHorasLimiteSla(),
+                b.origenEfectivo(), b.getCodigoDestino(), b.tiempoListoEfectivo());
         List<OperadorReparacionVoraz.RutaCandidata> candidatos = enrutador.generarCandidatosRuta(
                 sintetico, blockFlight, blockAirport, SUFIJO_ROUTE_CANDIDATES);
         OperadorReparacionVoraz.RutaCandidata elegido = elegirSufijo(candidatos, b, enrutador);
         if (elegido == null) {
-            b.setAssignedRoute(new ArrayList<>());
-            b.setAssignedDepartures(null);
+            b.setRutaAsignada(new ArrayList<>());
+            b.setSalidasAsignadas(null);
             b.setCumpleSLA(false);
             return b;
         }
         enrutador.aplicarCandidatoBloque(sintetico, elegido, blockFlight, blockAirport);
-        b.setAssignedRoute(new ArrayList<>(elegido.getEdges()));
-        b.setAssignedDepartures(new ArrayList<>(elegido.getActualDepartures()));
+        b.setRutaAsignada(new ArrayList<>(elegido.getAristas()));
+        b.setSalidasAsignadas(new ArrayList<>(elegido.getSalidasReales()));
         b.setCumpleSLA(enrutador.cumpleSlaDesdeOrigen(elegido, b));   // SLA desde el origen ORIGINAL
         return b;
     }
@@ -1949,9 +1949,9 @@ public class PlanificadorService {
         OperadorReparacionVoraz.RutaCandidata mejorOnTime = null, mejorTardio = null;
         for (OperadorReparacionVoraz.RutaCandidata c : candidatos) {
             if (enrutador.cumpleSlaDesdeOrigen(c, original)) {
-                if (mejorOnTime == null || c.getArrivalMin() < mejorOnTime.getArrivalMin()) mejorOnTime = c;
+                if (mejorOnTime == null || c.getLlegadaMin() < mejorOnTime.getLlegadaMin()) mejorOnTime = c;
             } else {
-                if (mejorTardio == null || c.getArrivalMin() < mejorTardio.getArrivalMin()) mejorTardio = c;
+                if (mejorTardio == null || c.getLlegadaMin() < mejorTardio.getLlegadaMin()) mejorTardio = c;
             }
         }
         return mejorOnTime != null ? mejorOnTime : mejorTardio;
@@ -1966,26 +1966,26 @@ public class PlanificadorService {
     List<AsignacionMaleta> buildAsignaciones(List<LoteEnvio> batches) {
         return batches.stream().map(b -> {
             List<Arista> rutaCompleta = b.getRutaCompleta();
-            List<Long> depsCompletas = b.getDeparturesCompletas();
-            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            List<Long> depsCompletas = b.getSalidasCompletas();
+            boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
             boolean tieneTramos = rutaCompleta != null && !rutaCompleta.isEmpty()
                     && depsCompletas != null && depsCompletas.size() == rutaCompleta.size();
             AsignacionMaleta asig = new AsignacionMaleta();
             asig.setBatchId(b.getId());
-            asig.setOrigen(b.getOriginCode());
-            asig.setDestino(b.getDestCode());
-            asig.setCantidad(b.getQuantity());
+            asig.setOrigen(b.getCodigoOrigen());
+            asig.setDestino(b.getCodigoDestino());
+            asig.setCantidad(b.getCantidad());
             asig.setEnrutada(enrutada);
             asig.setCumpleSLA(b.isCumpleSLA());
             asig.setRutaVuelos(tieneTramos
                     ? rutaCompleta.stream().map(e -> e.id).collect(Collectors.toList())
                     : Collections.emptyList());
 
-            LocalDateTime ready = b.getReadyTime();
+            LocalDateTime ready = b.getTiempoListo();
             if (ready != null) {
-                long readyUtcMin = toEpochMin(ready);
+                long readyUtcMin = aMinutoEpoch(ready);
                 asig.setRegistroUtc(epochMinToIso(readyUtcMin));
-                asig.setRegistroLocal(epochMinToIso(readyUtcMin + offsetHoras(b.getOriginCode()) * 60L));
+                asig.setRegistroLocal(epochMinToIso(readyUtcMin + offsetHoras(b.getCodigoOrigen()) * 60L));
             }
 
             List<TramoRuta> tramos = Collections.emptyList();
@@ -1996,9 +1996,9 @@ public class PlanificadorService {
                 for (int ti = 0; ti < route.size(); ti++) {
                     var edge = route.get(ti);
                     long depMin = deps.get(ti);          // UTC (epoch-min)
-                    long arrMin = depMin + edge.durationMinutes; // UTC; duración real de vuelo
-                    String origen  = edge.from != null ? edge.from.code : "";
-                    String destino = edge.to != null ? edge.to.code : "";
+                    long arrMin = depMin + edge.duracionMinutos; // UTC; duración real de vuelo
+                    String origen  = edge.origen != null ? edge.origen.codigo : "";
+                    String destino = edge.destino != null ? edge.destino.codigo : "";
                     TramoRuta tr = new TramoRuta();
                     tr.setVueloId(edge.id);
                     tr.setOrigen(origen);
@@ -2007,7 +2007,7 @@ public class PlanificadorService {
                     tr.setLlegadaUtc(epochMinToIso(arrMin));
                     tr.setSalidaLocal(epochMinToIso(depMin + offsetHoras(origen) * 60L));
                     tr.setLlegadaLocal(epochMinToIso(arrMin + offsetHoras(destino) * 60L));
-                    tr.setDuracionMin(edge.durationMinutes);
+                    tr.setDuracionMin(edge.duracionMinutos);
                     tramos.add(tr);
                 }
             }
@@ -2031,8 +2031,8 @@ public class PlanificadorService {
 
         log.info("Conectividad (vuelos de salida por aeropuerto):");
         int sinSalida = 0;
-        for (String code : graph.nodes.keySet()) {
-            int sal = graph.getNeighbors(code).size();
+        for (String code : graph.nodos.keySet()) {
+            int sal = graph.getVecinos(code).size();
             if (sal == 0) {
                 log.warn("  AISLADO: {}", code);
                 sinSalida++;
@@ -2048,7 +2048,7 @@ public class PlanificadorService {
         if (blockFlight == null || blockFlight.isEmpty() || graph == null) return List.of();
 
         Map<Integer, Arista> edgesByIdx = new HashMap<>();
-        for (Arista edge : graph.edges) edgesByIdx.put(edge.idx, edge);
+        for (Arista edge : graph.aristas) edgesByIdx.put(edge.indice, edge);
 
         List<CargaVuelo> out = new ArrayList<>();
         for (Map.Entry<Long, Integer> entry : blockFlight.entrySet()) {
@@ -2061,16 +2061,16 @@ public class PlanificadorService {
 
             LocalDateTime salida = LocalDate.ofEpochDay(epochDay(entry.getKey()))
                     .atStartOfDay()
-                    .plusMinutes(edge.depMinuteOfDay);
-            LocalDateTime llegada = salida.plusMinutes(edge.durationMinutes);
+                    .plusMinutes(edge.minutoDelDiaSalida);
+            LocalDateTime llegada = salida.plusMinutes(edge.duracionMinutos);
 
             CargaVuelo dto = new CargaVuelo();
             dto.setVueloId(edge.id);
-            dto.setOrigen(edge.from != null ? edge.from.code : "");
-            dto.setDestino(edge.to != null ? edge.to.code : "");
+            dto.setOrigen(edge.origen != null ? edge.origen.codigo : "");
+            dto.setDestino(edge.destino != null ? edge.destino.codigo : "");
             dto.setFechaSalida(salida.toString());
             dto.setFechaLlegada(llegada.toString());
-            dto.setCapacidadMaxima(edge.capacity);
+            dto.setCapacidadMaxima(edge.capacidad);
             dto.setCargaAsignada(carga);
             FormatoSimulacion.completarCargaVuelo(dto);
             out.add(dto);
@@ -2086,7 +2086,7 @@ public class PlanificadorService {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
 
         Map<Integer, Nodo> nodesByIdx = new HashMap<>();
-        for (Nodo node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
+        for (Nodo node : graph.nodos.values()) nodesByIdx.put(node.indice, node);
 
         Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();   // clave (nodeIdx, epochDay) → pico
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
@@ -2095,9 +2095,9 @@ public class PlanificadorService {
                     : entry.getValue();
             if (ocupacion <= 0) continue;
             int nodeIdx = resourceIdx(entry.getKey());
-            long slot = entry.getKey() & CodificadorClaveVuelo.DAY_MASK;   // índice de slot (epochMin/60)
-            long epochDia = (slot * OperadorReparacionVoraz.STORAGE_SLOT_MIN) / CodificadorClaveVuelo.DAY_MIN;
-            long claveAeroDia = (((long) nodeIdx) << CodificadorClaveVuelo.DAY_BITS) | (epochDia & CodificadorClaveVuelo.DAY_MASK);
+            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;   // índice de slot (epochMin/60)
+            long epochDia = (slot * OperadorReparacionVoraz.SLOT_ALMACEN_MIN) / CodificadorClaveVuelo.MIN_DIA;
+            long claveAeroDia = (((long) nodeIdx) << CodificadorClaveVuelo.BITS_DIA) | (epochDia & CodificadorClaveVuelo.MASCARA_DIA);
             picoPorAeroDia.merge(claveAeroDia, ocupacion, Integer::max);
         }
 
@@ -2107,9 +2107,9 @@ public class PlanificadorService {
             if (node == null) continue;
 
             OcupacionAlmacen dto = new OcupacionAlmacen();
-            dto.setAeropuerto(node.code);
+            dto.setAeropuerto(node.codigo);
             dto.setFecha(LocalDate.ofEpochDay(epochDay(entry.getKey())).toString());
-            dto.setCapacidadMaxima(node.capacity);
+            dto.setCapacidadMaxima(node.capacidad);
             dto.setOcupacionAsignada(entry.getValue());   // pico concurrente del día
             FormatoSimulacion.completarOcupacionAlmacen(dto);
             out.add(dto);
@@ -2125,7 +2125,7 @@ public class PlanificadorService {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
 
         Map<Integer, Nodo> nodesByIdx = new HashMap<>();
-        for (Nodo node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
+        for (Nodo node : graph.nodos.values()) nodesByIdx.put(node.indice, node);
 
         List<OcupacionAlmacenSlot> out = new ArrayList<>(blockAirport.size());
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
@@ -2136,15 +2136,15 @@ public class PlanificadorService {
             Nodo node = nodesByIdx.get(resourceIdx(entry.getKey()));
             if (node == null) continue;
 
-            long slot = entry.getKey() & CodificadorClaveVuelo.DAY_MASK;   // índice de slot (epochMin/60)
-            long epochMin = slot * OperadorReparacionVoraz.STORAGE_SLOT_MIN;
+            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;   // índice de slot (epochMin/60)
+            long epochMin = slot * OperadorReparacionVoraz.SLOT_ALMACEN_MIN;
 
             OcupacionAlmacenSlot dto = new OcupacionAlmacenSlot();
-            dto.setAeropuerto(node.code);
+            dto.setAeropuerto(node.codigo);
             dto.setHora(epochMinToIso(epochMin));
-            dto.setCapacidadMaxima(node.capacity);
+            dto.setCapacidadMaxima(node.capacidad);
             dto.setOcupacion(ocupacion);
-            double porcentaje = FormatoSimulacion.porcentaje(ocupacion, node.capacity);
+            double porcentaje = FormatoSimulacion.porcentaje(ocupacion, node.capacidad);
             dto.setPorcentajeOcupacion(porcentaje);
             dto.setSemaforo(FormatoSimulacion.semaforoPorPorcentaje(porcentaje));
             out.add(dto);
@@ -2180,11 +2180,11 @@ public class PlanificadorService {
     }
 
     private static int resourceIdx(long key) {
-        return (int) (key >> CodificadorClaveVuelo.DAY_BITS);
+        return (int) (key >> CodificadorClaveVuelo.BITS_DIA);
     }
 
     private static long epochDay(long key) {
-        return key & CodificadorClaveVuelo.DAY_MASK;
+        return key & CodificadorClaveVuelo.MASCARA_DIA;
     }
 
 
@@ -2281,12 +2281,12 @@ public class PlanificadorService {
             if (wIdx % intervaloWarmup == 0 || wIdx == warmupPlan.size()) {
                 log.info("Warm-up ({}): {}% — {}/{} | backlog actual={}",
                         motorRes, (int) Math.round(wIdx * 100.0 / warmupPlan.size()),
-                        wIdx, warmupPlan.size(), backlog.size());
+                        wIdx, warmupPlan.size(), backlog.tamaño());
             }
         }
         log.info("Warm-up completado en {} ms (backlog={}, pico={})",
                 System.currentTimeMillis() - inicioWarmupMs,
-                backlog.size(), backlog.picoHistorico());
+                backlog.tamaño(), backlog.picoHistorico());
         if (job != null && !("cancelado".equals(job.estado) || job.canceladoPorUsuario)) {
             job.estado = "ejecutando";
         }
@@ -2298,13 +2298,13 @@ public class PlanificadorService {
 
         long relojMin = Long.MIN_VALUE;
         for (LoteEnvio b : batchesWarmup) {
-            long readyMin = toEpochMin(b.getReadyTime());
+            long readyMin = aMinutoEpoch(b.getTiempoListo());
             if (readyMin > relojMin) relojMin = readyMin;
         }
 
         List<LoteEnvio> activos = new ArrayList<>();
         for (LoteEnvio b : batchesWarmup) {
-            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
             if (enrutada && ultimoArriboMin(b) > relojMin) activos.add(b);
         }
         return buildAsignaciones(activos);
@@ -2313,8 +2313,8 @@ public class PlanificadorService {
     private static GestorBacklog crearBacklogConPurga(OperadorReparacionVoraz enrutador) {
         return new GestorBacklog(0, true, b -> {
             if (enrutador.rutaUsaVueloCancelado(b)) {
-                enrutador.releaseFromGlobal(b);
-                b.clearRoute();
+                enrutador.liberarDeGlobal(b);
+                b.limpiarRuta();
             }
         });
     }
@@ -2333,9 +2333,9 @@ public class PlanificadorService {
     private record ResumenEnvio(long quantity, boolean enrutada, boolean cumpleSLA,
                                 long readyMin, long ultimoArriboMin) {
         static ResumenEnvio de(LoteEnvio b) {
-            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
-            return new ResumenEnvio(b.getQuantity(), enrutada, b.isCumpleSLA(),
-                    PlanificadorService.toEpochMin(b.getReadyTime()),
+            boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
+            return new ResumenEnvio(b.getCantidad(), enrutada, b.isCumpleSLA(),
+                    PlanificadorService.aMinutoEpoch(b.getTiempoListo()),
                     PlanificadorService.ultimoArriboMin(b));
         }
     }
@@ -2351,12 +2351,12 @@ public class PlanificadorService {
         }
 
         void registrar(LoteEnvio b) {
-            String key = batchAuditKey(b);
+            String key = claveLoteAuditoria(b);
             if (completos != null) { completos.put(key, b); return; }   // warm-up: solo completos
             resumen.put(key, ResumenEnvio.de(b));
-            boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+            boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
             if (enrutada) sinRuta.remove(key);              // pasó de sin-ruta a enrutado
-            else sinRuta.put(key, b.cloneBatch());          // snapshot ligero (sin ruta) para el ZIP
+            else sinRuta.put(key, b.clonar());          // snapshot ligero (sin ruta) para el ZIP
         }
 
         boolean isEmpty()                    { return resumen.isEmpty(); }
@@ -2409,32 +2409,32 @@ public class PlanificadorService {
     }
 
     private static long ultimoArriboMin(LoteEnvio b) {
-        if (b.getAssignedRoute() == null || b.getAssignedDepartures() == null) {
+        if (b.getRutaAsignada() == null || b.getSalidasAsignadas() == null) {
             return Long.MAX_VALUE;
         }
-        int lastIdx = Math.min(b.getAssignedRoute().size(), b.getAssignedDepartures().size()) - 1;
+        int lastIdx = Math.min(b.getRutaAsignada().size(), b.getSalidasAsignadas().size()) - 1;
         if (lastIdx < 0) return Long.MAX_VALUE;
-        return b.getAssignedDepartures().get(lastIdx)
-                + b.getAssignedRoute().get(lastIdx).durationMinutes;
+        return b.getSalidasAsignadas().get(lastIdx)
+                + b.getRutaAsignada().get(lastIdx).duracionMinutos;
     }
 
-    private static long toEpochMin(LocalDateTime dt) {
+    private static long aMinutoEpoch(LocalDateTime dt) {
         if (dt == null) return Long.MIN_VALUE;
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
     }
 
-    private static String batchAuditKey(LoteEnvio b) {
+    private static String claveLoteAuditoria(LoteEnvio b) {
         if (b == null) return "";
         return String.join("|",
                 FormatoSimulacion.safe(b.getId()),
-                FormatoSimulacion.safe(b.getOriginCode()),
-                FormatoSimulacion.safe(b.getDestCode()),
-                b.getReadyTime() != null ? b.getReadyTime().toString() : "",
-                String.valueOf(b.getQuantity()));
+                FormatoSimulacion.safe(b.getCodigoOrigen()),
+                FormatoSimulacion.safe(b.getCodigoDestino()),
+                b.getTiempoListo() != null ? b.getTiempoListo().toString() : "",
+                String.valueOf(b.getCantidad()));
     }
 
     private static void llenarMetricasBacklog(Metricas m, GestorBacklog backlog) {
-        m.setBacklogActual(backlog.size());
+        m.setBacklogActual(backlog.tamaño());
         m.setBacklogPico(backlog.picoHistorico());
         m.setSinRutaDefinitivo(backlog.sinRutaDefinitivo());
     }
@@ -2452,8 +2452,8 @@ public class PlanificadorService {
         Map<String, Integer> mapa = offsetPorCodigo;
         if (mapa == null) {
             mapa = new HashMap<>();
-            // dataLoader puede ser null en tests unitarios sin Spring: offset 0 (UTC = local).
-            List<Aeropuerto> aeropuertos = dataLoader != null ? dataLoader.getAeropuertos() : List.of();
+            // cargadorDatos puede ser null en tests unitarios sin Spring: offset 0 (UTC = local).
+            List<Aeropuerto> aeropuertos = cargadorDatos != null ? cargadorDatos.getAeropuertos() : List.of();
             for (Aeropuerto a : aeropuertos) {
                 if (a.getCodigo() != null && a.getOffsetHorario() != null) {
                     mapa.put(a.getCodigo(), a.getOffsetHorario());

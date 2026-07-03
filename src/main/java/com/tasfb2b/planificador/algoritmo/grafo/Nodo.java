@@ -4,51 +4,51 @@ import java.util.Objects;
 
 public class Nodo {
 
-    public String code;
+    public String codigo;
     public double lat;
     public double lon;
-    public int capacity; // capacidad máxima de almacén del aeropuerto
-    public int idx = -1; // índice entero asignado por OperadorReparacionVoraz (evita lookups HashMap)
+    public int capacidad; // capacidad máxima de almacén del aeropuerto
+    public int indice = -1; // índice entero asignado por OperadorReparacionVoraz (evita lookups HashMap)
 
-    public int storageCapacity;
-    public int storageUsed = 0;
+    public int capacidadAlmacen;
+    public int ocupacionAlmacen = 0;
 
-    public Nodo(String code) {
-        this.code = code;
+    public Nodo(String codigo) {
+        this.codigo = codigo;
     }
 
-    public Nodo(String code, double lat, double lon) {
-        this.code = code;
+    public Nodo(String codigo, double lat, double lon) {
+        this.codigo = codigo;
         this.lat = lat;
         this.lon = lon;
     }
 
-    public Nodo(String code, double lat, double lon, int storageCapacity) {
-        this.code = code;
-        this.storageCapacity = storageCapacity;
+    public Nodo(String codigo, double lat, double lon, int capacidadAlmacen) {
+        this.codigo = codigo;
+        this.capacidadAlmacen = capacidadAlmacen;
     }
 
-    public boolean hasStorageCapacity(int cantidad) {
-        return (storageUsed + cantidad) <= storageCapacity;
+    public boolean tieneCapacidadAlmacen(int cantidad) {
+        return (ocupacionAlmacen + cantidad) <= capacidadAlmacen;
     }
 
-    public void storeLoad(int cantidad) {
-        this.storageUsed += cantidad;
+    public void ocupar(int cantidad) {
+        this.ocupacionAlmacen += cantidad;
     }
 
-    public void releaseLoad(int cantidad) {
-        this.storageUsed = Math.max(0, this.storageUsed - cantidad);
+    public void liberar(int cantidad) {
+        this.ocupacionAlmacen = Math.max(0, this.ocupacionAlmacen - cantidad);
     }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof Nodo node)) return false;
-        return Objects.equals(code, node.code);
+        return Objects.equals(codigo, node.codigo);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(code);
+        return Objects.hash(codigo);
     }
 }

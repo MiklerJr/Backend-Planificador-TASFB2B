@@ -29,24 +29,24 @@ public class IngestaService {
     private final JdbcTemplate jdbc;
     private final MigradorEnviosDb migrador;
     private final AnalizadorAeropuertos aeropuertoParser;
-    private final CargadorDatos dataLoader;
+    private final CargadorDatos cargadorDatos;
     private final RegistroTrabajos jobs;
     private final MotorGrafoCache motorCache;
-    private final AlmacenCacheEsqueletos skeletonStore;
+    private final AlmacenCacheEsqueletos almacenEsqueletos;
 
     private final AtomicReference<IngestaEstado> estado = new AtomicReference<>();
     private final AtomicBoolean enCurso = new AtomicBoolean(false);
 
     public IngestaService(JdbcTemplate jdbc, MigradorEnviosDb migrador, AnalizadorAeropuertos aeropuertoParser,
-                          CargadorDatos dataLoader, RegistroTrabajos jobs, MotorGrafoCache motorCache,
-                          AlmacenCacheEsqueletos skeletonStore) {
+                          CargadorDatos cargadorDatos, RegistroTrabajos jobs, MotorGrafoCache motorCache,
+                          AlmacenCacheEsqueletos almacenEsqueletos) {
         this.jdbc = jdbc;
         this.migrador = migrador;
         this.aeropuertoParser = aeropuertoParser;
-        this.dataLoader = dataLoader;
+        this.cargadorDatos = cargadorDatos;
         this.jobs = jobs;
         this.motorCache = motorCache;
-        this.skeletonStore = skeletonStore;
+        this.almacenEsqueletos = almacenEsqueletos;
     }
 
     public boolean estaEnCurso() { return enCurso.get(); }
@@ -137,11 +137,11 @@ public class IngestaService {
             // 5. Recargar la cache del motor (aeropuertos, vuelos, ventanas) e invalidar el grafo +
             //    esqueletos compartidos: cambian los vuelos ⇒ los edge-idx cacheados ya no valen.
             e.setFase("recargando");
-            dataLoader.load();
+            cargadorDatos.load();
             motorCache.invalidar();
             // Los esqueletos persistidos también son del dataset viejo: borrar el archivo (la
             // huella de AlmacenCacheEsqueletos lo descartaría igual, pero así no quedan huérfanos).
-            skeletonStore.borrar();
+            almacenEsqueletos.borrar();
 
             e.setFase("completada");
             log.info("Ingesta completada: {} aeropuertos, {} vuelos, {} envíos ({} descartados)",

@@ -20,24 +20,24 @@ public class ManejadorExcepcionesGlobal {
     private static final Logger log = LoggerFactory.getLogger(ManejadorExcepcionesGlobal.class);
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex,
+    public ResponseEntity<ErrorResponse> manejarArgumentoIlegal(IllegalArgumentException ex,
                                                                HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
     }
 
     @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class})
-    public ResponseEntity<ErrorResponse> handleParametroInvalido(Exception ex, HttpServletRequest request) {
+    public ResponseEntity<ErrorResponse> manejarParametroInvalido(Exception ex, HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST, "Parámetro inválido: " + ex.getMessage(), request);
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorResponse> handleBodyNoLegible(HttpMessageNotReadableException ex,
+    public ResponseEntity<ErrorResponse> manejarCuerpoNoLegible(HttpMessageNotReadableException ex,
                                                              HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST, "Cuerpo de la petición ausente o malformado", request);
     }
 
     @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
-    public ResponseEntity<ErrorResponse> handleRutaInexistente(Exception ex, HttpServletRequest request) {
+    public ResponseEntity<ErrorResponse> manejarRutaInexistente(Exception ex, HttpServletRequest request) {
         log.warn("Ruta inexistente: {}", pathDe(request));
         return build(HttpStatus.NOT_FOUND, "Recurso no encontrado", request);
     }

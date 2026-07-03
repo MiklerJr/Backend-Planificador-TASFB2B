@@ -29,14 +29,14 @@ public class AuditoriaController {
     }
 
     @GetMapping(value = "/jobs/{jobId}/auditoria.zip")
-    public ResponseEntity<?> auditoriaJob(
+    public ResponseEntity<?> auditoriaTrabajo(
             @PathVariable String jobId,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta) {
 
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
 
         PlanificadorService.ResultadoAuditoria r = service.generarAuditoriaZip(jobId, desde, hasta);
         if (!r.disponible()) {
@@ -63,7 +63,7 @@ public class AuditoriaController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha) {
         LocalDateTime desde = fecha.atStartOfDay();
         LocalDateTime hasta = fecha.plusDays(1).atStartOfDay();
-        return auditoriaJob(jobId, desde, hasta);   // reusa validación + clamp + headers
+        return auditoriaTrabajo(jobId, desde, hasta);   // reusa validación + clamp + headers
     }
 
     @GetMapping(value = "/jobs/{jobId}/auditoria/estimacion")
@@ -74,7 +74,7 @@ public class AuditoriaController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta) {
 
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
 
         PlanificadorService.ResultadoEstimacion r = service.estimarAuditoria(jobId, desde, hasta);
         if (!r.disponible()) {

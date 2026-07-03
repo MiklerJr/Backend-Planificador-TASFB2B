@@ -34,7 +34,7 @@ import java.util.zip.ZipOutputStream;
 public class AuditoriaService {
 
     private static final int TIEMPO_MIN_ESCALA = ConstantesOperativas.TIEMPO_MIN_ESCALA;
-    private static final long DEST_STORAGE_MIN = 10L;
+    private static final long ALMACEN_DEST_MIN = 10L;
     private static final String CSV_HEADER =
             "idEnvio,origen,destino,clienteId,cantidad,tipoEnvio,registroHHMM,deadlineMin,exitoso,motivoFalla,"
                     + "ruta,numTramos,numEscalas,tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,"
@@ -49,17 +49,17 @@ public class AuditoriaService {
     public AuditoriaEnvio construir(LoteEnvio batch) {
         AuditoriaEnvio audit = new AuditoriaEnvio();
         audit.setIdEnvio(batch.getId());
-        audit.setOrigen(batch.getOriginCode());
-        audit.setDestino(batch.getDestCode());
+        audit.setOrigen(batch.getCodigoOrigen());
+        audit.setDestino(batch.getCodigoDestino());
         audit.setClienteId(batch.getClienteId());
-        audit.setCantidad(batch.getQuantity());
-        audit.setTipoEnvio(batch.getSlaLimitHours() <= 24 ? "INTRACONTINENTAL" : "INTERCONTINENTAL");
+        audit.setCantidad(batch.getCantidad());
+        audit.setTipoEnvio(batch.getHorasLimiteSla() <= 24 ? "INTRACONTINENTAL" : "INTERCONTINENTAL");
         audit.setRegistroHHMM(String.format("%02d:%02d",
-                batch.getReadyTime().getHour(), batch.getReadyTime().getMinute()));
-        audit.setFechaHoraInicio(batch.getReadyTime());
+                batch.getTiempoListo().getHour(), batch.getTiempoListo().getMinute()));
+        audit.setFechaHoraInicio(batch.getTiempoListo());
 
-        long readyMin = toEpochMin(batch.getReadyTime());
-        int slaMin = batch.getSlaLimitHours() * 60;
+        long readyMin = aMinutoEpoch(batch.getTiempoListo());
+        int slaMin = batch.getHorasLimiteSla() * 60;
         audit.setDeadlineMin(slaMin);
 
         List<Arista> ruta = batch.getRutaCompleta();   // ruta real = prefijo volado + sufijo
@@ -74,8 +74,8 @@ public class AuditoriaService {
             return audit;
         }
 
-        StringBuilder rutaStr = new StringBuilder(ruta.get(0).from.code);
-        for (Arista e : ruta) rutaStr.append("->").append(e.to.code);
+        StringBuilder rutaStr = new StringBuilder(ruta.get(0).origen.codigo);
+        for (Arista e : ruta) rutaStr.append("->").append(e.destino.codigo);
         audit.setRuta(rutaStr.toString());
 
         int numTramos = ruta.size();
@@ -84,13 +84,13 @@ public class AuditoriaService {
         audit.setNumEscalas(numEscalas);
 
         int tiempoVueloMin = 0;
-        for (Arista e : ruta) tiempoVueloMin += e.durationMinutes;
+        for (Arista e : ruta) tiempoVueloMin += e.duracionMinutos;
 
         int tiempoEsperaMin = 0;
-        List<Long> deps = batch.getDeparturesCompletas();
+        List<Long> deps = batch.getSalidasCompletas();
         if (deps != null && deps.size() == ruta.size()) {
             for (int i = 0; i < ruta.size() - 1; i++) {
-                long llegada = deps.get(i) + ruta.get(i).durationMinutes;
+                long llegada = deps.get(i) + ruta.get(i).duracionMinutos;
                 long salida  = deps.get(i + 1);
                 tiempoEsperaMin += (int) Math.max(0, salida - llegada);
             }
@@ -101,12 +101,12 @@ public class AuditoriaService {
         audit.setTiempoTotalMin(tiempoTotalMin);
 
         long llegadaEpoch = (deps != null && !deps.isEmpty())
-                ? deps.get(deps.size() - 1) + ruta.get(ruta.size() - 1).durationMinutes
+                ? deps.get(deps.size() - 1) + ruta.get(ruta.size() - 1).duracionMinutos
                 : readyMin + tiempoTotalMin;
         int llegadaDesdeReady = (int) (llegadaEpoch - readyMin);
         audit.setLlegadaMin(llegadaDesdeReady);
 
-        audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + DEST_STORAGE_MIN));
+        audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + ALMACEN_DEST_MIN));
 
         int slack = slaMin - llegadaDesdeReady;
         audit.setSlackSlaMin(slack);
@@ -123,7 +123,7 @@ public class AuditoriaService {
         boolean exitoso = cumpleSLA && sinCiclos && escalaOK;
         audit.setExitoso(exitoso);
         audit.setMotivoFalla(exitoso ? "" : motivoFalla(cumpleSLA, sinCiclos, escalaOK));
-        audit.setScoreCalidad(calcularScore(sinCiclos, escalaOK, cumpleSLA,
+        audit.setScoreCalidad(calcularPuntaje(sinCiclos, escalaOK, cumpleSLA,
                 numEscalas, tiempoEsperaMin, slack));
         return audit;
     }
@@ -172,7 +172,7 @@ public class AuditoriaService {
                 if (b != null) ordenados.add(b);
             }
         }
-        ordenados.sort(Comparator.comparing(LoteEnvio::getReadyTime));
+        ordenados.sort(Comparator.comparing(LoteEnvio::getTiempoListo));
 
         int totalFilas = 0;
         Set<String> nombresUsados = new LinkedHashSet<>();
@@ -190,8 +190,8 @@ public class AuditoriaService {
                 int n = ordenados.size();
                 for (int desde = 0; desde < n; desde += limite) {
                     int hasta = Math.min(desde + limite, n);
-                    LocalDateTime inicio = ordenados.get(desde).getReadyTime();
-                    LocalDateTime fin    = ordenados.get(hasta - 1).getReadyTime();
+                    LocalDateTime inicio = ordenados.get(desde).getTiempoListo();
+                    LocalDateTime fin    = ordenados.get(hasta - 1).getTiempoListo();
 
                     zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, inicio, fin, nombresUsados)));
                     Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
@@ -232,7 +232,7 @@ public class AuditoriaService {
             if (fuenteEnrutados != null) fuenteEnrutados.accept(sink);
             if (sinRuta != null && !sinRuta.isEmpty()) {
                 List<LoteEnvio> orden = new ArrayList<>(sinRuta);
-                orden.sort(Comparator.comparing(LoteEnvio::getReadyTime));
+                orden.sort(Comparator.comparing(LoteEnvio::getTiempoListo));
                 for (LoteEnvio b : orden) sink.accept(b);
             }
             esc.cerrar();   // vuelca lo pendiente; si no hubo filas, deja un CSV solo-cabecera
@@ -345,9 +345,9 @@ public class AuditoriaService {
 
     private static boolean sinCiclos(List<Arista> ruta) {
         Set<String> visitados = new HashSet<>();
-        visitados.add(ruta.get(0).from.code);
+        visitados.add(ruta.get(0).origen.codigo);
         for (Arista e : ruta) {
-            if (!visitados.add(e.to.code)) return false;
+            if (!visitados.add(e.destino.codigo)) return false;
         }
         return true;
     }
@@ -356,8 +356,8 @@ public class AuditoriaService {
         if (deps == null || deps.size() != ruta.size()) {
             // Sin info de departures reales, validamos contra los tiempos estáticos.
             for (int i = 0; i < ruta.size() - 1; i++) {
-                int salidaSig = ruta.get(i + 1).depMinuteOfDay;
-                int llegadaAct = (ruta.get(i).depMinuteOfDay + ruta.get(i).durationMinutes) % 1440;
+                int salidaSig = ruta.get(i + 1).minutoDelDiaSalida;
+                int llegadaAct = (ruta.get(i).minutoDelDiaSalida + ruta.get(i).duracionMinutos) % 1440;
                 int diff = salidaSig - llegadaAct;
                 if (diff < 0) diff += 1440;
                 if (diff < TIEMPO_MIN_ESCALA) return false;
@@ -365,7 +365,7 @@ public class AuditoriaService {
             return true;
         }
         for (int i = 0; i < ruta.size() - 1; i++) {
-            long llegada = deps.get(i) + ruta.get(i).durationMinutes;
+            long llegada = deps.get(i) + ruta.get(i).duracionMinutos;
             long salida  = deps.get(i + 1);
             if (salida - llegada < TIEMPO_MIN_ESCALA) return false;
         }
@@ -380,7 +380,7 @@ public class AuditoriaService {
         return "Restricción no identificada";
     }
 
-    private static int calcularScore(boolean sinCiclos, boolean escalaMinOk,
+    private static int calcularPuntaje(boolean sinCiclos, boolean escalaMinOk,
                                       boolean cumpleSLA, int escalas,
                                       int tiempoEsperaMin, int slackSlaMin) {
         if (!sinCiclos || !escalaMinOk || !cumpleSLA) {
@@ -430,7 +430,7 @@ public class AuditoriaService {
         return texto;
     }
 
-    private static long toEpochMin(java.time.LocalDateTime dt) {
+    private static long aMinutoEpoch(java.time.LocalDateTime dt) {
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
     }
 

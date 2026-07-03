@@ -17,7 +17,7 @@ import java.time.LocalDateTime;
  *
  * <p><b>Eje UTC:</b> {@code fechaHoraSalida} debe ir en <b>UTC</b>, el mismo eje que
  * {@code VueloUsado.fechaSalida} (= {@code TramoRuta.salidaUtc}). El front <b>reenvía ese valor tal
- * cual</b>, sin convertir a hora local: el backend lo compara contra {@code Arista.depMinuteOfDay},
+ * cual</b>, sin convertir a hora local: el backend lo compara contra {@code Arista.minutoDelDiaSalida},
  * que está normalizado a UTC, y deriva el día del mismo valor. Enviar la hora local de pared
  * cancelaría el vuelo equivocado o no encontraría ninguno (salvo en aeropuertos con offset 0).
  */

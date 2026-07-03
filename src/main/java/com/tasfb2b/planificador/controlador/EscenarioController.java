@@ -193,17 +193,17 @@ public class EscenarioController {
 
 
     @PostMapping("/jobs/{jobId}/cancelar")
-    public ResponseEntity<Map<String, Object>> cancelarJob(@PathVariable String jobId) {
-        boolean ok = service.cancelarJob(jobId);
+    public ResponseEntity<Map<String, Object>> cancelarTrabajo(@PathVariable String jobId) {
+        boolean ok = service.cancelarTrabajo(jobId);
         return ResponseEntity.ok(Map.of("jobId", jobId, "cancelado", ok));
     }
 
     @PostMapping("/jobs/{jobId}/reiniciar")
-    public ResponseEntity<Map<String, Object>> reiniciarJob(@PathVariable String jobId) {
-        EstadoTrabajo viejo = service.getJob(jobId);
+    public ResponseEntity<Map<String, Object>> reiniciarTrabajo(@PathVariable String jobId) {
+        EstadoTrabajo viejo = service.getTrabajo(jobId);
         if (viejo == null) return ResponseEntity.notFound().build();
 
-        EstadoTrabajo nuevo = service.reiniciarJob(jobId);
+        EstadoTrabajo nuevo = service.reiniciarTrabajo(jobId);
         if (nuevo == null) {
             throw new ParametroInvalidoException("escenario no reiniciable: " + viejo.getEscenario());
         }
@@ -217,10 +217,10 @@ public class EscenarioController {
     }
 
     @PostMapping("/jobs/{jobId}/cancelar-vuelo")
-    public ResponseEntity<Map<String, Object>> cancelarVueloJob(
+    public ResponseEntity<Map<String, Object>> cancelarVueloTrabajo(
             @PathVariable String jobId,
             @RequestBody CancelacionVueloRequest orden) {
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
         boolean ok = service.solicitarCancelacionVuelo(jobId, orden);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
@@ -239,7 +239,7 @@ public class EscenarioController {
     public ResponseEntity<Map<String, Object>> inyectarEnvios(
             @PathVariable String jobId,
             @RequestBody InyeccionEnviosRequest req) {
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
         int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(
@@ -257,7 +257,7 @@ public class EscenarioController {
             @RequestParam(required = false) String origen,
             @RequestParam(required = false) String registrador,
             @RequestParam(required = false) String sede) {
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
         if (archivos == null || archivos.length == 0)
             throw new ParametroInvalidoException("Se requiere al menos un archivo de envíos.");
 
