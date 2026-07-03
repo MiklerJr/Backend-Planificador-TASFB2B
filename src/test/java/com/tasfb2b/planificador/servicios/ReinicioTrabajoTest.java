@@ -13,9 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * {@code reiniciarJob}: detiene el job anterior y crea uno nuevo con jobId distinto pero los mismos
+ * {@code reiniciarTrabajo}: detiene el job anterior y crea uno nuevo con jobId distinto pero los mismos
  * parámetros reproducibles (misma seed, escenario, algoritmo, fechaInicio). El worker del job nuevo
- * arranca en el executor async (y aquí falla por falta de dataLoader), pero las aserciones miran los
+ * arranca en el executor async (y aquí falla por falta de cargadorDatos), pero las aserciones miran los
  * campos de identidad/parametrización, fijados de forma síncrona antes de encolar.
  */
 class ReinicioTrabajoTest {
@@ -27,13 +27,13 @@ class ReinicioTrabajoTest {
     }
 
     @Test
-    void jobInexistenteDevuelveNull() {
+    void trabajoInexistenteDevuelveNull() {
         PlanificadorService service = serviceCon(new RegistroTrabajos());
-        assertNull(service.reiniciarJob("no-existe"));
+        assertNull(service.reiniciarTrabajo("no-existe"));
     }
 
     @Test
-    void reinicioCreaNuevoJobConMismosParametros() {
+    void reinicioCreaNuevoTrabajoConMismosParametros() {
         RegistroTrabajos jobs = new RegistroTrabajos();
         PlanificadorService service = serviceCon(jobs);
 
@@ -43,7 +43,7 @@ class ReinicioTrabajoTest {
         viejo.seed = 42L;
         viejo.fechaInicio = LocalDateTime.of(2026, 1, 5, 0, 0);
 
-        EstadoTrabajo nuevo = service.reiniciarJob(viejo.getJobId());
+        EstadoTrabajo nuevo = service.reiniciarTrabajo(viejo.getJobId());
 
         assertNotNull(nuevo);
         assertNotEquals(viejo.getJobId(), nuevo.getJobId());     // jobId NUEVO

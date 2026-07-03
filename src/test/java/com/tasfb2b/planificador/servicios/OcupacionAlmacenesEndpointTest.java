@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OcupacionAlmacenesEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.ocupacionAlmacenesJob("no-existe", 0, 0).getStatusCode().value());
+        assertEquals(404, controller.ocupacionAlmacenesTrabajo("no-existe", 0, 0).getStatusCode().value());
     }
 
     @Test
@@ -34,7 +34,7 @@ class OcupacionAlmacenesEndpointTest {
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo job = jobs.crear("3", 75);
 
-        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId(), 0, 0).getBody();
+        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesTrabajo(job.getJobId(), 0, 0).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals(0, body.getTotal());
         assertTrue(body.getAlmacenes().isEmpty());
@@ -47,7 +47,7 @@ class OcupacionAlmacenesEndpointTest {
         EstadoTrabajo job = jobs.crear("3", 75);
         job.publicarBloque(bloqueConOcupacion(2, "2026-01-02T05:00", "2026-01-02T06:00"));
 
-        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesJob(job.getJobId(), 0, 0).getBody();
+        OcupacionAlmacenesResponse body = controller.ocupacionAlmacenesTrabajo(job.getJobId(), 0, 0).getBody();
         assertEquals(1, body.getTotal());
         OcupacionAlmacenFila row = body.getAlmacenes().get(0);
         assertEquals("SEQM", row.getAeropuerto());

@@ -27,9 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CargaVuelosEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.cargaVuelosJob("no-existe", 0, 0).getStatusCode().value());
+        assertEquals(404, controller.cargaVuelosTrabajo("no-existe", 0, 0).getStatusCode().value());
     }
 
     @Test
@@ -38,7 +38,7 @@ class CargaVuelosEndpointTest {
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo job = jobs.crear("2", 14);
 
-        CargaVuelosResponse body = controller.cargaVuelosJob(job.getJobId(), 0, 0).getBody();
+        CargaVuelosResponse body = controller.cargaVuelosTrabajo(job.getJobId(), 0, 0).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals(0, body.getTotal());
         assertTrue(body.getVuelos().isEmpty());
@@ -51,7 +51,7 @@ class CargaVuelosEndpointTest {
         EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCarga(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
-        CargaVuelosResponse body = controller.cargaVuelosJob(job.getJobId(), 0, 0).getBody();
+        CargaVuelosResponse body = controller.cargaVuelosTrabajo(job.getJobId(), 0, 0).getBody();
         assertEquals(1, body.getTotal());
         CargaVueloFila row = body.getVuelos().get(0);
         assertEquals("1501", row.getVueloId());
@@ -83,7 +83,7 @@ class CargaVuelosEndpointTest {
         int desde = 0, paginas = 0;
         boolean hayMas = true;
         while (hayMas && paginas < 100) {
-            CargaVuelosResponse pag = controller.cargaVuelosJob(job.getJobId(), desde, 1).getBody();
+            CargaVuelosResponse pag = controller.cargaVuelosTrabajo(job.getJobId(), desde, 1).getBody();
             assertEquals(desde, pag.getDesde());
             assertEquals(3, pag.getBloquesPublicados());
             assertTrue(pag.getTotal() >= 1, "una página de la ventana RAM nunca es vacía si quedan datos");
@@ -112,7 +112,7 @@ class CargaVuelosEndpointTest {
         job.publicarBloque(bloqueConCargas(0, 2));
 
         // limit gigante: el servicio lo clampea a maxFilasPagina (5000 por defecto en tests) ⇒ no OOM.
-        CargaVuelosResponse pag = controller.cargaVuelosJob(job.getJobId(), 0, Integer.MAX_VALUE).getBody();
+        CargaVuelosResponse pag = controller.cargaVuelosTrabajo(job.getJobId(), 0, Integer.MAX_VALUE).getBody();
         assertEquals(2, pag.getTotal());
         assertFalse(pag.isHayMas());
     }

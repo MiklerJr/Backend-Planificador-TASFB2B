@@ -22,9 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class AsignacionesEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.asignacionesJob("no-existe", 0, null, null, false)
+        assertEquals(404, controller.asignacionesTrabajo("no-existe", 0, null, null, false)
                 .getStatusCode().value());
     }
 
@@ -35,7 +35,7 @@ class AsignacionesEndpointTest {
         EstadoTrabajo job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConAsignacion(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
-        AsignacionesResponse body = controller.asignacionesJob(job.getJobId(), 0, null, null, false)
+        AsignacionesResponse body = controller.asignacionesTrabajo(job.getJobId(), 0, null, null, false)
                 .getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals(0, body.getDesde());
@@ -56,13 +56,13 @@ class AsignacionesEndpointTest {
         job.publicarBloque(bloqueConAsignacion(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
         // Coincide con el origen "SKBO" (se normaliza a mayúsculas).
-        AsignacionesResponse coincide = controller.asignacionesJob(job.getJobId(), 0, "skbo", null, false)
+        AsignacionesResponse coincide = controller.asignacionesTrabajo(job.getJobId(), 0, "skbo", null, false)
                 .getBody();
         assertEquals("SKBO", coincide.getAeropuerto());
         assertEquals(1, coincide.getTotal());
 
         // No coincide con ningún extremo de la asignación.
-        AsignacionesResponse vacia = controller.asignacionesJob(job.getJobId(), 0, "SVMI", null, false)
+        AsignacionesResponse vacia = controller.asignacionesTrabajo(job.getJobId(), 0, "SVMI", null, false)
                 .getBody();
         assertEquals(0, vacia.getTotal());
     }

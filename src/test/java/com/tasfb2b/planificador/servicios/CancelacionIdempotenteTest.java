@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ol>
  *   <li><b>Dedup en el encolado</b> ({@link EstadoTrabajo#encolarCancelacionVuelo}): una orden idéntica ya
  *       pendiente no se vuelve a encolar.</li>
- *   <li><b>Set de vuelo-días cancelados</b> ({@link OperadorReparacionVoraz#addCancelledFlight}): aun si
+ *   <li><b>Set de vuelo-días cancelados</b> ({@link OperadorReparacionVoraz#agregarVueloCancelado}): aun si
  *       un duplicado llegara al worker, no produce ningún edge-día NUEVO, por lo que
  *       {@code aplicarCancelacionesVuelo} salta el reencolado (que ahora se hace sobre
  *       {@code edgesCancelados}, no sobre {@code matches}).</li>
@@ -54,10 +54,10 @@ class CancelacionIdempotenteTest {
     void marcarElMismoVueloDiaDosVecesNoLoCancelaDeNuevo() {
         Grafo graph = grafoMinimo();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
-        long key = CodificadorClaveVuelo.flightKey(graph.edges.get(0).idx, 0L);
+        long key = CodificadorClaveVuelo.claveVuelo(graph.aristas.get(0).indice, 0L);
 
-        assertTrue(op.addCancelledFlight(key), "primera marca: vuelo-día NUEVO cancelado");
-        assertFalse(op.addCancelledFlight(key),
+        assertTrue(op.agregarVueloCancelado(key), "primera marca: vuelo-día NUEVO cancelado");
+        assertFalse(op.agregarVueloCancelado(key),
                 "duplicado: ya estaba cancelado ⇒ edgesCancelados vacío ⇒ sin reencolado/consulta a BD");
     }
 
@@ -73,21 +73,21 @@ class CancelacionIdempotenteTest {
         Grafo g = new Grafo();
         Nodo aaa = new Nodo("AAA");
         Nodo bbb = new Nodo("BBB");
-        g.nodes.put("AAA", aaa);
-        g.nodes.put("BBB", bbb);
+        g.nodos.put("AAA", aaa);
+        g.nodos.put("BBB", bbb);
         Arista e = new Arista();
-        e.idx = 0;
+        e.indice = 0;
         e.id = "F1";
-        e.from = aaa;
-        e.to = bbb;
-        e.capacity = 50;
-        e.departureTime = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(8, 30));
-        e.arrivalTime = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(9, 30));
-        e.departureLocalTime = e.departureTime.toLocalTime();
-        e.depMinuteOfDay = 8 * 60 + 30;
-        e.durationMinutes = (int) Duration.between(e.departureTime, e.arrivalTime).toMinutes();
-        e.cost = e.durationMinutes;
-        g.addEdge(e);
+        e.origen = aaa;
+        e.destino = bbb;
+        e.capacidad = 50;
+        e.horaSalida = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(8, 30));
+        e.horaLlegada = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(9, 30));
+        e.horaSalidaLocal = e.horaSalida.toLocalTime();
+        e.minutoDelDiaSalida = 8 * 60 + 30;
+        e.duracionMinutos = (int) Duration.between(e.horaSalida, e.horaLlegada).toMinutes();
+        e.costo = e.duracionMinutos;
+        g.agregarArista(e);
         return g;
     }
 }

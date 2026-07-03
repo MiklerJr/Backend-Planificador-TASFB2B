@@ -28,7 +28,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-002", 105, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
 
-        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 0);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 0);
 
         assertEquals(job.getJobId(), response.getJobId());
         assertEquals(1, response.getTotal());
@@ -51,7 +51,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-002", 30, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-20T10:00:00", "2026-05-20T13:00:00"))));
 
-        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 0);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 0);
 
         assertEquals(2, response.getTotal());
         List<String> flightKeys = response.getVuelos().stream()
@@ -72,7 +72,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
 
-        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 99);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 99);
 
         assertEquals(99, response.getDesde());
         assertEquals(1, response.getBloquesPublicados());
@@ -81,7 +81,7 @@ class PlanificadorVuelosUsadosTest {
     }
 
     /**
-     * Regresión del eje temporal: flightKey, fechaSalida y fechaLlegada deben salir de
+     * Regresión del eje temporal: claveVuelo, fechaSalida y fechaLlegada deben salir de
      * salidaUtc/llegadaUtc (eje global del mapa), NO de las horas locales (que mezclan husos:
      * salida local del origen, llegada local del destino). El helper pone las locales a +5h.
      */
@@ -96,17 +96,17 @@ class PlanificadorVuelosUsadosTest {
         job.publicarBloque(bloque(0, asignacion("BATCH-001", 40, tramo)));
 
         VuelosUsadosResponse.VueloUsado vuelo =
-                jobQuery.getVuelosUsadosJob(job.getJobId(), 0).getVuelos().get(0);
+                jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 0).getVuelos().get(0);
 
         assertEquals("2026-05-19T10:00:00", vuelo.getFechaSalida(), "fechaSalida = salidaUtc");
         assertEquals("2026-05-19T13:00:00", vuelo.getFechaLlegada(), "fechaLlegada = llegadaUtc");
-        assertEquals("LA2450|2026-05-19T10:00:00", vuelo.getFlightKey(), "flightKey en eje UTC");
+        assertEquals("LA2450|2026-05-19T10:00:00", vuelo.getFlightKey(), "claveVuelo en eje UTC");
         assertEquals(LocalDateTime.of(2026, 5, 19, 15, 0), LocalDateTime.parse(tramo.getSalidaLocal()),
                 "sanidad: la hora local difiere de la UTC, así que el eje queda fijado");
     }
 
     private static ConsultaTrabajosService jobQueryConJobs(RegistroTrabajos jobs) {
-        // getVuelosUsadosJob solo usa el registry; CargadorDatos no interviene → null.
+        // getVuelosUsadosTrabajo solo usa el registry; CargadorDatos no interviene → null.
         return new ConsultaTrabajosService(jobs, null);
     }
 
@@ -137,7 +137,7 @@ class PlanificadorVuelosUsadosTest {
 
     /**
      * Tramo con salida/llegada en UTC (el eje que usa el endpoint) y horas LOCALES deliberadamente
-     * DISTINTAS (+5h): si vuelos/usados volviera a leer los {@code *Local}, los flightKey y fechas
+     * DISTINTAS (+5h): si vuelos/usados volviera a leer los {@code *Local}, los claveVuelo y fechas
      * esperados por estos tests dejarían de coincidir (regresión del eje temporal).
      */
     private static TramoRuta tramo(

@@ -23,14 +23,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * Verificación del fix del hallazgo "telemetría parcial por bloque": {@code BloqueSimulacion.cargasVuelos}
  * y {@code ocupacionAlmacenes} reportan la ocupación ACUMULADA de cada recurso tocado por el bloque
- * (la global del enrutador, que tras {@code commitBlock} ya incluye el bloque), no el delta del
+ * (la global del enrutador, que tras {@code confirmarBloque} ya incluye el bloque), no el delta del
  * bloque. El mapa del bloque solo selecciona QUÉ vuelos-día/slots reportar.
  *
  * <p>Antes del fix los DTOs se construían solo con {@code blockFlight}/{@code blockAirport} y el
  * semáforo VERDE/AMBAR/ROJO se calculaba sobre el delta: un vuelo-día al 96% acumulado se mostraba
  * VERDE si el último bloque solo le sumó un 6%. Estos tests reproducen ese escenario y exigen el
  * comportamiento corregido (semáforo sobre el acumulado), espejando el flujo de producción:
- * {@code commitBlock} ocurre ANTES de construir los DTOs en {@code procesarBloque}.
+ * {@code confirmarBloque} ocurre ANTES de construir los DTOs en {@code procesarBloque}.
  */
 class TelemetriaBloqueParcialTest {
 
@@ -42,13 +42,13 @@ class TelemetriaBloqueParcialTest {
     void cargaVueloReportaElAcumuladoGlobalDelVueloDiaAunqueElDeltaDelBloqueSeaPequeno() {
         Grafo graph = grafoUnVuelo();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
-        Arista vuelo = graph.edges.get(0);
-        long depMin = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(10, 0)));
-        long key = CodificadorClaveVuelo.flightKey(vuelo.idx, depMin);
+        Arista vuelo = graph.aristas.get(0);
+        long depMin = OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(10, 0)));
+        long key = CodificadorClaveVuelo.claveVuelo(vuelo.indice, depMin);
 
         // Bloque 1: 45 maletas commiteadas a la ocupación GLOBAL del vuelo-día.
         Map<Long, Integer> bloque1 = new HashMap<>(Map.of(key, 45));
-        op.commitBlock(bloque1, new HashMap<>());
+        op.confirmarBloque(bloque1, new HashMap<>());
 
         // Bloque 2: 3 maletas más al MISMO vuelo-día.
         Map<Long, Integer> bloque2 = new HashMap<>(Map.of(key, 3));
@@ -58,7 +58,7 @@ class TelemetriaBloqueParcialTest {
                 "el modelo interno acumula global + bloque");
 
         // Como en producción: el bloque se commitea a global ANTES de construir los DTOs.
-        op.commitBlock(bloque2, new HashMap<>());
+        op.confirmarBloque(bloque2, new HashMap<>());
         assertEquals(48, op.ocupacionGlobalVuelo(key), "tras el commit, global incluye el bloque");
 
         // El DTO del bloque 2 reporta el acumulado del vuelo-día: 48/50 = 96% ⇒ ROJO.
@@ -76,24 +76,24 @@ class TelemetriaBloqueParcialTest {
     void ocupacionAlmacenReportaElPicoConcurrenteAcumuladoAunqueElDeltaDelBloqueSeaPequeno() {
         Grafo graph = grafoUnVuelo();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
-        Nodo bbb = graph.nodes.get("BBB");
-        long slotMin = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
-        long slotKey = OperadorReparacionVoraz.claveAlmacenDeSlot(bbb.idx, slotMin);
+        Nodo bbb = graph.nodos.get("BBB");
+        long slotMin = OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
+        long claveSlot = OperadorReparacionVoraz.claveAlmacenDeSlot(bbb.indice, slotMin);
 
         // Bloque 1: 480 maletas concurrentes en el slot de las 12:00, commiteadas a global.
-        Map<Long, Integer> almacenBloque1 = new HashMap<>(Map.of(slotKey, 480));
-        op.commitBlock(new HashMap<>(), almacenBloque1);
+        Map<Long, Integer> almacenBloque1 = new HashMap<>(Map.of(claveSlot, 480));
+        op.confirmarBloque(new HashMap<>(), almacenBloque1);
 
         // Bloque 2: 10 maletas más en el mismo slot.
-        Map<Long, Integer> almacenBloque2 = new HashMap<>(Map.of(slotKey, 10));
+        Map<Long, Integer> almacenBloque2 = new HashMap<>(Map.of(claveSlot, 10));
 
         // La validación interna ve 500 - 480 - 10 = 10 de capacidad restante (98% ocupado).
         assertEquals(10, op.capacidadAlmacen(bbb, slotMin, almacenBloque2),
                 "el modelo interno acumula global + bloque + backlog de origen");
 
         // Como en producción: el bloque se commitea a global ANTES de construir los DTOs.
-        op.commitBlock(new HashMap<>(), almacenBloque2);
-        assertEquals(490, op.ocupacionGlobalAlmacen(slotKey), "tras el commit, global incluye el bloque");
+        op.confirmarBloque(new HashMap<>(), almacenBloque2);
+        assertEquals(490, op.ocupacionGlobalAlmacen(claveSlot), "tras el commit, global incluye el bloque");
 
         // El DTO del bloque 2 reporta el pico concurrente acumulado: 490/500 = 98% ⇒ ROJO.
         OcupacionAlmacen dto = soloUno(
@@ -117,27 +117,27 @@ class TelemetriaBloqueParcialTest {
     private static Grafo grafoUnVuelo() {
         Grafo g = new Grafo();
         Nodo aaa = node("AAA"), bbb = node("BBB");
-        g.nodes.put("AAA", aaa);
-        g.nodes.put("BBB", bbb);
+        g.nodos.put("AAA", aaa);
+        g.nodos.put("BBB", bbb);
         Arista e = new Arista();
-        e.idx = 0;
+        e.indice = 0;
         e.id = "F1";
-        e.from = aaa;
-        e.to = bbb;
-        e.capacity = CAPACIDAD_VUELO;
-        e.departureTime = LocalDateTime.of(DIA, LocalTime.of(10, 0));
-        e.arrivalTime = LocalDateTime.of(DIA, LocalTime.of(12, 0));
-        e.departureLocalTime = e.departureTime.toLocalTime();
-        e.depMinuteOfDay = 10 * 60;
-        e.durationMinutes = (int) Duration.between(e.departureTime, e.arrivalTime).toMinutes();
-        e.cost = e.durationMinutes;
-        g.addEdge(e);
+        e.origen = aaa;
+        e.destino = bbb;
+        e.capacidad = CAPACIDAD_VUELO;
+        e.horaSalida = LocalDateTime.of(DIA, LocalTime.of(10, 0));
+        e.horaLlegada = LocalDateTime.of(DIA, LocalTime.of(12, 0));
+        e.horaSalidaLocal = e.horaSalida.toLocalTime();
+        e.minutoDelDiaSalida = 10 * 60;
+        e.duracionMinutos = (int) Duration.between(e.horaSalida, e.horaLlegada).toMinutes();
+        e.costo = e.duracionMinutos;
+        g.agregarArista(e);
         return g;
     }
 
     private static Nodo node(String code) {
         Nodo n = new Nodo(code);
-        n.capacity = CAPACIDAD_ALMACEN;
+        n.capacidad = CAPACIDAD_ALMACEN;
         return n;
     }
 }

@@ -77,14 +77,14 @@ class EstadoInicialWarmupTest {
     /** Batch de 10 maletas con un tramo único que despega a {@code salida} y dura {@code durMin}. */
     private static LoteEnvio batchConVuelo(String id, LocalTime ready, LocalTime salida, int durMin) {
         Arista tramo = new Arista();
-        tramo.idx = 0;
+        tramo.indice = 0;
         tramo.id = "F-" + id;
-        tramo.durationMinutes = durMin;
+        tramo.duracionMinutos = durMin;
 
         LoteEnvio b = new LoteEnvio(id, 10, 24, "AAA", "BBB", LocalDateTime.of(DIA, ready));
-        b.setAssignedRoute(List.of(tramo));
-        b.setAssignedDepartures(List.of(
-                OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, salida))));
+        b.setRutaAsignada(List.of(tramo));
+        b.setSalidasAsignadas(List.of(
+                OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, salida))));
         b.setCumpleSLA(true);
         return b;
     }

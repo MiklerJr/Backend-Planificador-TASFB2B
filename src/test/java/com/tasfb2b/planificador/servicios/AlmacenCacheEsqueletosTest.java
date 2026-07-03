@@ -77,10 +77,10 @@ class AlmacenCacheEsqueletosTest {
     void guardarSiCrecioSoloEscribeCuandoLaCacheGanaClaves(@TempDir Path dir) {
         Path archivo = dir.resolve("skeleton-cache.bin");
         MotorGrafoCache motorCache = new MotorGrafoCache();
-        // dataLoader null ⇒ huella constante (dataset vacío); suficiente para la semántica de guardado.
+        // cargadorDatos null ⇒ huella constante (dataset vacío); suficiente para la semántica de guardado.
         AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, motorCache, archivo.toString());
 
-        motorCache.skeletonCache().put(1L, List.of(new int[]{0, 1}));
+        motorCache.cacheEsqueletos().put(1L, List.of(new int[]{0, 1}));
         store.guardarSiCrecio();
         assertTrue(Files.isRegularFile(archivo), "primer guardado con la caché no vacía");
 
@@ -90,7 +90,7 @@ class AlmacenCacheEsqueletosTest {
         assertFalse(Files.exists(archivo), "sin crecimiento no toca el disco");
 
         // Con una clave nueva sí vuelve a escribir.
-        motorCache.skeletonCache().put(2L, List.of(new int[]{5}));
+        motorCache.cacheEsqueletos().put(2L, List.of(new int[]{5}));
         store.guardarSiCrecio();
         assertTrue(Files.isRegularFile(archivo));
     }
@@ -101,7 +101,7 @@ class AlmacenCacheEsqueletosTest {
         MotorGrafoCache motorCache = new MotorGrafoCache();
         AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, motorCache, archivo.toString());
 
-        motorCache.skeletonCache().put(1L, List.of(new int[]{0}));
+        motorCache.cacheEsqueletos().put(1L, List.of(new int[]{0}));
         store.guardarSiCrecio();
         assertTrue(Files.isRegularFile(archivo));
 
@@ -118,16 +118,16 @@ class AlmacenCacheEsqueletosTest {
         Path archivo = dir.resolve("skeleton-cache.bin");
         MotorGrafoCache previa = new MotorGrafoCache();
         AlmacenCacheEsqueletos storePrevia = new AlmacenCacheEsqueletos(null, previa, archivo.toString());
-        previa.skeletonCache().put(42L, List.of(new int[]{3, 7}));
+        previa.cacheEsqueletos().put(42L, List.of(new int[]{3, 7}));
         storePrevia.guardarSiCrecio();
 
-        // "Reinicio": MotorGrafoCache nuevo (vacío) + mismo dataset (misma huella: dataLoader null).
+        // "Reinicio": MotorGrafoCache nuevo (vacío) + mismo dataset (misma huella: cargadorDatos null).
         MotorGrafoCache trasReinicio = new MotorGrafoCache();
         AlmacenCacheEsqueletos store = new AlmacenCacheEsqueletos(null, trasReinicio, archivo.toString());
         store.cargarAlArranque();
 
-        assertEquals(1, trasReinicio.skeletonCache().size());
-        assertArrayEquals(new int[]{3, 7}, trasReinicio.skeletonCache().get(42L).get(0));
+        assertEquals(1, trasReinicio.cacheEsqueletos().size());
+        assertArrayEquals(new int[]{3, 7}, trasReinicio.cacheEsqueletos().get(42L).get(0));
 
         // Y no re-guarda en falso: lo cargado no cuenta como crecimiento.
         assertTrue(archivo.toFile().delete());

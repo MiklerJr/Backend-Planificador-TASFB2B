@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Verificación del fix del hallazgo "eje temporal mezclado en maletasEntregadasAcum":
- * {@code llenarAcumuladosFisicos} ya no compara el arribo UTC contra {@code ctx.scEnd} (eje de
+ * {@code llenarAcumuladosFisicos} ya no compara el arribo UTC contra {@code ctx.scFin} (eje de
  * registro LOCAL, mezcla husos, interpretado como si fuese UTC); el corte ahora es el RELOJ UTC
  * de la simulación = máximo {@code readyTime} (UTC) visto en el acumulador — el mismo concepto
  * de reloj que usa {@code reconstruirEsperaOrigenBacklog}. Una entrega cuenta solo cuando su
@@ -100,15 +100,15 @@ class AcumuladosFisicosEjeTemporalTest {
     /** Batch de 7 maletas (ready 07:00 UTC) con un único tramo de 60 min que aterriza en {@code arriboUtc}. */
     private static LoteEnvio batchConArribo(LocalDateTime arriboUtc) {
         Arista tramo = new Arista();
-        tramo.idx = 0;
+        tramo.indice = 0;
         tramo.id = "F1";
-        tramo.durationMinutes = 60;
-        long depMin = OperadorReparacionVoraz.toEpochMinPublic(arriboUtc.minusMinutes(60));
+        tramo.duracionMinutos = 60;
+        long depMin = OperadorReparacionVoraz.aMinutoEpochPublico(arriboUtc.minusMinutes(60));
 
         LoteEnvio b = new LoteEnvio("B1", 7, 24, "AAA", "BBB",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
-        b.setAssignedRoute(List.of(tramo));
-        b.setAssignedDepartures(List.of(depMin));
+        b.setRutaAsignada(List.of(tramo));
+        b.setSalidasAsignadas(List.of(depMin));
         b.setCumpleSLA(true);
         return b;
     }

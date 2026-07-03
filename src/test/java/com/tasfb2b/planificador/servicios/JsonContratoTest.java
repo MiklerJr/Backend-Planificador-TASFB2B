@@ -30,7 +30,7 @@ class JsonContratoTest {
         PlanificadorService service = serviceCon(jobs);
         EstadoTrabajo job = jobs.crear("2", 14);   // recién encolado: sin fechaInicio/fin/error/alerta
 
-        String json = mapper.writeValueAsString(service.getEstadoJob(job.getJobId()));
+        String json = mapper.writeValueAsString(service.getEstadoTrabajo(job.getJobId()));
 
         // Opcionales null: ausentes (igual que el mapa, que no los ponía).
         assertFalse(json.contains("\"fechaInicio\""), "fechaInicio null debe omitirse");
@@ -49,7 +49,7 @@ class JsonContratoTest {
         ConsultaTrabajosService jobQuery = jobQueryCon(jobs);
         EstadoTrabajo job = jobs.crear("2", 14);
 
-        String json = mapper.writeValueAsString(jobQuery.getDashboardJob(job.getJobId()));
+        String json = mapper.writeValueAsString(jobQuery.getTableroTrabajo(job.getJobId()));
 
         assertTrue(json.contains("\"ultimoBloque\":null"), "ultimoBloque se emite siempre, incluso null");
         assertFalse(json.contains("\"fechaInicio\""), "fechaInicio null debe omitirse");
@@ -84,7 +84,7 @@ class JsonContratoTest {
     }
 
     private static ConsultaTrabajosService jobQueryCon(RegistroTrabajos jobs) {
-        // getDashboardJob solo usa el registry; CargadorDatos no interviene → null.
+        // getTableroTrabajo solo usa el registry; CargadorDatos no interviene → null.
         return new ConsultaTrabajosService(jobs, null);
     }
 }

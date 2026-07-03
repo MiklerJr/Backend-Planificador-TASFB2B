@@ -21,13 +21,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ListaTrabajosEndpointTest {
 
     @Test
-    void listaTodosLosJobsConSuResumen() {
+    void listaTodosLosTrabajosConSuResumen() {
         RegistroTrabajos jobs = new RegistroTrabajos();
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo j1 = jobs.crear("2", 14);
         EstadoTrabajo j2 = jobs.crear("3", 75);
 
-        ListaTrabajosResponse body = controller.listarJobs(false).getBody();
+        ListaTrabajosResponse body = controller.listarTrabajos(false).getBody();
         assertEquals(2, body.getTotal());
         assertEquals(2, body.getJobs().size());
 
@@ -56,7 +56,7 @@ class ListaTrabajosEndpointTest {
         operacion.enVivo = true;
         EstadoTrabajo simulacion = jobs.crear("1", 1);   // E1 normal: enVivo queda false (default)
 
-        List<ListaTrabajosResponse.ResumenTrabajo> resumenes = controller.listarJobs(false).getBody().getJobs();
+        List<ListaTrabajosResponse.ResumenTrabajo> resumenes = controller.listarTrabajos(false).getBody().getJobs();
 
         ListaTrabajosResponse.ResumenTrabajo rOperacion = resumenes.stream()
                 .filter(r -> r.getJobId().equals(operacion.getJobId()))
@@ -70,8 +70,8 @@ class ListaTrabajosEndpointTest {
     }
 
     @Test
-    void listaVaciaCuandoNoHayJobs() {
-        ListaTrabajosResponse body = controllerCon(new RegistroTrabajos()).listarJobs(false).getBody();
+    void listaVaciaCuandoNoHayTrabajos() {
+        ListaTrabajosResponse body = controllerCon(new RegistroTrabajos()).listarTrabajos(false).getBody();
         assertEquals(0, body.getTotal());
         assertTrue(body.getJobs().isEmpty());
     }

@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EstadoTrabajoVuelosCanceladosTest {
 
     @Test
-    void estadoDelJobExponeLasCancelacionesAplicadasConSusEnviosAfectados() {
+    void estadoDelTrabajoExponeLasCancelacionesAplicadasConSusEnviosAfectados() {
         RegistroTrabajos jobs = new RegistroTrabajos();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
@@ -37,7 +37,7 @@ class EstadoTrabajoVuelosCanceladosTest {
         job.getVuelosCancelados().add(new VueloCancelado(
                 "SKBO", "SEQM", LocalDateTime.of(2026, 1, 3, 14, 30), 7));
 
-        ResponseEntity<EstadoTrabajoResponse> respuesta = controller.estadoJob(job.getJobId());
+        ResponseEntity<EstadoTrabajoResponse> respuesta = controller.estadoTrabajo(job.getJobId());
         assertEquals(200, respuesta.getStatusCode().value());
 
         List<VueloCancelado> cancelados = respuesta.getBody().getVuelosCancelados();
@@ -57,7 +57,7 @@ class EstadoTrabajoVuelosCanceladosTest {
         ConsultaTrabajosController controller = new ConsultaTrabajosController(service, new ConsultaTrabajosService(jobs, null));
         EstadoTrabajo job = jobs.crear("3", 75);
 
-        EstadoTrabajoResponse body = controller.estadoJob(job.getJobId()).getBody();
+        EstadoTrabajoResponse body = controller.estadoTrabajo(job.getJobId()).getBody();
 
         assertTrue(body.getVuelosCancelados().isEmpty(),
                 "el campo existe siempre, vacío si no hubo cancelaciones");

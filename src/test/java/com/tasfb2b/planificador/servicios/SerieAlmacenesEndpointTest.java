@@ -21,9 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SerieAlmacenesEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.serieAlmacenesJob("no-existe", 0).getStatusCode().value());
+        assertEquals(404, controller.serieAlmacenesTrabajo("no-existe", 0).getStatusCode().value());
     }
 
     @Test
@@ -36,7 +36,7 @@ class SerieAlmacenesEndpointTest {
         job.publicarSerieAlmacenes(List.of(slot("SEQM", "2026-01-02T14:00", 80)));
 
         // desde=0: las dos series, con bloqueIdx alineado.
-        SerieAlmacenesResponse body = controller.serieAlmacenesJob(job.getJobId(), 0).getBody();
+        SerieAlmacenesResponse body = controller.serieAlmacenesTrabajo(job.getJobId(), 0).getBody();
         assertEquals(2, body.getTotal());
         List<SerieAlmacenesResponse.SerieItem> series = body.getSeries();
         assertEquals(2, series.size());
@@ -45,14 +45,14 @@ class SerieAlmacenesEndpointTest {
 
         // desde=1: solo la segunda.
         List<SerieAlmacenesResponse.SerieItem> desde1 =
-                controller.serieAlmacenesJob(job.getJobId(), 1).getBody().getSeries();
+                controller.serieAlmacenesTrabajo(job.getJobId(), 1).getBody().getSeries();
         assertEquals(1, desde1.size());
         assertEquals(1, desde1.get(0).getBloqueIdx());
         List<OcupacionAlmacenSlot> slots = desde1.get(0).getSlots();
         assertEquals("SEQM", slots.get(0).getAeropuerto());
 
         // desde más allá de lo publicado: vacío pero con total vigente.
-        ResponseEntity<SerieAlmacenesResponse> masAlla = controller.serieAlmacenesJob(job.getJobId(), 99);
+        ResponseEntity<SerieAlmacenesResponse> masAlla = controller.serieAlmacenesTrabajo(job.getJobId(), 99);
         assertEquals(2, masAlla.getBody().getTotal());
         assertTrue(masAlla.getBody().getSeries().isEmpty());
     }

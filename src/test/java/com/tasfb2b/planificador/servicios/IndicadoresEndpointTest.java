@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IndicadoresEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.indicadoresJob("no-existe").getStatusCode().value());
+        assertEquals(404, controller.indicadoresTrabajo("no-existe").getStatusCode().value());
     }
 
     @Test
@@ -34,7 +34,7 @@ class IndicadoresEndpointTest {
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo job = jobs.crear("2", 14);
 
-        IndicadoresResponse body = controller.indicadoresJob(job.getJobId()).getBody();
+        IndicadoresResponse body = controller.indicadoresTrabajo(job.getJobId()).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertNotNull(body.getUmbrales());
         assertTrue(body.getUmbrales().getVerdeHasta() <= body.getUmbrales().getAmbarHasta());
@@ -56,7 +56,7 @@ class IndicadoresEndpointTest {
         job.publicarBloque(bloqueConCarga(0, "viejo"));
         job.publicarBloque(bloqueConCarga(1, "reciente"));
 
-        IndicadoresResponse body = controller.indicadoresJob(job.getJobId()).getBody();
+        IndicadoresResponse body = controller.indicadoresTrabajo(job.getJobId()).getBody();
         assertEquals(1, body.getVuelos().size(), "acotado al tope de filas");
         assertEquals(1, body.getVuelos().get(0).getBloqueIdx(), "es el bloque MÁS reciente, no el viejo");
         assertEquals("reciente", body.getVuelos().get(0).getVueloId());

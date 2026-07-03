@@ -47,7 +47,7 @@ class SerieAlmacenesTest {
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
         enrutar(op, batch("B1", 20, LocalTime.of(7, 0)), blockFlight, blockAirport);
-        op.commitBlock(blockFlight, blockAirport);
+        op.confirmarBloque(blockFlight, blockAirport);
 
         PlanificadorService service = serviceSinDataset();
         List<OcupacionAlmacenSlot> serie =
@@ -64,10 +64,10 @@ class SerieAlmacenesTest {
         // Realismo: cada slot del DTO coincide EXACTAMENTE con la ocupación global del modelo.
         for (OcupacionAlmacenSlot s : serie) {
             assertEquals(20, s.getOcupacion(), "B1 ocupa 20 maletas en " + s.getAeropuerto() + "@" + s.getHora());
-            long slotMin = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.parse(s.getHora()));
-            long slotKey = OperadorReparacionVoraz.claveAlmacenDeSlot(
-                    graph.nodes.get(s.getAeropuerto()).idx, slotMin);
-            assertEquals(op.ocupacionGlobalAlmacen(slotKey), s.getOcupacion(),
+            long slotMin = OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.parse(s.getHora()));
+            long claveSlot = OperadorReparacionVoraz.claveAlmacenDeSlot(
+                    graph.nodos.get(s.getAeropuerto()).indice, slotMin);
+            assertEquals(op.ocupacionGlobalAlmacen(claveSlot), s.getOcupacion(),
                     "el DTO reporta lo mismo que valida el motor (slot " + s.getHora() + ")");
             assertEquals("VERDE", s.getSemaforo(), "20/500 = 4% ⇒ VERDE");
         }
@@ -81,7 +81,7 @@ class SerieAlmacenesTest {
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
         enrutar(op, batch("B1", 20, LocalTime.of(7, 0)), blockFlight, blockAirport);
-        op.commitBlock(blockFlight, blockAirport);
+        op.confirmarBloque(blockFlight, blockAirport);
 
         // B2 (5 maletas, ready 07:30) queda SIN ruta; el reloj UTC avanza a 10:00 con B3.
         LoteEnvio b2 = batch("B2", 5, LocalTime.of(7, 30));
@@ -129,33 +129,33 @@ class SerieAlmacenesTest {
     private static Grafo grafoEscalaLarga() {
         Grafo g = new Grafo();
         Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
-        g.nodes.put("AAA", aaa);
-        g.nodes.put("BBB", bbb);
-        g.nodes.put("CCC", ccc);
-        addEdge(g, 0, aaa, bbb, "F1", "08:30", "09:30");
-        addEdge(g, 1, bbb, ccc, "F2", "18:00", "19:00");
+        g.nodos.put("AAA", aaa);
+        g.nodos.put("BBB", bbb);
+        g.nodos.put("CCC", ccc);
+        agregarArista(g, 0, aaa, bbb, "F1", "08:30", "09:30");
+        agregarArista(g, 1, bbb, ccc, "F2", "18:00", "19:00");
         return g;
     }
 
     private static Nodo node(String code) {
         Nodo n = new Nodo(code);
-        n.capacity = CAPACIDAD_ALMACEN;
+        n.capacidad = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
+    private static void agregarArista(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
         Arista e = new Arista();
-        e.idx = idx;
+        e.indice = idx;
         e.id = id;
-        e.from = from;
-        e.to = to;
-        e.capacity = CAPACIDAD_VUELO;
-        e.departureTime = LocalDateTime.of(DIA, LocalTime.parse(dep));
-        e.arrivalTime = LocalDateTime.of(DIA, LocalTime.parse(arr));
-        e.departureLocalTime = e.departureTime.toLocalTime();
-        e.depMinuteOfDay = e.departureLocalTime.getHour() * 60 + e.departureLocalTime.getMinute();
-        e.durationMinutes = (int) Duration.between(e.departureTime, e.arrivalTime).toMinutes();
-        e.cost = e.durationMinutes;
-        g.addEdge(e);
+        e.origen = from;
+        e.destino = to;
+        e.capacidad = CAPACIDAD_VUELO;
+        e.horaSalida = LocalDateTime.of(DIA, LocalTime.parse(dep));
+        e.horaLlegada = LocalDateTime.of(DIA, LocalTime.parse(arr));
+        e.horaSalidaLocal = e.horaSalida.toLocalTime();
+        e.minutoDelDiaSalida = e.horaSalidaLocal.getHour() * 60 + e.horaSalidaLocal.getMinute();
+        e.duracionMinutos = (int) Duration.between(e.horaSalida, e.horaLlegada).toMinutes();
+        e.costo = e.duracionMinutos;
+        g.agregarArista(e);
     }
 }

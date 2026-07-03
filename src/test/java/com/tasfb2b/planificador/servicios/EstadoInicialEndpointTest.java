@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class EstadoInicialEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.estadoInicialJob("no-existe").getStatusCode().value());
+        assertEquals(404, controller.estadoInicialTrabajo("no-existe").getStatusCode().value());
     }
 
     @Test
@@ -31,7 +31,7 @@ class EstadoInicialEndpointTest {
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo job = jobs.crear("1", 1);   // recién creado: estadoInicial aún null
 
-        assertEquals(204, controller.estadoInicialJob(job.getJobId()).getStatusCode().value());
+        assertEquals(204, controller.estadoInicialTrabajo(job.getJobId()).getStatusCode().value());
     }
 
     @Test
@@ -45,7 +45,7 @@ class EstadoInicialEndpointTest {
         enElAire.setEnrutada(true);
         job.estadoInicial = List.of(enElAire);
 
-        ResponseEntity<EstadoInicialResponse> respuesta = controller.estadoInicialJob(job.getJobId());
+        ResponseEntity<EstadoInicialResponse> respuesta = controller.estadoInicialTrabajo(job.getJobId());
         assertEquals(200, respuesta.getStatusCode().value());
         assertEquals(1, respuesta.getBody().getTotal());
         List<AsignacionMaleta> asignaciones = respuesta.getBody().getAsignaciones();
@@ -53,13 +53,13 @@ class EstadoInicialEndpointTest {
     }
 
     @Test
-    void jobSinWarmupDevuelveListaVacia() {
+    void trabajoSinWarmupDevuelveListaVacia() {
         RegistroTrabajos jobs = new RegistroTrabajos();
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo job = jobs.crear("2", 14);
         job.estadoInicial = List.of();   // E2 (o E1/E3 sin fechaInicio): sin warm-up
 
-        ResponseEntity<EstadoInicialResponse> respuesta = controller.estadoInicialJob(job.getJobId());
+        ResponseEntity<EstadoInicialResponse> respuesta = controller.estadoInicialTrabajo(job.getJobId());
         assertEquals(200, respuesta.getStatusCode().value());
         assertEquals(0, respuesta.getBody().getTotal());
     }

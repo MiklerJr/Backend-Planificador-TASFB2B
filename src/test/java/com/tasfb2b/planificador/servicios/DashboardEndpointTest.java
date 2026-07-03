@@ -18,18 +18,18 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class DashboardEndpointTest {
 
     @Test
-    void jobInexistenteDevuelve404() {
+    void trabajoInexistenteDevuelve404() {
         ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.dashboardJob("no-existe").getStatusCode().value());
+        assertEquals(404, controller.tableroTrabajo("no-existe").getStatusCode().value());
     }
 
     @Test
-    void jobSinBloquesTraeMetricasYTasasEnCeroYUltimoBloqueNull() {
+    void trabajoSinBloquesTraeMetricasYTasasEnCeroYUltimoBloqueNull() {
         RegistroTrabajos jobs = new RegistroTrabajos();
         ConsultaTrabajosController controller = controllerCon(jobs);
         EstadoTrabajo job = jobs.crear("2", 14);
 
-        TableroResponse body = controller.dashboardJob(job.getJobId()).getBody();
+        TableroResponse body = controller.tableroTrabajo(job.getJobId()).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals("2", body.getEscenario());
         assertEquals(14, body.getK());
