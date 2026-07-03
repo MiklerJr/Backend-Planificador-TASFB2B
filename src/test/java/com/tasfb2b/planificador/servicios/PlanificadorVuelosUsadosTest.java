@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
@@ -18,9 +18,9 @@ class PlanificadorVuelosUsadosTest {
 
     @Test
     void agregaEnviosYMaletasDelMismoVuelo() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsService jobQuery = jobQueryConJobs(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 40, tramo("LA2450", "SPIM", "SKBO",
@@ -28,7 +28,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-002", 105, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
 
-        VuelosUsadosResponse response = jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 0);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 0);
 
         assertEquals(job.getJobId(), response.getJobId());
         assertEquals(1, response.getTotal());
@@ -41,9 +41,9 @@ class PlanificadorVuelosUsadosTest {
 
     @Test
     void distingueMismoVueloEnHorariosDistintos() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsService jobQuery = jobQueryConJobs(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
@@ -51,7 +51,7 @@ class PlanificadorVuelosUsadosTest {
                 asignacion("BATCH-002", 30, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-20T10:00:00", "2026-05-20T13:00:00"))));
 
-        VuelosUsadosResponse response = jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 0);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 0);
 
         assertEquals(2, response.getTotal());
         List<String> flightKeys = response.getVuelos().stream()
@@ -64,15 +64,15 @@ class PlanificadorVuelosUsadosTest {
 
     @Test
     void desdeMayorABloquesPublicadosDevuelveListaVacia() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsService jobQuery = jobQueryConJobs(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
         job.publicarBloque(bloque(0,
                 asignacion("BATCH-001", 20, tramo("LA2450", "SPIM", "SKBO",
                         "2026-05-19T10:00:00", "2026-05-19T13:00:00"))));
 
-        VuelosUsadosResponse response = jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 99);
+        VuelosUsadosResponse response = jobQuery.getVuelosUsadosJob(job.getJobId(), 99);
 
         assertEquals(99, response.getDesde());
         assertEquals(1, response.getBloquesPublicados());
@@ -87,16 +87,16 @@ class PlanificadorVuelosUsadosTest {
      */
     @Test
     void flightKeyYFechasUsanElEjeUtcNoElLocal() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosService jobQuery = jobQueryConJobs(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsService jobQuery = jobQueryConJobs(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
         TramoRuta tramo = tramo("LA2450", "SPIM", "SKBO",
                 "2026-05-19T10:00:00", "2026-05-19T13:00:00");
         job.publicarBloque(bloque(0, asignacion("BATCH-001", 40, tramo)));
 
         VuelosUsadosResponse.VueloUsado vuelo =
-                jobQuery.getVuelosUsadosTrabajo(job.getJobId(), 0).getVuelos().get(0);
+                jobQuery.getVuelosUsadosJob(job.getJobId(), 0).getVuelos().get(0);
 
         assertEquals("2026-05-19T10:00:00", vuelo.getFechaSalida(), "fechaSalida = salidaUtc");
         assertEquals("2026-05-19T13:00:00", vuelo.getFechaLlegada(), "fechaLlegada = llegadaUtc");
@@ -105,9 +105,9 @@ class PlanificadorVuelosUsadosTest {
                 "sanidad: la hora local difiere de la UTC, así que el eje queda fijado");
     }
 
-    private static ConsultaTrabajosService jobQueryConJobs(RegistroTrabajos jobs) {
-        // getVuelosUsadosTrabajo solo usa el registry; CargadorDatos no interviene → null.
-        return new ConsultaTrabajosService(jobs, null);
+    private static ConsultaJobsService jobQueryConJobs(RegistroJobs jobs) {
+        // getVuelosUsadosJob solo usa el registry; CargadorDatos no interviene → null.
+        return new ConsultaJobsService(jobs, null);
     }
 
     private static BloqueSimulacion bloque(

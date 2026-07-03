@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.trabajos;
+package com.tasfb2b.planificador.dto.jobs;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

@@ -1,9 +1,9 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
-import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
+import com.tasfb2b.planificador.controlador.ConsultaJobsController;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
 import com.tasfb2b.planificador.dto.vuelos.CargaVueloFila;
@@ -27,18 +27,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CargaVuelosEndpointTest {
 
     @Test
-    void trabajoInexistenteDevuelve404() {
-        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.cargaVuelosTrabajo("no-existe", 0, 0).getStatusCode().value());
+    void jobInexistenteDevuelve404() {
+        ConsultaJobsController controller = controllerCon(new RegistroJobs());
+        assertEquals(404, controller.cargaVuelosJob("no-existe", 0, 0).getStatusCode().value());
     }
 
     @Test
     void sinBloquesDevuelveListaVacia() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
-        CargaVuelosResponse body = controller.cargaVuelosTrabajo(job.getJobId(), 0, 0).getBody();
+        CargaVuelosResponse body = controller.cargaVuelosJob(job.getJobId(), 0, 0).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals(0, body.getTotal());
         assertTrue(body.getVuelos().isEmpty());
@@ -46,12 +46,12 @@ class CargaVuelosEndpointTest {
 
     @Test
     void cadaFilaLlevaLaCargaDelVueloMasLaPosicionDelBloque() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCarga(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
-        CargaVuelosResponse body = controller.cargaVuelosTrabajo(job.getJobId(), 0, 0).getBody();
+        CargaVuelosResponse body = controller.cargaVuelosJob(job.getJobId(), 0, 0).getBody();
         assertEquals(1, body.getTotal());
         CargaVueloFila row = body.getVuelos().get(0);
         assertEquals("1501", row.getVueloId());
@@ -68,9 +68,9 @@ class CargaVuelosEndpointTest {
 
     @Test
     void paginaPorBloquesRecorriendoTodoSinPerderNiDuplicar() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
         // 3 bloques con 2+1+2 = 5 filas; vueloId único por fila para detectar duplicados/pérdidas.
         job.publicarBloque(bloqueConCargas(0, 2));
         job.publicarBloque(bloqueConCargas(1, 1));
@@ -83,7 +83,7 @@ class CargaVuelosEndpointTest {
         int desde = 0, paginas = 0;
         boolean hayMas = true;
         while (hayMas && paginas < 100) {
-            CargaVuelosResponse pag = controller.cargaVuelosTrabajo(job.getJobId(), desde, 1).getBody();
+            CargaVuelosResponse pag = controller.cargaVuelosJob(job.getJobId(), desde, 1).getBody();
             assertEquals(desde, pag.getDesde());
             assertEquals(3, pag.getBloquesPublicados());
             assertTrue(pag.getTotal() >= 1, "una página de la ventana RAM nunca es vacía si quedan datos");
@@ -106,13 +106,13 @@ class CargaVuelosEndpointTest {
 
     @Test
     void limitSeClampeaAlTopeDelServidor() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCargas(0, 2));
 
         // limit gigante: el servicio lo clampea a maxFilasPagina (5000 por defecto en tests) ⇒ no OOM.
-        CargaVuelosResponse pag = controller.cargaVuelosTrabajo(job.getJobId(), 0, Integer.MAX_VALUE).getBody();
+        CargaVuelosResponse pag = controller.cargaVuelosJob(job.getJobId(), 0, Integer.MAX_VALUE).getBody();
         assertEquals(2, pag.getTotal());
         assertFalse(pag.isHayMas());
     }
@@ -157,10 +157,10 @@ class CargaVuelosEndpointTest {
         return b;
     }
 
-    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
+    private static ConsultaJobsController controllerCon(RegistroJobs jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
-        return new ConsultaTrabajosController(service, jobQuery);
+        ConsultaJobsService jobQuery = new ConsultaJobsService(jobs, null);
+        return new ConsultaJobsController(service, jobQuery);
     }
 }

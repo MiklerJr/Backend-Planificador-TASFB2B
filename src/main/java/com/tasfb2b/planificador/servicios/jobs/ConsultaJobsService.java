@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.servicios.trabajos;
+package com.tasfb2b.planificador.servicios.jobs;
 
 import com.tasfb2b.planificador.algoritmo.aco.ConstantesOperativas;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.almacenes.*;
-import com.tasfb2b.planificador.dto.trabajos.*;
+import com.tasfb2b.planificador.dto.jobs.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
@@ -24,18 +24,18 @@ import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.vueloFrontId
 
 
 @Service
-public class ConsultaTrabajosService {
+public class ConsultaJobsService {
 
     static final int DEFAULT_MAX_FILAS_PAGINA = 5000;
 
-    private final RegistroTrabajos jobs;
+    private final RegistroJobs jobs;
     private final CargadorDatos cargadorDatos;
     private final LectorSolucionBd solucionBdReader;
     private final PersistenciaSolucionService persistencia;
     private final int maxFilasPagina;
 
     @Autowired
-    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos cargadorDatos,
+    public ConsultaJobsService(RegistroJobs jobs, CargadorDatos cargadorDatos,
                            LectorSolucionBd solucionBdReader, PersistenciaSolucionService persistencia,
                            PlanificadorProperties props) {
         this.jobs = jobs;
@@ -48,7 +48,7 @@ public class ConsultaTrabajosService {
                 : DEFAULT_MAX_FILAS_PAGINA;
     }
 
-    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos cargadorDatos) {
+    public ConsultaJobsService(RegistroJobs jobs, CargadorDatos cargadorDatos) {
         this(jobs, cargadorDatos, null, null, null);
     }
 
@@ -57,18 +57,18 @@ public class ConsultaTrabajosService {
         return Math.min(limit, maxFilasPagina);
     }
 
-    private boolean usarHistoricoBd(EstadoTrabajo job) {
+    private boolean usarHistoricoBd(EstadoJob job) {
         return job.bloquesPublicados() > job.getMaxBloquesConAsignaciones()
                 && solucionBdReader != null && persistencia != null
                 && persistencia.reflejaEnBd(job.getJobId());
     }
 
-    private EstadoTrabajo getTrabajo(String jobId) {
+    private EstadoJob getJob(String jobId) {
         return jobs.get(jobId);
     }
 
-    public TableroResponse getTableroTrabajo(String jobId) {
-        EstadoTrabajo job = getTrabajo(jobId);
+    public TableroResponse getTableroJob(String jobId) {
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         Metricas metricas = job.resultado != null
@@ -100,8 +100,8 @@ public class ConsultaTrabajosService {
         return body;
     }
 
-    public IndicadoresResponse getIndicadoresTrabajo(String jobId) {
-        EstadoTrabajo job = getTrabajo(jobId);
+    public IndicadoresResponse getIndicadoresJob(String jobId) {
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         IndicadoresResponse body = new IndicadoresResponse();
@@ -113,7 +113,7 @@ public class ConsultaTrabajosService {
         return body;
     }
 
-    private List<CargaVueloFila> cargaVuelosRecientes(EstadoTrabajo job, int limit) {
+    private List<CargaVueloFila> cargaVuelosRecientes(EstadoJob job, int limit) {
         List<BloqueSimulacion> ventana = job.bloquesDesde(0);
         List<CargaVueloFila> acc = new ArrayList<>();
         for (int i = ventana.size() - 1; i >= 0; i--) {
@@ -126,7 +126,7 @@ public class ConsultaTrabajosService {
         return acc;
     }
 
-    private List<OcupacionAlmacenFila> ocupacionRecientes(EstadoTrabajo job, int limit) {
+    private List<OcupacionAlmacenFila> ocupacionRecientes(EstadoJob job, int limit) {
         List<BloqueSimulacion> ventana = job.bloquesDesde(0);
         List<OcupacionAlmacenFila> acc = new ArrayList<>();
         for (int i = ventana.size() - 1; i >= 0; i--) {
@@ -139,8 +139,8 @@ public class ConsultaTrabajosService {
         return acc;
     }
 
-    public CargaVuelosResponse getCargaVuelosTrabajo(String jobId, int desde, int limit) {
-        EstadoTrabajo job = getTrabajo(jobId);
+    public CargaVuelosResponse getCargaVuelosJob(String jobId, int desde, int limit) {
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -173,14 +173,14 @@ public class ConsultaTrabajosService {
         body.setProximoDesde(proximoDesde);
         body.setHayMas(hayMas);
         body.setBloquesPublicados(job.bloquesPublicados());
-        body.setTerminado(!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado));
+        body.setTerminado(!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado));
         body.setTotal(vuelos.size());
         body.setVuelos(vuelos);
         return body;
     }
 
-    public VuelosUsadosResponse getVuelosUsadosTrabajo(String jobId, int desde) {
-        EstadoTrabajo job = getTrabajo(jobId);
+    public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNormalizado = Math.max(0, desde);
@@ -197,14 +197,14 @@ public class ConsultaTrabajosService {
         response.setJobId(jobId);
         response.setDesde(desdeNormalizado);
         response.setBloquesPublicados(job.bloquesPublicados());
-        response.setTerminado(!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado));
+        response.setTerminado(!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado));
         response.setTotal(vuelos.size());
         response.setVuelos(vuelos);
         return response;
     }
 
-    public OcupacionAlmacenesResponse getOcupacionAlmacenesTrabajo(String jobId, int desde, int limit) {
-        EstadoTrabajo job = getTrabajo(jobId);
+    public OcupacionAlmacenesResponse getOcupacionAlmacenesJob(String jobId, int desde, int limit) {
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -227,17 +227,17 @@ public class ConsultaTrabajosService {
         body.setProximoDesde(proximoDesde);
         body.setHayMas(hayMas);
         body.setBloquesPublicados(job.bloquesPublicados());
-        body.setTerminado(!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado));
+        body.setTerminado(!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado));
         body.setTotal(almacenes.size());
         body.setAlmacenes(almacenes);
         return body;
     }
 
-    public AsignacionesResponse getAsignacionesTrabajo(String jobId, int desde,
+    public AsignacionesResponse getAsignacionesJob(String jobId, int desde,
                                                   String aeropuerto,
                                                   String vueloId,
                                                   boolean soloEnrutadas) {
-        EstadoTrabajo job = getTrabajo(jobId);
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         String aeropuertoNorm = normalizarCodigo(aeropuerto);
@@ -328,7 +328,7 @@ public class ConsultaTrabajosService {
         return tasas;
     }
 
-    private static TableroResponse.UltimoBloque ultimoBloqueResumen(EstadoTrabajo job) {
+    private static TableroResponse.UltimoBloque ultimoBloqueResumen(EstadoJob job) {
         if (job == null || job.bloquesPublicados() == 0) return null;
         List<BloqueSimulacion> ultimos =
                 job.bloquesDesde(job.bloquesPublicados() - 1);

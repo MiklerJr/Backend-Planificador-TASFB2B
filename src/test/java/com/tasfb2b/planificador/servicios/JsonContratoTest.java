@@ -1,12 +1,12 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tasfb2b.planificador.dto.datos.AeropuertoDTO;
-import com.tasfb2b.planificador.dto.trabajos.TableroResponse;
-import com.tasfb2b.planificador.dto.trabajos.EstadoTrabajoResponse;
+import com.tasfb2b.planificador.dto.jobs.TableroResponse;
+import com.tasfb2b.planificador.dto.jobs.EstadoJobResponse;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -26,11 +26,11 @@ class JsonContratoTest {
 
     @Test
     void estadoOmiteOpcionalesNullYConservaSiempreSeedYVuelosCancelados() throws Exception {
-        RegistroTrabajos jobs = new RegistroTrabajos();
+        RegistroJobs jobs = new RegistroJobs();
         PlanificadorService service = serviceCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);   // recién encolado: sin fechaInicio/fin/error/alerta
+        EstadoJob job = jobs.crear("2", 14);   // recién encolado: sin fechaInicio/fin/error/alerta
 
-        String json = mapper.writeValueAsString(service.getEstadoTrabajo(job.getJobId()));
+        String json = mapper.writeValueAsString(service.getEstadoJob(job.getJobId()));
 
         // Opcionales null: ausentes (igual que el mapa, que no los ponía).
         assertFalse(json.contains("\"fechaInicio\""), "fechaInicio null debe omitirse");
@@ -45,11 +45,11 @@ class JsonContratoTest {
 
     @Test
     void dashboardEmiteUltimoBloqueNullYOmiteFechaInicio() throws Exception {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosService jobQuery = jobQueryCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsService jobQuery = jobQueryCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
-        String json = mapper.writeValueAsString(jobQuery.getTableroTrabajo(job.getJobId()));
+        String json = mapper.writeValueAsString(jobQuery.getTableroJob(job.getJobId()));
 
         assertTrue(json.contains("\"ultimoBloque\":null"), "ultimoBloque se emite siempre, incluso null");
         assertFalse(json.contains("\"fechaInicio\""), "fechaInicio null debe omitirse");
@@ -79,12 +79,12 @@ class JsonContratoTest {
 
     // ----------------------------------------------------------------------- helpers
 
-    private static PlanificadorService serviceCon(RegistroTrabajos jobs) {
+    private static PlanificadorService serviceCon(RegistroJobs jobs) {
         return new PlanificadorService(null, null, null, jobs, null, null);
     }
 
-    private static ConsultaTrabajosService jobQueryCon(RegistroTrabajos jobs) {
-        // getTableroTrabajo solo usa el registry; CargadorDatos no interviene → null.
-        return new ConsultaTrabajosService(jobs, null);
+    private static ConsultaJobsService jobQueryCon(RegistroJobs jobs) {
+        // getTableroJob solo usa el registry; CargadorDatos no interviene → null.
+        return new ConsultaJobsService(jobs, null);
     }
 }

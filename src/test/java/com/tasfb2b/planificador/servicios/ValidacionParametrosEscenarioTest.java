@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.servicios;
 import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.controlador.EscenarioController;
@@ -72,7 +72,7 @@ class ValidacionParametrosEscenarioTest {
     // ----------------------------------------------------------------------- helpers
 
     private static PlanificadorService serviceSinDataset() {
-        return new PlanificadorService(null, null, null, new RegistroTrabajos(),
+        return new PlanificadorService(null, null, null, new RegistroJobs(),
                 null, null);
     }
 }

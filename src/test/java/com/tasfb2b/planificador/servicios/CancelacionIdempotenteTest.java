@@ -1,5 +1,5 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
 
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * dos barreras que evitan que una MISMA orden se procese dos veces (lo que disparaba doble consulta
  * a BD + doble reencolado/reproceso):
  * <ol>
- *   <li><b>Dedup en el encolado</b> ({@link EstadoTrabajo#encolarCancelacionVuelo}): una orden idéntica ya
+ *   <li><b>Dedup en el encolado</b> ({@link EstadoJob#encolarCancelacionVuelo}): una orden idéntica ya
  *       pendiente no se vuelve a encolar.</li>
  *   <li><b>Set de vuelo-días cancelados</b> ({@link OperadorReparacionVoraz#agregarVueloCancelado}): aun si
  *       un duplicado llegara al worker, no produce ningún edge-día NUEVO, por lo que
@@ -35,7 +35,7 @@ class CancelacionIdempotenteTest {
 
     @Test
     void encolarOrdenIdenticaDosVecesNoDuplicaLaCola() {
-        EstadoTrabajo job = new EstadoTrabajo("job-1", "1", 1);
+        EstadoJob job = new EstadoJob("job-1", "1", 1);
 
         CancelacionVueloRequest o1 = orden("AAA", "BBB", LocalDateTime.of(2026, 1, 1, 8, 30));
         CancelacionVueloRequest o2 = orden("AAA", "BBB", LocalDateTime.of(2026, 1, 1, 8, 30)); // idéntica

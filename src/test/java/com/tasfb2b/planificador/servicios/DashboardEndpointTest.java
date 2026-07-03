@@ -1,10 +1,10 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
-import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
-import com.tasfb2b.planificador.dto.trabajos.TableroResponse;
+import com.tasfb2b.planificador.controlador.ConsultaJobsController;
+import com.tasfb2b.planificador.dto.jobs.TableroResponse;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,18 +18,18 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class DashboardEndpointTest {
 
     @Test
-    void trabajoInexistenteDevuelve404() {
-        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.tableroTrabajo("no-existe").getStatusCode().value());
+    void jobInexistenteDevuelve404() {
+        ConsultaJobsController controller = controllerCon(new RegistroJobs());
+        assertEquals(404, controller.tableroJob("no-existe").getStatusCode().value());
     }
 
     @Test
-    void trabajoSinBloquesTraeMetricasYTasasEnCeroYUltimoBloqueNull() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+    void jobSinBloquesTraeMetricasYTasasEnCeroYUltimoBloqueNull() {
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
-        TableroResponse body = controller.tableroTrabajo(job.getJobId()).getBody();
+        TableroResponse body = controller.tableroJob(job.getJobId()).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals("2", body.getEscenario());
         assertEquals(14, body.getK());
@@ -43,10 +43,10 @@ class DashboardEndpointTest {
 
     // ----------------------------------------------------------------------- helpers
 
-    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
+    private static ConsultaJobsController controllerCon(RegistroJobs jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
-        return new ConsultaTrabajosController(service, jobQuery);
+        ConsultaJobsService jobQuery = new ConsultaJobsService(jobs, null);
+        return new ConsultaJobsController(service, jobQuery);
     }
 }

@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
 import com.tasfb2b.planificador.dto.simulacion.*;
 import org.junit.jupiter.api.Test;
@@ -14,13 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 /**
  * Índice en RAM de los envíos inyectados/registrados EN VIVO (id sintético {@code INV-*}) que
  * alimenta {@code GET /jobs/{id}/envios/{idEnvio}}: su ruta NO se persiste en BD, así que el rastreo
- * sale de {@link EstadoTrabajo#getRutaSintetica}. Solo los ENRUTADOS se indexan; los de dataset no.
+ * sale de {@link EstadoJob#getRutaSintetica}. Solo los ENRUTADOS se indexan; los de dataset no.
  */
-class EstadoTrabajoRutaSinteticaTest {
+class EstadoJobRutaSinteticaTest {
 
     @Test
     void indexaSoloLosSinteticosEnrutados() {
-        EstadoTrabajo job = new RegistroTrabajos().crear("1", 1);
+        EstadoJob job = new RegistroJobs().crear("1", 1);
 
         AsignacionMaleta invEnrutado = asignacion("INV-1-0", true,
                 tramo("LA2450", "SKBO", "SPIM"));
@@ -39,7 +39,7 @@ class EstadoTrabajoRutaSinteticaTest {
 
     @Test
     void reEnrutamientoSobrescribeConLaRutaVigente() {
-        EstadoTrabajo job = new RegistroTrabajos().crear("1", 1);
+        EstadoJob job = new RegistroJobs().crear("1", 1);
 
         job.publicarBloque(bloque(1, asignacion("INV-1-0", true, tramo("LA2450", "SKBO", "SPIM"))));
         AsignacionMaleta reEnrutado = asignacion("INV-1-0", true, tramo("LA9999", "SKBO", "SPIM"));
@@ -51,7 +51,7 @@ class EstadoTrabajoRutaSinteticaTest {
 
     @Test
     void liberarPesadosOlvidaLosSinteticos() {
-        EstadoTrabajo job = new RegistroTrabajos().crear("1", 1);
+        EstadoJob job = new RegistroJobs().crear("1", 1);
         job.publicarBloque(bloque(1, asignacion("INV-1-0", true, tramo("LA2450", "SKBO", "SPIM"))));
 
         job.liberarPesados();   // eviction de job terminado

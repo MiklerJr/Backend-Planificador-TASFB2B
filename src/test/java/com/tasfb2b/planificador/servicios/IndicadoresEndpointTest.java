@@ -1,13 +1,13 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
-import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
+import com.tasfb2b.planificador.controlador.ConsultaJobsController;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
-import com.tasfb2b.planificador.dto.trabajos.IndicadoresResponse;
+import com.tasfb2b.planificador.dto.jobs.IndicadoresResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -23,18 +23,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IndicadoresEndpointTest {
 
     @Test
-    void trabajoInexistenteDevuelve404() {
-        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.indicadoresTrabajo("no-existe").getStatusCode().value());
+    void jobInexistenteDevuelve404() {
+        ConsultaJobsController controller = controllerCon(new RegistroJobs());
+        assertEquals(404, controller.indicadoresJob("no-existe").getStatusCode().value());
     }
 
     @Test
     void traeUmbralesYTelemetriaVaciaSinBloques() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
 
-        IndicadoresResponse body = controller.indicadoresTrabajo(job.getJobId()).getBody();
+        IndicadoresResponse body = controller.indicadoresJob(job.getJobId()).getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertNotNull(body.getUmbrales());
         assertTrue(body.getUmbrales().getVerdeHasta() <= body.getUmbrales().getAmbarHasta());
@@ -44,19 +44,19 @@ class IndicadoresEndpointTest {
 
     @Test
     void tomaLosBloquesMasRecientesAcotadoPorElLimite() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
+        RegistroJobs jobs = new RegistroJobs();
         // Config con tope de 1 fila ⇒ el snapshot debe quedarse con el bloque más reciente (tail).
         PlanificadorProperties props = new PlanificadorProperties();
         props.getConsulta().setMaxFilasPagina(1);
-        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null, null, null, props);
-        ConsultaTrabajosController controller = new ConsultaTrabajosController(
+        ConsultaJobsService jobQuery = new ConsultaJobsService(jobs, null, null, null, props);
+        ConsultaJobsController controller = new ConsultaJobsController(
                 new PlanificadorService(null, null, null, jobs, null, null), jobQuery);
 
-        EstadoTrabajo job = jobs.crear("2", 14);
+        EstadoJob job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConCarga(0, "viejo"));
         job.publicarBloque(bloqueConCarga(1, "reciente"));
 
-        IndicadoresResponse body = controller.indicadoresTrabajo(job.getJobId()).getBody();
+        IndicadoresResponse body = controller.indicadoresJob(job.getJobId()).getBody();
         assertEquals(1, body.getVuelos().size(), "acotado al tope de filas");
         assertEquals(1, body.getVuelos().get(0).getBloqueIdx(), "es el bloque MÁS reciente, no el viejo");
         assertEquals("reciente", body.getVuelos().get(0).getVueloId());
@@ -81,10 +81,10 @@ class IndicadoresEndpointTest {
         return b;
     }
 
-    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
+    private static ConsultaJobsController controllerCon(RegistroJobs jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
-        return new ConsultaTrabajosController(service, jobQuery);
+        ConsultaJobsService jobQuery = new ConsultaJobsService(jobs, null);
+        return new ConsultaJobsController(service, jobQuery);
     }
 }

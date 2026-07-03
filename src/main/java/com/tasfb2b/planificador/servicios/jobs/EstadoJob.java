@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.servicios.trabajos;
+package com.tasfb2b.planificador.servicios.jobs;
 
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
-import com.tasfb2b.planificador.dto.trabajos.AlertaColapso;
+import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.almacenes.*;
-import com.tasfb2b.planificador.dto.trabajos.*;
+import com.tasfb2b.planificador.dto.jobs.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
@@ -30,7 +30,7 @@ import java.util.stream.Collectors;
 import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.safe;
 
 @Data
-public class EstadoTrabajo {
+public class EstadoJob {
     private final String jobId;
     private final String escenario;
     private final int k;
@@ -98,7 +98,7 @@ public class EstadoTrabajo {
 
     public int getMaxBloquesConAsignaciones() { return maxBloquesConAsignaciones; }
 
-    public EstadoTrabajo(String jobId, String escenario, int k) {
+    public EstadoJob(String jobId, String escenario, int k) {
         this.jobId     = jobId;
         this.escenario = escenario;
         this.k         = k;

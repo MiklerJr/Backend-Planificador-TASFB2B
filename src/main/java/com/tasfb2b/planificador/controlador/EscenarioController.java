@@ -3,12 +3,12 @@ package com.tasfb2b.planificador.controlador;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.simulacion.EjecucionParametros;
-import com.tasfb2b.planificador.dto.trabajos.*;
+import com.tasfb2b.planificador.dto.jobs.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
 import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
 import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
 import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -101,7 +101,7 @@ public class EscenarioController {
             if (error != null) throw new ParametroInvalidoException(error);
         }
 
-        EstadoTrabajo job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio, enVivo);
+        EstadoJob job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio, enVivo);
         Map<String, Object> body = new HashMap<>();
         body.put("jobId",     job.getJobId());
         body.put("escenario", "1");
@@ -145,7 +145,7 @@ public class EscenarioController {
         params.setDias(dias);
         params.setProcesamientoPrevio(false);
 
-        EstadoTrabajo job = service.iniciarEscenario2Async(params);
+        EstadoJob job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
         body.put("jobId",     job.getJobId());
         body.put("escenario", "2");
@@ -179,7 +179,7 @@ public class EscenarioController {
         if (error != null) throw new ParametroInvalidoException(error);
 
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        EstadoTrabajo job = service.iniciarEscenario3Async(umbralColapso, algoritmo, seed, fechaInicio);
+        EstadoJob job = service.iniciarEscenario3Async(umbralColapso, algoritmo, seed, fechaInicio);
         return ResponseEntity.accepted().body(Map.of(
                 "jobId",         job.getJobId(),
                 "escenario",     "3",
@@ -193,17 +193,17 @@ public class EscenarioController {
 
 
     @PostMapping("/jobs/{jobId}/cancelar")
-    public ResponseEntity<Map<String, Object>> cancelarTrabajo(@PathVariable String jobId) {
-        boolean ok = service.cancelarTrabajo(jobId);
+    public ResponseEntity<Map<String, Object>> cancelarJob(@PathVariable String jobId) {
+        boolean ok = service.cancelarJob(jobId);
         return ResponseEntity.ok(Map.of("jobId", jobId, "cancelado", ok));
     }
 
     @PostMapping("/jobs/{jobId}/reiniciar")
-    public ResponseEntity<Map<String, Object>> reiniciarTrabajo(@PathVariable String jobId) {
-        EstadoTrabajo viejo = service.getTrabajo(jobId);
+    public ResponseEntity<Map<String, Object>> reiniciarJob(@PathVariable String jobId) {
+        EstadoJob viejo = service.getJob(jobId);
         if (viejo == null) return ResponseEntity.notFound().build();
 
-        EstadoTrabajo nuevo = service.reiniciarTrabajo(jobId);
+        EstadoJob nuevo = service.reiniciarJob(jobId);
         if (nuevo == null) {
             throw new ParametroInvalidoException("escenario no reiniciable: " + viejo.getEscenario());
         }
@@ -217,10 +217,10 @@ public class EscenarioController {
     }
 
     @PostMapping("/jobs/{jobId}/cancelar-vuelo")
-    public ResponseEntity<Map<String, Object>> cancelarVueloTrabajo(
+    public ResponseEntity<Map<String, Object>> cancelarVueloJob(
             @PathVariable String jobId,
             @RequestBody CancelacionVueloRequest orden) {
-        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
         boolean ok = service.solicitarCancelacionVuelo(jobId, orden);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
@@ -239,7 +239,7 @@ public class EscenarioController {
     public ResponseEntity<Map<String, Object>> inyectarEnvios(
             @PathVariable String jobId,
             @RequestBody InyeccionEnviosRequest req) {
-        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
         int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(
@@ -257,7 +257,7 @@ public class EscenarioController {
             @RequestParam(required = false) String origen,
             @RequestParam(required = false) String registrador,
             @RequestParam(required = false) String sede) {
-        if (service.getTrabajo(jobId) == null) return ResponseEntity.notFound().build();
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
         if (archivos == null || archivos.length == 0)
             throw new ParametroInvalidoException("Se requiere al menos un archivo de envíos.");
 

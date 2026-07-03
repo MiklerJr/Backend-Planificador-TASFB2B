@@ -1,9 +1,9 @@
 package com.tasfb2b.planificador.servicios;
-import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
-import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
+import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 
-import com.tasfb2b.planificador.controlador.ConsultaTrabajosController;
+import com.tasfb2b.planificador.controlador.ConsultaJobsController;
 import com.tasfb2b.planificador.dto.simulacion.AsignacionMaleta;
 import com.tasfb2b.planificador.dto.simulacion.AsignacionesResponse;
 import com.tasfb2b.planificador.dto.simulacion.BloqueSimulacion;
@@ -22,20 +22,20 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class AsignacionesEndpointTest {
 
     @Test
-    void trabajoInexistenteDevuelve404() {
-        ConsultaTrabajosController controller = controllerCon(new RegistroTrabajos());
-        assertEquals(404, controller.asignacionesTrabajo("no-existe", 0, null, null, false)
+    void jobInexistenteDevuelve404() {
+        ConsultaJobsController controller = controllerCon(new RegistroJobs());
+        assertEquals(404, controller.asignacionesJob("no-existe", 0, null, null, false)
                 .getStatusCode().value());
     }
 
     @Test
     void sinFiltrosDevuelveTodasYEchoaFiltrosNull() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConAsignacion(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
-        AsignacionesResponse body = controller.asignacionesTrabajo(job.getJobId(), 0, null, null, false)
+        AsignacionesResponse body = controller.asignacionesJob(job.getJobId(), 0, null, null, false)
                 .getBody();
         assertEquals(job.getJobId(), body.getJobId());
         assertEquals(0, body.getDesde());
@@ -50,19 +50,19 @@ class AsignacionesEndpointTest {
 
     @Test
     void elFiltroPorAeropuertoRecortaYSeNormalizaAMayusculas() {
-        RegistroTrabajos jobs = new RegistroTrabajos();
-        ConsultaTrabajosController controller = controllerCon(jobs);
-        EstadoTrabajo job = jobs.crear("2", 14);
+        RegistroJobs jobs = new RegistroJobs();
+        ConsultaJobsController controller = controllerCon(jobs);
+        EstadoJob job = jobs.crear("2", 14);
         job.publicarBloque(bloqueConAsignacion(0, "2026-01-02T00:00", "2026-01-02T01:00"));
 
         // Coincide con el origen "SKBO" (se normaliza a mayúsculas).
-        AsignacionesResponse coincide = controller.asignacionesTrabajo(job.getJobId(), 0, "skbo", null, false)
+        AsignacionesResponse coincide = controller.asignacionesJob(job.getJobId(), 0, "skbo", null, false)
                 .getBody();
         assertEquals("SKBO", coincide.getAeropuerto());
         assertEquals(1, coincide.getTotal());
 
         // No coincide con ningún extremo de la asignación.
-        AsignacionesResponse vacia = controller.asignacionesTrabajo(job.getJobId(), 0, "SVMI", null, false)
+        AsignacionesResponse vacia = controller.asignacionesJob(job.getJobId(), 0, "SVMI", null, false)
                 .getBody();
         assertEquals(0, vacia.getTotal());
     }
@@ -84,10 +84,10 @@ class AsignacionesEndpointTest {
         return b;
     }
 
-    private static ConsultaTrabajosController controllerCon(RegistroTrabajos jobs) {
+    private static ConsultaJobsController controllerCon(RegistroJobs jobs) {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        ConsultaTrabajosService jobQuery = new ConsultaTrabajosService(jobs, null);
-        return new ConsultaTrabajosController(service, jobQuery);
+        ConsultaJobsService jobQuery = new ConsultaJobsService(jobs, null);
+        return new ConsultaJobsController(service, jobQuery);
     }
 }

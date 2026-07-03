@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.servicios.ingesta;
 import com.tasfb2b.planificador.dto.datos.IngestaEstado;
 import com.tasfb2b.planificador.servicios.MotorGrafoCache;
 import com.tasfb2b.planificador.servicios.AlmacenCacheEsqueletos;
-import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.servicios.jobs.RegistroJobs;
 import com.tasfb2b.planificador.utilidades.analizador.AnalizadorAeropuertos;
 import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +30,7 @@ public class IngestaService {
     private final MigradorEnviosDb migrador;
     private final AnalizadorAeropuertos aeropuertoParser;
     private final CargadorDatos cargadorDatos;
-    private final RegistroTrabajos jobs;
+    private final RegistroJobs jobs;
     private final MotorGrafoCache motorCache;
     private final AlmacenCacheEsqueletos almacenEsqueletos;
 
@@ -38,7 +38,7 @@ public class IngestaService {
     private final AtomicBoolean enCurso = new AtomicBoolean(false);
 
     public IngestaService(JdbcTemplate jdbc, MigradorEnviosDb migrador, AnalizadorAeropuertos aeropuertoParser,
-                          CargadorDatos cargadorDatos, RegistroTrabajos jobs, MotorGrafoCache motorCache,
+                          CargadorDatos cargadorDatos, RegistroJobs jobs, MotorGrafoCache motorCache,
                           AlmacenCacheEsqueletos almacenEsqueletos) {
         this.jdbc = jdbc;
         this.migrador = migrador;

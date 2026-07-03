@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.servicios.ingesta;
 
-import com.tasfb2b.planificador.dto.trabajos.InyeccionEnviosRequest;
+import com.tasfb2b.planificador.dto.jobs.InyeccionEnviosRequest;
 import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
 import com.tasfb2b.planificador.utilidades.validador.ValidadorEnvio;
 import lombok.extern.slf4j.Slf4j;

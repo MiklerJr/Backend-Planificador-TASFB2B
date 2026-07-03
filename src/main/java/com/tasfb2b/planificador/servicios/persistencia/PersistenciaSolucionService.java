@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.servicios.persistencia;
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
-import com.tasfb2b.planificador.dto.trabajos.EnvioInyectadoInfo;
+import com.tasfb2b.planificador.dto.jobs.EnvioInyectadoInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;

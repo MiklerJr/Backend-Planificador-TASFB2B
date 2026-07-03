@@ -3,17 +3,17 @@ package com.tasfb2b.planificador.servicios;
 import com.tasfb2b.planificador.algoritmo.aco.*;
 import com.tasfb2b.planificador.algoritmo.alns.*;
 import com.tasfb2b.planificador.algoritmo.grafo.*;
-import com.tasfb2b.planificador.servicios.trabajos.*;
+import com.tasfb2b.planificador.servicios.jobs.*;
 import com.tasfb2b.planificador.servicios.persistencia.*;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.trabajos.AlertaColapso;
+import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
 import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.simulacion.EjecucionParametros;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import com.tasfb2b.planificador.dto.auditoria.*;
 import com.tasfb2b.planificador.dto.datos.*;
-import com.tasfb2b.planificador.dto.trabajos.*;
+import com.tasfb2b.planificador.dto.jobs.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
@@ -50,7 +50,7 @@ public class PlanificadorService {
     private final CargadorDatos cargadorDatos;
     private final MapeadorAlgoritmo mapper;
     private final PlanificadorProperties props;
-    private final RegistroTrabajos jobs;
+    private final RegistroJobs jobs;
     private final AuditoriaService auditoria;
     private final ColoniaACO acoEngine;
     private final PersistenciaSolucionService persistencia;
@@ -74,7 +74,7 @@ public class PlanificadorService {
     public PlanificadorService(CargadorDatos cargadorDatos,
                                MapeadorAlgoritmo mapper,
                                PlanificadorProperties props,
-                               RegistroTrabajos jobs,
+                               RegistroJobs jobs,
                                AuditoriaService auditoria,
                                ColoniaACO acoEngine,
                                PersistenciaSolucionService persistencia,
@@ -94,25 +94,25 @@ public class PlanificadorService {
     }
 
     PlanificadorService(CargadorDatos cargadorDatos, MapeadorAlgoritmo mapper, PlanificadorProperties props,
-                        RegistroTrabajos jobs, AuditoriaService auditoria,
+                        RegistroJobs jobs, AuditoriaService auditoria,
                         ColoniaACO acoEngine) {
         this(cargadorDatos, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new LectorSolucionBd(null, null, null),
                 new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""));
     }
 
-    public EstadoTrabajo iniciarEscenario2Async(EjecucionParametros params) {
+    public EstadoJob iniciarEscenario2Async(EjecucionParametros params) {
         if (params == null) params = new EjecucionParametros();
         int k = props.getScenario().getKDefault2();   // K fijo del escenario, no negociable
         String motorRes = resolverMotor(params.getMotor());
         long seedRes = resolverSeed(params.getSeed());
 
-        EstadoTrabajo job = jobs.crear("2", k);
+        EstadoJob job = jobs.crear("2", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = params.getFechaInicio();
-        // Persistir los overrides para poder reiniciar idéntico (ver reiniciarTrabajo).
+        // Persistir los overrides para poder reiniciar idéntico (ver reiniciarJob).
         job.saMin = params.getSaMin();
         job.taSegundos = params.getTaSegundos();
         job.dias = params.getDias();
@@ -135,21 +135,21 @@ public class PlanificadorService {
         return job;
     }
 
-    public EstadoTrabajo iniciarEscenario3Async(double umbralColapso, String motor, Long seed) {
+    public EstadoJob iniciarEscenario3Async(double umbralColapso, String motor, Long seed) {
         return iniciarEscenario3Async(umbralColapso, motor, seed, null);
     }
 
-    public EstadoTrabajo iniciarEscenario3Async(double umbralColapso, String motor, Long seed,
+    public EstadoJob iniciarEscenario3Async(double umbralColapso, String motor, Long seed,
                                            LocalDateTime fechaInicio) {
         int k = props.getScenario().getKDefault3();   // K fijo del escenario, no negociable
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
-        EstadoTrabajo job = jobs.crear("3", k);
+        EstadoJob job = jobs.crear("3", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
-        job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarTrabajo)
+        job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarJob)
         jobs.ejecutar(job, () -> {
             try {
                 SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
@@ -161,20 +161,20 @@ public class PlanificadorService {
         return job;
     }
 
-    public EstadoTrabajo iniciarEscenario1Async(String motor, Long seed) {
+    public EstadoJob iniciarEscenario1Async(String motor, Long seed) {
         return iniciarEscenario1Async(motor, seed, null);
     }
 
-    public EstadoTrabajo iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio) {
+    public EstadoJob iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio) {
         return iniciarEscenario1Async(motor, seed, fechaInicio, false);
     }
 
-    public EstadoTrabajo iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio,
+    public EstadoJob iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio,
                                            boolean enVivo) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1();
-        EstadoTrabajo job = jobs.crear("1", k);
+        EstadoJob job = jobs.crear("1", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
@@ -227,19 +227,19 @@ public class PlanificadorService {
         return m;
     }
 
-    public EstadoTrabajo getTrabajo(String jobId) {
+    public EstadoJob getJob(String jobId) {
         return jobs.get(jobId);
     }
 
-    public boolean cancelarTrabajo(String jobId) {
+    public boolean cancelarJob(String jobId) {
         return jobs.cancelar(jobId);
     }
 
-    public EstadoTrabajo reiniciarTrabajo(String jobId) {
-        EstadoTrabajo viejo = getTrabajo(jobId);
+    public EstadoJob reiniciarJob(String jobId) {
+        EstadoJob viejo = getJob(jobId);
         if (viejo == null) return null;
-        if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(viejo.estado)) {
-            cancelarTrabajo(jobId);
+        if (RegistroJobs.ESTADOS_ACTIVOS.contains(viejo.estado)) {
+            cancelarJob(jobId);
         }
         return switch (viejo.getEscenario()) {
             case "1" -> iniciarEscenario1Async(viejo.algoritmo, viejo.seed, viejo.fechaInicio, viejo.enVivo);
@@ -261,19 +261,19 @@ public class PlanificadorService {
         };
     }
 
-    public List<EstadoTrabajo> listarJobsActivos() {
+    public List<EstadoJob> listarJobsActivos() {
         return jobs.listarActivos();
     }
 
-    public List<EstadoTrabajo> listarTodosLosJobs() {
+    public List<EstadoJob> listarTodosLosJobs() {
         return jobs.listarTodos();
     }
 
-    public ListaTrabajosResponse listarJobsResponse(boolean activos) {
-        List<EstadoTrabajo> lista = activos ? listarJobsActivos() : listarTodosLosJobs();
-        List<ListaTrabajosResponse.ResumenTrabajo> items = new ArrayList<>(lista.size());
-        for (EstadoTrabajo j : lista) {
-            ListaTrabajosResponse.ResumenTrabajo item = new ListaTrabajosResponse.ResumenTrabajo();
+    public ListaJobsResponse listarJobsResponse(boolean activos) {
+        List<EstadoJob> lista = activos ? listarJobsActivos() : listarTodosLosJobs();
+        List<ListaJobsResponse.ResumenJob> items = new ArrayList<>(lista.size());
+        for (EstadoJob j : lista) {
+            ListaJobsResponse.ResumenJob item = new ListaJobsResponse.ResumenJob();
             item.setJobId(j.getJobId());
             item.setEscenario(j.getEscenario());
             item.setAlgoritmo(j.algoritmo);
@@ -288,7 +288,7 @@ public class PlanificadorService {
             item.setProgresoWarmup(j.getProgresoWarmup());
             items.add(item);
         }
-        ListaTrabajosResponse body = new ListaTrabajosResponse();
+        ListaJobsResponse body = new ListaJobsResponse();
         body.setJobs(items);
         body.setTotal(items.size());
         return body;
@@ -300,9 +300,9 @@ public class PlanificadorService {
 
     public boolean solicitarCancelacionVuelo(String jobId, CancelacionVueloRequest orden) {
         if (orden == null) return false;
-        EstadoTrabajo job = jobs.get(jobId);
+        EstadoJob job = jobs.get(jobId);
         if (job == null) return false;
-        if (!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) return false;
+        if (!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado)) return false;
         if (job.encolarCancelacionVuelo(orden)) {
             log.info("Cancelación de vuelo encolada (job {}): {}->{} salida {}", jobId,
                     orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
@@ -316,7 +316,7 @@ public class PlanificadorService {
     public int solicitarInyeccionEnvios(String jobId, InyeccionEnviosRequest req) {
         if (req == null || req.getEnvios() == null || req.getEnvios().isEmpty())
             throw new ParametroInvalidoException("inyección vacía: se requiere al menos un envío");
-        EstadoTrabajo job = jobs.get(jobId);
+        EstadoJob job = jobs.get(jobId);
         if (job == null) return -1;
         for (InyeccionEnviosRequest.Item it : req.getEnvios()) {
             if (!ValidadorEnvio.camposObligatoriosPresentes(it.getOrigen(), it.getDestino()))
@@ -330,7 +330,7 @@ public class PlanificadorService {
             if (cargadorDatos.getAeropuerto(it.getDestino()) == null)
                 throw new ParametroInvalidoException("ICAO destino desconocido: " + it.getDestino());
         }
-        if (!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) return -1;
+        if (!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado)) return -1;
         for (InyeccionEnviosRequest.Item it : req.getEnvios()) job.encolarInyeccion(it);
         log.info("Inyección de {} envío(s) encolada (job {})", req.getEnvios().size(), jobId);
         return req.getEnvios().size();
@@ -402,7 +402,7 @@ public class PlanificadorService {
         return cancelados;
     }
 
-    private int aplicarInyeccionesEnvio(EstadoTrabajo job, List<InyeccionEnviosRequest.Item> buffer,
+    private int aplicarInyeccionesEnvio(EstadoJob job, List<InyeccionEnviosRequest.Item> buffer,
                                         ContextoTemporal ctx, GestorBacklog backlog) {
         if (job == null || backlog == null) return 0;
         InyeccionEnviosRequest.Item it;
@@ -507,7 +507,7 @@ public class PlanificadorService {
     }
 
     public SerieAlmacenesResponse getSerieAlmacenes(String jobId, int desde) {
-        EstadoTrabajo job = getTrabajo(jobId);
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -531,7 +531,7 @@ public class PlanificadorService {
         return body;
     }
 
-    public EstadoInicialResponse construirEstadoInicialResponse(EstadoTrabajo job) {
+    public EstadoInicialResponse construirEstadoInicialResponse(EstadoJob job) {
         EstadoInicialResponse body = new EstadoInicialResponse();
         body.setJobId(job.getJobId());
         if (job.fechaInicio != null) body.setFechaInicio(job.fechaInicio.toString());
@@ -541,11 +541,11 @@ public class PlanificadorService {
         return body;
     }
 
-    public EstadoTrabajoResponse getEstadoTrabajo(String jobId) {
-        EstadoTrabajo job = getTrabajo(jobId);
+    public EstadoJobResponse getEstadoJob(String jobId) {
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
 
-        EstadoTrabajoResponse body = new EstadoTrabajoResponse();
+        EstadoJobResponse body = new EstadoJobResponse();
         body.setJobId(job.getJobId());
         body.setEscenario(job.getEscenario());
         body.setAlgoritmo(job.algoritmo);
@@ -576,19 +576,19 @@ public class PlanificadorService {
         return ejecutarALNS(k, null, MOTOR_ALNS, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job) {
+    public SimulacionResponse ejecutarALNS(int k, EstadoJob job) {
         return ejecutarALNS(k, job, MOTOR_ALNS, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job, String motor) {
+    public SimulacionResponse ejecutarALNS(int k, EstadoJob job, String motor) {
         return ejecutarALNS(k, job, motor, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job, String motor, long seed) {
+    public SimulacionResponse ejecutarALNS(int k, EstadoJob job, String motor, long seed) {
         return ejecutarALNS(k, job, motor, seed, null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job, String motor,
+    public SimulacionResponse ejecutarALNS(int k, EstadoJob job, String motor,
                                             long seed, LocalDateTime fechaInicio) {
         EjecucionParametros p = new EjecucionParametros();
         p.setK(k);
@@ -598,7 +598,7 @@ public class PlanificadorService {
         return ejecutarALNS(p, job);
     }
 
-    public SimulacionResponse ejecutarALNS(EjecucionParametros params, EstadoTrabajo job) {
+    public SimulacionResponse ejecutarALNS(EjecucionParametros params, EstadoJob job) {
         if (params == null) params = new EjecucionParametros();
         int k = params.getK() != null ? params.getK() : props.getScenario().getKDefault2();
         String motor = params.getMotor();
@@ -816,17 +816,17 @@ public class PlanificadorService {
         return bloquesCacheados.get(index);
     }
 
-    public SimulacionResponse ejecutarEscenario1(EstadoTrabajo job, String motor, long seed) {
+    public SimulacionResponse ejecutarEscenario1(EstadoJob job, String motor, long seed) {
         return ejecutarEscenario1(job, motor, seed, null, false);
     }
 
-    public SimulacionResponse ejecutarEscenario1(EstadoTrabajo job, String motor, long seed,
+    public SimulacionResponse ejecutarEscenario1(EstadoJob job, String motor, long seed,
                                                  LocalDateTime fechaInicio) {
         return ejecutarEscenario1(job, motor, seed, fechaInicio, false);
     }
 
 
-    public SimulacionResponse ejecutarEscenario1(EstadoTrabajo job, String motor, long seed,
+    public SimulacionResponse ejecutarEscenario1(EstadoJob job, String motor, long seed,
                                                  LocalDateTime fechaInicio, boolean enVivo) {
         String motorRes = resolverMotor(motor);
         int k = props.getScenario().getKDefault1();
@@ -1008,21 +1008,21 @@ public class PlanificadorService {
         return ejecutarHastaColapso(k, umbralColapso, null, MOTOR_ALNS, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, EstadoTrabajo job) {
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, EstadoJob job) {
         return ejecutarHastaColapso(k, umbralColapso, job, MOTOR_ALNS, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, EstadoTrabajo job, String motor) {
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, EstadoJob job, String motor) {
         return ejecutarHastaColapso(k, umbralColapso, job, motor, resolverSeed(null));
     }
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
-                                                   EstadoTrabajo job, String motor, long seed) {
+                                                   EstadoJob job, String motor, long seed) {
         return ejecutarHastaColapso(k, umbralColapso, job, motor, seed, null);
     }
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
-                                                   EstadoTrabajo job, String motor, long seed,
+                                                   EstadoJob job, String motor, long seed,
                                                    LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         Random rngSim = new Random(seed);
@@ -1202,7 +1202,7 @@ public class PlanificadorService {
         return res;
     }
 
-    private void finalizarAuditoriaDiferida(EstadoTrabajo job, AcumuladorAuditoria auditAcc) {
+    private void finalizarAuditoriaDiferida(EstadoJob job, AcumuladorAuditoria auditAcc) {
         String jobId = job != null ? job.getJobId() : null;
         try {
             if (job != null && auditAcc != null) {
@@ -1237,7 +1237,7 @@ public class PlanificadorService {
 
     public record RangoAuditoria(LocalDateTime desde, LocalDateTime hasta, boolean recortado) {}
 
-    private RangoAuditoria resolverRangoAuditoria(EstadoTrabajo job, LocalDateTime desde, LocalDateTime hasta) {
+    private RangoAuditoria resolverRangoAuditoria(EstadoJob job, LocalDateTime desde, LocalDateTime hasta) {
         if (desde != null && hasta != null && !desde.isBefore(hasta)) {
             throw new ParametroInvalidoException(
                     "rango inválido: 'desde' (" + desde + ") debe ser anterior a 'hasta' (" + hasta + ")");
@@ -1259,10 +1259,10 @@ public class PlanificadorService {
     }
 
     public ResultadoAuditoria generarAuditoriaZip(String jobId, LocalDateTime desde, LocalDateTime hasta) {
-        EstadoTrabajo job = jobs.get(jobId);
+        EstadoJob job = jobs.get(jobId);
         if (job == null) return ResultadoAuditoria.error("job inexistente");
         if (auditoria == null) return ResultadoAuditoria.error("auditoría no disponible (sin servicio de auditoría)");
-        if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) {
+        if (RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado)) {
             return ResultadoAuditoria.error("el job aún está activo; la auditoría estará disponible al terminar");
         }
         if (!persistencia.reflejaEnBd(jobId)) {
@@ -1307,9 +1307,9 @@ public class PlanificadorService {
     }
 
     public ResultadoEstimacion estimarAuditoria(String jobId, LocalDateTime desde, LocalDateTime hasta) {
-        EstadoTrabajo job = jobs.get(jobId);
+        EstadoJob job = jobs.get(jobId);
         if (job == null) return ResultadoEstimacion.error("job inexistente");
-        if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) {
+        if (RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado)) {
             return ResultadoEstimacion.error("el job aún está activo; la auditoría estará disponible al terminar");
         }
         if (!persistencia.reflejaEnBd(jobId)) {
@@ -1613,7 +1613,7 @@ public class PlanificadorService {
 
         var pre = enrutador.evaluarPreColapso(
                 telemetryAirport, backlog != null ? backlog.verPendientes() : java.util.List.of());
-        com.tasfb2b.planificador.dto.trabajos.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
+        com.tasfb2b.planificador.dto.jobs.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
 
         if (!colapsoAlmacen && pre.utilAlmacenMax() > 1.0) {
             colapsoAlmacen = true;
@@ -1629,39 +1629,39 @@ public class PlanificadorService {
                 colapsoAlmacen, detalleColapso, alerta, serieAlmacenes, finalBatches);
     }
 
-    private com.tasfb2b.planificador.dto.trabajos.AlertaColapso construirAlertaColapso(
+    private com.tasfb2b.planificador.dto.jobs.AlertaColapso construirAlertaColapso(
             OperadorReparacionVoraz.PreColapso pre, int bloque) {
         var cfg = props.getAlertaColapso();
-        String nivelAlmacen = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE;
-        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO;
-        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR;
-        String nivelBacklog = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE;
+        String nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
+        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
+        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
+        String nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
         if (pre.envioUrgente() != null) {
-            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO;
-            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR;
+            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
+            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
         }
         String nivel = nivelMax(nivelAlmacen, nivelBacklog);
 
         StringBuilder msg = new StringBuilder();
-        if (!com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelAlmacen)) {
+        if (!com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelAlmacen)) {
             msg.append(String.format("almacén %s al %.0f%% de capacidad",
                     pre.almacenCritico(), pre.utilAlmacenMax() * 100));
         }
-        if (!com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelBacklog)) {
+        if (!com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelBacklog)) {
             if (msg.length() > 0) msg.append(" | ");
             msg.append(String.format("envío %s al %.0f%% de su SLA en backlog",
                     pre.envioUrgente(), Math.max(0, pre.holguraSlaMin()) * 100));
         }
         if (msg.length() == 0) msg.append("Sin riesgo de colapso");
 
-        boolean almacenActivo = !com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelAlmacen);
-        boolean backlogActivo = !com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelBacklog);
+        boolean almacenActivo = !com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelAlmacen);
+        boolean backlogActivo = !com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelBacklog);
         String causaDominante = almacenActivo && backlogActivo ? "ambos"
                 : almacenActivo ? "almacen"
                 : backlogActivo ? "sla"
                 : null;
 
-        return new com.tasfb2b.planificador.dto.trabajos.AlertaColapso(
+        return new com.tasfb2b.planificador.dto.jobs.AlertaColapso(
                 nivel, msg.toString(), bloque,
                 pre.utilAlmacenMax(), pre.almacenCritico(), pre.holguraSlaMin(), pre.envioUrgente(),
                 causaDominante);
@@ -1677,13 +1677,13 @@ public class PlanificadorService {
     }
 
     private static String nivelMax(String a, String b) {
-        if (com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO.equals(a)
-                || com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO.equals(b))
-            return com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO;
-        if (com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR.equals(a)
-                || com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR.equals(b))
-            return com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR;
-        return com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE;
+        if (com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO.equals(a)
+                || com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO.equals(b))
+            return com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
+        if (com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR.equals(a)
+                || com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR.equals(b))
+            return com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
+        return com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
     }
 
     private List<ContextoTemporal> construirPlanBloques(int k) {
@@ -1848,7 +1848,7 @@ public class PlanificadorService {
 
     private AsignacionMaleta construirAsignacionSintetica(String jobId, String idEnvio) {
         if (idEnvio == null || !idEnvio.startsWith("INV-")) return null;
-        EstadoTrabajo job = getTrabajo(jobId);
+        EstadoJob job = getJob(jobId);
         if (job != null) {
             AsignacionMaleta enRam = job.getRutaSintetica(idEnvio);
             if (enRam != null) return enRam;
@@ -1873,7 +1873,7 @@ public class PlanificadorService {
     }
 
     private LocalDateTime ahoraDelJob(String jobId) {
-        EstadoTrabajo job = getTrabajo(jobId);
+        EstadoJob job = getJob(jobId);
         if (job == null) return null;
         BloqueSimulacion ultimo = job.ultimoBloque();
         if (ultimo == null || ultimo.getHoraFin() == null) return null;
@@ -2252,7 +2252,7 @@ public class PlanificadorService {
         m.setAdvertenciaCalibracion(stats.max() > saMs * 0.9);
     }
 
-    private AcumuladorAuditoria ejecutarWarmup(List<ContextoTemporal> warmupPlan, EstadoTrabajo job,
+    private AcumuladorAuditoria ejecutarWarmup(List<ContextoTemporal> warmupPlan, EstadoJob job,
                                                      Grafo graph, OperadorReparacionVoraz enrutador,
                                                      SolucionAlns solucionDummy, Map<String, int[]> odStats,
                                                      GestorBacklog backlog, String motorRes, long seed,
@@ -2319,7 +2319,7 @@ public class PlanificadorService {
         });
     }
 
-    private static boolean cancelacionPedida(EstadoTrabajo job) {
+    private static boolean cancelacionPedida(EstadoJob job) {
         return job != null && ("cancelado".equals(job.estado) || job.canceladoPorUsuario);
     }
 
@@ -2480,7 +2480,7 @@ public class PlanificadorService {
 
     private void logBloque(String motor, int bloque, int total, int envios, int onTime,
                            int tardadas, int sinRuta, long taMs, int backlog, boolean colapso,
-                           EstadoTrabajo job, int sinRutaRam) {
+                           EstadoJob job, int sinRutaRam) {
         log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
                 bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
                 colapso ? " | COLAPSO" : "");
@@ -2489,7 +2489,7 @@ public class PlanificadorService {
     }
 
 
-    private void logHuellaMemoria(EstadoTrabajo job, int sinRutaRam) {
+    private void logHuellaMemoria(EstadoJob job, int sinRutaRam) {
         Runtime rt = Runtime.getRuntime();
         long usadoMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
         long comprometidoMb = rt.totalMemory() / (1024 * 1024);
@@ -2505,7 +2505,7 @@ public class PlanificadorService {
             BloqueSimulacion bloque,
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
             boolean colapsoAlmacen, String detalleColapso,
-            com.tasfb2b.planificador.dto.trabajos.AlertaColapso alerta,
+            com.tasfb2b.planificador.dto.jobs.AlertaColapso alerta,
             List<OcupacionAlmacenSlot> serieAlmacenes,
             List<LoteEnvio> finalBatches) {
     }
