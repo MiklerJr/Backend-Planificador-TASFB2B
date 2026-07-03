@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.dto.dataset;
+package com.tasfb2b.planificador.dto.datos;
 
 import lombok.Data;
 

@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.dto.dataset;
+package com.tasfb2b.planificador.dto.datos;
 
 import lombok.Data;
 
 @Data
-public class DatasetInfoResponse {
+public class DatosInfoResponse {
     private String primeraVentana;
     private String ultimaVentana;
     private long diasDisponibles;
