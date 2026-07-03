@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.config;
+package com.tasfb2b.planificador.configuracion;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
