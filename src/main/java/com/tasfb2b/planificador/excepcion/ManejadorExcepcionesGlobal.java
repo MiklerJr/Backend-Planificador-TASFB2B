@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.exception;
+package com.tasfb2b.planificador.excepcion;
 
 import com.tasfb2b.planificador.dto.comun.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,9 +15,9 @@ import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
-public class GlobalExceptionHandler {
+public class ManejadorExcepcionesGlobal {
 
-    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final Logger log = LoggerFactory.getLogger(ManejadorExcepcionesGlobal.class);
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex,

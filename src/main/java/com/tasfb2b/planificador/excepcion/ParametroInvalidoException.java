@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.exception;
+package com.tasfb2b.planificador.excepcion;
 
 public class ParametroInvalidoException extends IllegalArgumentException {
 
