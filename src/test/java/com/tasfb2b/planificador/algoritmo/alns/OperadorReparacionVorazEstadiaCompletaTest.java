@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code [llegada, salida)} de cada pierna debe caber, no solo el slot de llegada. Estos tests
  * fijan el invariante en los tres caminos que confirman rutas: Dijkstra hijo
  * ({@code generarCandidatosRuta}), materialización de caché ({@code materializarRutaCandidata})
- * y el {@code repair()} del ALNS, más el motor ACO end-to-end. Grafo con escala LARGA en BBB
+ * y el {@code reparar()} del ALNS, más el motor ACO end-to-end. Grafo con escala LARGA en BBB
  * (llega 09:30, sale 18:00): un slot INTERMEDIO lleno (13:00, distinto del de llegada) debe
  * rechazar la ruta — antes solo se validaba el slot de llegada y los intermedios se cobraban
  * sin chequear (overflow del almacén).
@@ -61,7 +61,7 @@ class OperadorReparacionVorazEstadiaCompletaTest {
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         LoteEnvio batch = batch("B1", 20, 24);
 
-        List<Arista> rutaViaBbb = List.of(graph.edges.get(0), graph.edges.get(1));
+        List<Arista> rutaViaBbb = List.of(graph.aristas.get(0), graph.aristas.get(1));
         assertTrue(op.materializarRutaCandidata(batch, rutaViaBbb, new HashMap<>(), new HashMap<>())
                         .isCumpleSLA(),
                 "sin ocupación, el esqueleto cacheado materializa on-time");
@@ -81,17 +81,17 @@ class OperadorReparacionVorazEstadiaCompletaTest {
         blockAirport.put(claveSlotIntermedio(graph), CAPACIDAD_ALMACEN - 10);
         Map<Long, Integer> blockFlight = new HashMap<>();
 
-        op.repair(new SolucionAlns(List.of(batch)), List.of(batch), blockFlight, blockAirport);
+        op.reparar(new SolucionAlns(List.of(batch)), List.of(batch), blockFlight, blockAirport);
 
-        Nodo bbb = graph.nodes.get("BBB");
+        Nodo bbb = graph.nodos.get("BBB");
         for (Map.Entry<Long, Integer> e : blockAirport.entrySet()) {
-            assertTrue(e.getValue() <= bbb.capacity,
-                    "ningún slot de almacén queda sobre capacidad tras repair: "
-                            + e.getValue() + "/" + bbb.capacity);
+            assertTrue(e.getValue() <= bbb.capacidad,
+                    "ningún slot de almacén queda sobre capacidad tras reparar: "
+                            + e.getValue() + "/" + bbb.capacidad);
         }
-        if (batch.getAssignedRoute() != null && !batch.getAssignedRoute().isEmpty()) {
-            long primeraSalida = batch.getAssignedDepartures().get(0);
-            long readyMin = OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime());
+        if (batch.getRutaAsignada() != null && !batch.getRutaAsignada().isEmpty()) {
+            long primeraSalida = batch.getSalidasAsignadas().get(0);
+            long readyMin = OperadorReparacionVoraz.aMinutoEpochPublico(batch.getTiempoListo());
             assertTrue(primeraSalida - readyMin > 24 * 60,
                     "si enruta, debe ser en un día posterior (la estadía del día 1 no cabe)");
         }
@@ -110,16 +110,16 @@ class OperadorReparacionVorazEstadiaCompletaTest {
 
         engine.procesar(graph, op, List.of(batch), blockFlight, blockAirport, new Random(7L), 1_000L);
 
-        Nodo bbb = graph.nodes.get("BBB");
+        Nodo bbb = graph.nodos.get("BBB");
         for (Map.Entry<Long, Integer> e : blockAirport.entrySet()) {
-            assertTrue(e.getValue() <= bbb.capacity,
+            assertTrue(e.getValue() <= bbb.capacidad,
                     "ningún slot de almacén queda sobre capacidad tras el ACO: "
-                            + e.getValue() + "/" + bbb.capacity);
+                            + e.getValue() + "/" + bbb.capacidad);
         }
         // Día 1 no cabe (slot intermedio) y el día 2 es tardío (F1 no confirma tardías):
         // el envío queda sinRuta, jamás cobrado sobre un slot lleno.
         assertFalse(batch.isCumpleSLA());
-        assertTrue(batch.getAssignedRoute() == null || batch.getAssignedRoute().isEmpty());
+        assertTrue(batch.getRutaAsignada() == null || batch.getRutaAsignada().isEmpty());
     }
 
     @Test
@@ -137,7 +137,7 @@ class OperadorReparacionVorazEstadiaCompletaTest {
 
         // Slot intermedio de la estadía en BBB lleno, commiteado a la ocupación GLOBAL
         // (sinRutaPorAlmacenLleno lee el estado global post-commit).
-        op.commitBlock(new HashMap<>(), slotIntermedioLleno(graph));
+        op.confirmarBloque(new HashMap<>(), slotIntermedioLleno(graph));
 
         assertTrue(op.sinRutaPorAlmacenLleno(batch),
                 "el desborde de estadía debe clasificarse como colapso por almacén lleno");
@@ -152,7 +152,7 @@ class OperadorReparacionVorazEstadiaCompletaTest {
 
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveSlotIntermedio(graph), CAPACIDAD_ALMACEN + 50);
-        op.commitBlock(new HashMap<>(), blockAirport);
+        op.confirmarBloque(new HashMap<>(), blockAirport);
 
         OperadorReparacionVoraz.PreColapso pre = op.evaluarPreColapso(blockAirport, List.of());
 
@@ -165,9 +165,9 @@ class OperadorReparacionVorazEstadiaCompletaTest {
 
     /** Slot de las 13:00 del día 1 en BBB: dentro de la estadía [09:30, 18:00) pero NO el de llegada. */
     private static long claveSlotIntermedio(Grafo graph) {
-        long epochMin = OperadorReparacionVoraz.toEpochMinPublic(
+        long epochMin = OperadorReparacionVoraz.aMinutoEpochPublico(
                 LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(13, 0)));
-        return OperadorReparacionVoraz.claveAlmacenDeSlot(graph.nodes.get("BBB").idx, epochMin);
+        return OperadorReparacionVoraz.claveAlmacenDeSlot(graph.nodos.get("BBB").indice, epochMin);
     }
 
     private static Map<Long, Integer> slotIntermedioLleno(Grafo graph) {
@@ -185,34 +185,34 @@ class OperadorReparacionVorazEstadiaCompletaTest {
     private static Grafo grafoEscalaLarga() {
         Grafo g = new Grafo();
         Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
-        g.nodes.put("AAA", aaa);
-        g.nodes.put("BBB", bbb);
-        g.nodes.put("CCC", ccc);
-        addEdge(g, 0, aaa, bbb, "F1", "08:30", "09:30", 50);
-        addEdge(g, 1, bbb, ccc, "F2", "18:00", "19:00", 50);
+        g.nodos.put("AAA", aaa);
+        g.nodos.put("BBB", bbb);
+        g.nodos.put("CCC", ccc);
+        agregarArista(g, 0, aaa, bbb, "F1", "08:30", "09:30", 50);
+        agregarArista(g, 1, bbb, ccc, "F2", "18:00", "19:00", 50);
         return g;
     }
 
     private static Nodo node(String code) {
         Nodo n = new Nodo(code);
-        n.capacity = CAPACIDAD_ALMACEN;
+        n.capacidad = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id,
+    private static void agregarArista(Grafo g, int idx, Nodo from, Nodo to, String id,
                                 String dep, String arr, int cap) {
         Arista e = new Arista();
-        e.idx = idx;
+        e.indice = idx;
         e.id = id;
-        e.from = from;
-        e.to = to;
-        e.capacity = cap;
-        e.departureTime = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.parse(dep));
-        e.arrivalTime   = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.parse(arr));
-        e.departureLocalTime = e.departureTime.toLocalTime();
-        e.depMinuteOfDay = e.departureLocalTime.getHour() * 60 + e.departureLocalTime.getMinute();
-        e.durationMinutes = (int) Duration.between(e.departureTime, e.arrivalTime).toMinutes();
-        e.cost = e.durationMinutes;
-        g.addEdge(e);
+        e.origen = from;
+        e.destino = to;
+        e.capacidad = cap;
+        e.horaSalida = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.parse(dep));
+        e.horaLlegada   = LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.parse(arr));
+        e.horaSalidaLocal = e.horaSalida.toLocalTime();
+        e.minutoDelDiaSalida = e.horaSalidaLocal.getHour() * 60 + e.horaSalidaLocal.getMinute();
+        e.duracionMinutos = (int) Duration.between(e.horaSalida, e.horaLlegada).toMinutes();
+        e.costo = e.duracionMinutos;
+        g.agregarArista(e);
     }
 }

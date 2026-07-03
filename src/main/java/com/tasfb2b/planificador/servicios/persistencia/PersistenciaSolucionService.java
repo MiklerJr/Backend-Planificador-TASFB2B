@@ -85,7 +85,7 @@ public class PersistenciaSolucionService {
         for (LoteEnvio b : batches) {
             if (b == null || b.getId() == null) continue;
             List<Arista> ruta = b.getRutaCompleta();
-            List<Long> deps = b.getDeparturesCompletas();
+            List<Long> deps = b.getSalidasCompletas();
             if (ruta == null || ruta.isEmpty() || deps == null || deps.size() != ruta.size()) continue;
             (b.isSintetico() ? inyectados : enrutados).add(b);
         }
@@ -164,11 +164,11 @@ public class PersistenciaSolucionService {
             Long idRuta = idRutaPorEnvio.get(b.getId());
             if (idRuta == null) continue;
             List<Arista> ruta = b.getRutaCompleta();
-            List<Long> deps = b.getDeparturesCompletas();
+            List<Long> deps = b.getSalidasCompletas();
             for (int ti = 0; ti < ruta.size(); ti++) {
                 Arista e = ruta.get(ti);
                 long depMin = deps.get(ti);
-                long arrMin = depMin + e.durationMinutes;
+                long arrMin = depMin + e.duracionMinutos;
                 tramos.add(new Object[]{
                         idRuta, ti, normalizarIdVuelo(e.id),
                         epochMinToLdt(depMin), epochMinToLdt(arrMin)
@@ -190,11 +190,11 @@ public class PersistenciaSolucionService {
             sql.append("(?, TRUE, ?, ?, ?, ?, ?)");
 
             List<Arista> ruta = b.getRutaCompleta();
-            List<Long> deps = b.getDeparturesCompletas();
-            long readyMin = OperadorReparacionVoraz.toEpochMinPublic(b.getReadyTime());
-            long llegadaMin = deps.get(deps.size() - 1) + ruta.get(ruta.size() - 1).durationMinutes;
+            List<Long> deps = b.getSalidasCompletas();
+            long readyMin = OperadorReparacionVoraz.aMinutoEpochPublico(b.getTiempoListo());
+            long llegadaMin = deps.get(deps.size() - 1) + ruta.get(ruta.size() - 1).duracionMinutos;
             double transitMin = llegadaMin - readyMin;
-            double slackMin = b.getSlaLimitHours() * 60.0 - transitMin;
+            double slackMin = b.getHorasLimiteSla() * 60.0 - transitMin;
 
             args.add(b.getId());
             args.add(transitMin);          // costo_total (proxy = tránsito total en min)

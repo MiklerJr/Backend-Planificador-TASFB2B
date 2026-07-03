@@ -71,9 +71,9 @@ public class EstadoTrabajo {
     public volatile LocalDateTime ventanaInicioUtc;
     public volatile LocalDateTime ventanaFinUtc;
 
-    public void registrarVentanaSimulada(LocalDateTime scStart, LocalDateTime scEnd) {
-        if (ventanaInicioUtc == null) ventanaInicioUtc = scStart;
-        ventanaFinUtc = scEnd;
+    public void registrarVentanaSimulada(LocalDateTime scInicio, LocalDateTime scFin) {
+        if (ventanaInicioUtc == null) ventanaInicioUtc = scInicio;
+        ventanaFinUtc = scFin;
     }
 
     public volatile Integer saMin;

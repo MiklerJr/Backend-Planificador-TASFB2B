@@ -33,12 +33,12 @@ import java.util.function.Consumer;
 public class LectorSolucionBd {
 
     private final JdbcTemplate jdbc;
-    private final CargadorDatos dataLoader;
+    private final CargadorDatos cargadorDatos;
     private final TransactionTemplate txReadOnly;
 
-    public LectorSolucionBd(JdbcTemplate jdbc, CargadorDatos dataLoader, PlatformTransactionManager txManager) {
+    public LectorSolucionBd(JdbcTemplate jdbc, CargadorDatos cargadorDatos, PlatformTransactionManager txManager) {
         this.jdbc = jdbc;
-        this.dataLoader = dataLoader;
+        this.cargadorDatos = cargadorDatos;
         if (txManager != null) {
             this.txReadOnly = new TransactionTemplate(txManager);
             this.txReadOnly.setReadOnly(true);
@@ -50,17 +50,17 @@ public class LectorSolucionBd {
     public Map<String, Arista> construirIndiceVuelo(Grafo graph) {
         Map<String, Arista> idx = new HashMap<>();
         if (graph == null) return idx;
-        for (Arista e : graph.edges) {
+        for (Arista e : graph.aristas) {
             idx.put(PersistenciaSolucionService.normalizarIdVuelo(e.id), e);
         }
         return idx;
     }
 
-    public void forEachEnrutado(Map<String, Arista> indiceVuelo, Consumer<LoteEnvio> consumer) {
-        forEachEnrutado(indiceVuelo, null, null, consumer);
+    public void paraCadaEnrutado(Map<String, Arista> indiceVuelo, Consumer<LoteEnvio> consumer) {
+        paraCadaEnrutado(indiceVuelo, null, null, consumer);
     }
 
-    public void forEachEnrutado(Map<String, Arista> indiceVuelo, LocalDateTime desde, LocalDateTime hasta,
+    public void paraCadaEnrutado(Map<String, Arista> indiceVuelo, LocalDateTime desde, LocalDateTime hasta,
                                 Consumer<LoteEnvio> consumer) {
         final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
         StringBuilder sql = new StringBuilder()
@@ -212,9 +212,9 @@ public class LectorSolucionBd {
             String origen, destino;
             int depMin;
             if (e != null) {
-                origen = e.from.code;
-                destino = e.to.code;
-                depMin = e.depMinuteOfDay;
+                origen = e.origen.codigo;
+                destino = e.destino.codigo;
+                depMin = e.minutoDelDiaSalida;
             } else {
                 // Fallback defensivo: derivar del propio id_vuelo (ICAO-ICAO-HHMM).
                 String[] partes = idVuelo != null ? idVuelo.split("-") : new String[0];
@@ -269,7 +269,7 @@ public class LectorSolucionBd {
 
     private Map<String, Vuelo> indiceVueloPorIdBd() {
         Map<String, Vuelo> idx = new HashMap<>();
-        for (Vuelo v : dataLoader.getVuelos()) {
+        for (Vuelo v : cargadorDatos.getVuelos()) {
             String front = FormatoSimulacion.vueloFrontId(v);
             if (front != null && !front.isEmpty()) {
                 idx.put(PersistenciaSolucionService.normalizarIdVuelo(front), v);
@@ -441,8 +441,8 @@ public class LectorSolucionBd {
     }
 
     private LoteEnvio reconstruir(Acumulador acc, Map<String, Arista> indiceVuelo, boolean readyYaEsUtc) {
-        Aeropuerto origen = dataLoader.getAeropuerto(acc.origen);
-        Aeropuerto destino = dataLoader.getAeropuerto(acc.destino);
+        Aeropuerto origen = cargadorDatos.getAeropuerto(acc.origen);
+        Aeropuerto destino = cargadorDatos.getAeropuerto(acc.destino);
         if (origen == null || destino == null || origen.getOffsetHorario() == null) {
             log.warn("No se pudo reconstruir el envío {} (aeropuerto/offset ausente)", acc.idEnvio);
             return null;
@@ -468,8 +468,8 @@ public class LectorSolucionBd {
             ruta.add(e);
             deps.add(ldtToEpochMin(t.horaSalidaUtc));
         }
-        b.setAssignedRoute(ruta);
-        b.setAssignedDepartures(deps);
+        b.setRutaAsignada(ruta);
+        b.setSalidasAsignadas(deps);
         b.setCumpleSLA(acc.cumpleSla);
         return b;
     }

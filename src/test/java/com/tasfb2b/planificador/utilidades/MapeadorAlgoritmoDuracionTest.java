@@ -24,36 +24,36 @@ class MapeadorAlgoritmoDuracionTest {
     @Test
     void vueloHaciaElOesteMasCortoQueElHusoNoInflaLaDuracion() {
         // LBSF Sofía (+3) → LDZA Zagreb (+2): 04:25 local → 04:14 local destino. Real = 49 min.
-        Grafo g = mapper.mapToGraph(
+        Grafo g = mapper.mapearAGrafo(
                 List.of(aeropuerto("LBSF", 3), aeropuerto("LDZA", 2)),
                 List.of(vuelo("LBSF", 3, "LDZA", 2, dt(4, 25), dt(4, 14))));
         Arista e = edge(g, "LBSF", "LDZA");
-        assertEquals(49, e.durationMinutes, "LBSF→LDZA debe durar 49 min, no 24h49");
+        assertEquals(49, e.duracionMinutos, "LBSF→LDZA debe durar 49 min, no 24h49");
     }
 
     @Test
     void vueloQueCruzaMedianocheRealConservaSuDuracion() {
         // VIDP Delhi (+5) 23:00 → SKBO Bogotá (−5) 06:00 del día siguiente. Real = 17h = 1020 min.
-        Grafo g = mapper.mapToGraph(
+        Grafo g = mapper.mapearAGrafo(
                 List.of(aeropuerto("VIDP", 5), aeropuerto("SKBO", -5)),
                 List.of(vuelo("VIDP", 5, "SKBO", -5, dt(23, 0), dt(6, 0))));
         Arista e = edge(g, "VIDP", "SKBO");
-        assertEquals(1020, e.durationMinutes, "VIDP→SKBO debe durar 1020 min (17h)");
+        assertEquals(1020, e.duracionMinutos, "VIDP→SKBO debe durar 1020 min (17h)");
     }
 
     @Test
     void vueloNormalHaciaElEsteSinCambios() {
         // LATI Tirana (+2) → LBSF Sofía (+3): 10:00 → 11:26 local destino. Real = 26 min.
-        Grafo g = mapper.mapToGraph(
+        Grafo g = mapper.mapearAGrafo(
                 List.of(aeropuerto("LATI", 2), aeropuerto("LBSF", 3)),
                 List.of(vuelo("LATI", 2, "LBSF", 3, dt(10, 0), dt(11, 26))));
         Arista e = edge(g, "LATI", "LBSF");
-        assertEquals(26, e.durationMinutes);
+        assertEquals(26, e.duracionMinutos);
     }
 
     private static Arista edge(Grafo g, String from, String to) {
-        Arista found = g.edges.stream()
-                .filter(e -> from.equals(e.from.code) && to.equals(e.to.code))
+        Arista found = g.aristas.stream()
+                .filter(e -> from.equals(e.origen.codigo) && to.equals(e.destino.codigo))
                 .findFirst().orElse(null);
         assertNotNull(found, "no se encontró la arista " + from + "→" + to);
         return found;

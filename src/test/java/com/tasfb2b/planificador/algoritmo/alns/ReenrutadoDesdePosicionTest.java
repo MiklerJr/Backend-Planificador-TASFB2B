@@ -31,14 +31,14 @@ class ReenrutadoDesdePosicionTest {
     private static final int CAPACIDAD_ALMACEN = 500;
     private static final LocalDate DIA = LocalDate.of(2026, 1, 1);
 
-    /** T2 — {@code releaseSuffixFromGlobal} libera SOLO el sufijo y la estadía del nodo de corte;
+    /** T2 — {@code liberarSufijoDeGlobal} libera SOLO el sufijo y la estadía del nodo de corte;
      *  el prefijo (vuelo ya volado) sigue ocupado. */
     @Test
     void releaseSuffixLiberaSoloElSufijoYConservaElPrefijo() {
         Grafo graph = grafoEscalaLarga();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
-        Arista f1 = graph.edges.get(0);   // AAA→BBB (prefijo)
-        Arista f2 = graph.edges.get(1);   // BBB→CCC (sufijo)
+        Arista f1 = graph.aristas.get(0);   // AAA→BBB (prefijo)
+        Arista f2 = graph.aristas.get(1);   // BBB→CCC (sufijo)
         LoteEnvio b1 = enrutarYCommitear(op);   // ruta AAA→BBB→CCC, 20 maletas
 
         long depF1 = epoch(8, 30);
@@ -49,23 +49,23 @@ class ReenrutadoDesdePosicionTest {
         assertEquals(CAPACIDAD_VUELO - 20, op.capacidadRestante(f1, depF1, new HashMap<>()));
         assertEquals(CAPACIDAD_VUELO - 20, op.capacidadRestante(f2, depF2, new HashMap<>()));
         assertEquals(CAPACIDAD_ALMACEN - 20,
-                op.capacidadAlmacen(graph.nodes.get("BBB"), estadiaBbb, new HashMap<>()));
+                op.capacidadAlmacen(graph.nodos.get("BBB"), estadiaBbb, new HashMap<>()));
 
         // Corte en k=1: el envío ya voló AAA→BBB; se libera solo el sufijo (BBB→CCC + estadía BBB).
-        op.releaseSuffixFromGlobal(b1, 1);
+        op.liberarSufijoDeGlobal(b1, 1);
 
         assertEquals(CAPACIDAD_VUELO - 20, op.capacidadRestante(f1, depF1, new HashMap<>()),
                 "el prefijo AAA→BBB SIGUE ocupado (vuelo ya volado)");
         assertEquals(CAPACIDAD_VUELO, op.capacidadRestante(f2, depF2, new HashMap<>()),
                 "el sufijo BBB→CCC se libera");
         assertEquals(CAPACIDAD_ALMACEN,
-                op.capacidadAlmacen(graph.nodes.get("BBB"), estadiaBbb, new HashMap<>()),
+                op.capacidadAlmacen(graph.nodos.get("BBB"), estadiaBbb, new HashMap<>()),
                 "la estadía vieja del nodo de corte BBB se libera (su límite viejo ya no aplica)");
     }
 
     /** T4 — el SLA del sufijo se mide contra el deadline ABSOLUTO del envío original, no desde la escala. */
     @Test
-    void cumpleSlaDesdeOrigenMideElDeadlineAbsoluto() {
+    void cumpleSlaDesdeOrigenMideLaFechaLimiteAbsoluta() {
         Grafo graph = grafoEscalaLarga();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         // Candidato de sufijo BBB→CCC (sale 18:00, llega 19:00 del DIA).
@@ -91,7 +91,7 @@ class ReenrutadoDesdePosicionTest {
     @Test
     void prefijoComponeRutaCompletaYPosicionEfectiva() {
         Grafo graph = grafoEscalaLarga();
-        Arista f1 = graph.edges.get(0), f2 = graph.edges.get(1);
+        Arista f1 = graph.aristas.get(0), f2 = graph.aristas.get(1);
         LoteEnvio b = new LoteEnvio("B", 10, 24, "AAA", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
 
@@ -100,20 +100,20 @@ class ReenrutadoDesdePosicionTest {
 
         // Simular un corte: prefijo = [f1], sufijo = [f2], posición = BBB.
         b.setPrefijoFijo(new ArrayList<>(List.of(f1)));
-        b.setPrefijoFijoDepartures(new ArrayList<>(List.of(100L)));
-        b.setCurrentOriginCode("BBB");
-        b.setCurrentReadyTime(LocalDateTime.of(DIA, LocalTime.of(9, 30)));
-        b.setAssignedRoute(new ArrayList<>(List.of(f2)));
-        b.setAssignedDepartures(new ArrayList<>(List.of(200L)));
+        b.setPrefijoFijoSalidas(new ArrayList<>(List.of(100L)));
+        b.setOrigenActual("BBB");
+        b.setTiempoListoActual(LocalDateTime.of(DIA, LocalTime.of(9, 30)));
+        b.setRutaAsignada(new ArrayList<>(List.of(f2)));
+        b.setSalidasAsignadas(new ArrayList<>(List.of(200L)));
 
         assertTrue(b.tienePrefijo());
         assertEquals("BBB", b.origenEfectivo());
-        assertEquals(LocalDateTime.of(DIA, LocalTime.of(9, 30)), b.readyEfectivo());
+        assertEquals(LocalDateTime.of(DIA, LocalTime.of(9, 30)), b.tiempoListoEfectivo());
         assertEquals(List.of(f1, f2), b.getRutaCompleta());
-        assertEquals(List.of(100L, 200L), b.getDeparturesCompletas());
+        assertEquals(List.of(100L, 200L), b.getSalidasCompletas());
 
-        LoteEnvio clon = b.cloneBatch();
-        assertTrue(clon.tienePrefijo(), "cloneBatch preserva el prefijo");
+        LoteEnvio clon = b.clonar();
+        assertTrue(clon.tienePrefijo(), "clonar preserva el prefijo");
         assertEquals("BBB", clon.origenEfectivo());
         assertEquals(List.of(f1, f2), clon.getRutaCompleta());
     }
@@ -121,7 +121,7 @@ class ReenrutadoDesdePosicionTest {
     // ----------------------------------------------------------------------- helpers
 
     private static long epoch(int h, int m) {
-        return OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(h, m)));
+        return OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(h, m)));
     }
 
     private static LoteEnvio enrutarYCommitear(OperadorReparacionVoraz op) {
@@ -134,40 +134,40 @@ class ReenrutadoDesdePosicionTest {
                 .findFirst().orElseThrow();
         op.aplicarCandidatoRuta(b1, ruta);
         op.aplicarCandidatoBloque(b1, ruta, blockFlight, blockAirport);
-        op.commitBlock(blockFlight, blockAirport);
+        op.confirmarBloque(blockFlight, blockAirport);
         return b1;
     }
 
     private static Grafo grafoEscalaLarga() {
         Grafo g = new Grafo();
         Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
-        g.nodes.put("AAA", aaa);
-        g.nodes.put("BBB", bbb);
-        g.nodes.put("CCC", ccc);
-        addEdge(g, 0, aaa, bbb, "F1", "08:30", "09:30");
-        addEdge(g, 1, bbb, ccc, "F2", "18:00", "19:00");
+        g.nodos.put("AAA", aaa);
+        g.nodos.put("BBB", bbb);
+        g.nodos.put("CCC", ccc);
+        agregarArista(g, 0, aaa, bbb, "F1", "08:30", "09:30");
+        agregarArista(g, 1, bbb, ccc, "F2", "18:00", "19:00");
         return g;
     }
 
     private static Nodo node(String code) {
         Nodo n = new Nodo(code);
-        n.capacity = CAPACIDAD_ALMACEN;
+        n.capacidad = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
+    private static void agregarArista(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
         Arista e = new Arista();
-        e.idx = idx;
+        e.indice = idx;
         e.id = id;
-        e.from = from;
-        e.to = to;
-        e.capacity = CAPACIDAD_VUELO;
-        e.departureTime = LocalDateTime.of(DIA, LocalTime.parse(dep));
-        e.arrivalTime = LocalDateTime.of(DIA, LocalTime.parse(arr));
-        e.departureLocalTime = e.departureTime.toLocalTime();
-        e.depMinuteOfDay = e.departureLocalTime.getHour() * 60 + e.departureLocalTime.getMinute();
-        e.durationMinutes = (int) Duration.between(e.departureTime, e.arrivalTime).toMinutes();
-        e.cost = e.durationMinutes;
-        g.addEdge(e);
+        e.origen = from;
+        e.destino = to;
+        e.capacidad = CAPACIDAD_VUELO;
+        e.horaSalida = LocalDateTime.of(DIA, LocalTime.parse(dep));
+        e.horaLlegada = LocalDateTime.of(DIA, LocalTime.parse(arr));
+        e.horaSalidaLocal = e.horaSalida.toLocalTime();
+        e.minutoDelDiaSalida = e.horaSalidaLocal.getHour() * 60 + e.horaSalidaLocal.getMinute();
+        e.duracionMinutos = (int) Duration.between(e.horaSalida, e.horaLlegada).toMinutes();
+        e.costo = e.duracionMinutos;
+        g.agregarArista(e);
     }
 }

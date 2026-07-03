@@ -44,8 +44,8 @@ public class AnalizadorAeropuertos {
                 a.setCapacidad(Integer.parseInt(m.group(7)));
                 a.setContinente(continentePorIcao(codigo));
                 a.setActivo(true);
-                a.setLatitud(parseLatitud(m.group(8).trim()));
-                a.setLongitud(parseLongitud(m.group(9).trim()));
+                a.setLatitud(analizarLatitud(m.group(8).trim()));
+                a.setLongitud(analizarLongitud(m.group(9).trim()));
                 result.add(a);
             }
         }
@@ -61,17 +61,17 @@ public class AnalizadorAeropuertos {
             default             -> "UNKNOWN";
         };
     }
-    private Double parseLatitud(String raw) {
-        double val = parseDMS(raw);
+    private Double analizarLatitud(String raw) {
+        double val = analizarDMS(raw);
         return raw.toUpperCase().contains("S") ? -val : val;
     }
 
-    private Double parseLongitud(String raw) {
-        double val = parseDMS(raw);
+    private Double analizarLongitud(String raw) {
+        double val = analizarDMS(raw);
         return raw.toUpperCase().contains("W") ? -val : val;
     }
 
-    private double parseDMS(String raw) {
+    private double analizarDMS(String raw) {
         Matcher m = Pattern.compile("(\\d+)").matcher(raw);
         int grados  = m.find() ? Integer.parseInt(m.group()) : 0;
         int minutos = m.find() ? Integer.parseInt(m.group()) : 0;

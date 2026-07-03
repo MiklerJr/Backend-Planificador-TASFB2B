@@ -9,7 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 class PlanificadorApplicationTests {
 
 	@Test
-	void contextLoads() {
+	void cargaContexto() {
 	}
 
 }

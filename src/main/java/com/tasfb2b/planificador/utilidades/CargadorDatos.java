@@ -111,7 +111,7 @@ public class CargadorDatos {
                 .mapToInt(Math::abs)
                 .max()
                 .orElse(0);
-        calcularRangoUtcDataset();
+        calcularRangoUtcDatos();
 
         log.info("Aeropuertos en RAM : {}", aeropuertos.size());
         log.info("Vuelos en RAM      : {}", vuelos.size());
@@ -141,7 +141,7 @@ public class CargadorDatos {
         return ultimaVentanaUtc;
     }
 
-    private void calcularRangoUtcDataset() {
+    private void calcularRangoUtcDatos() {
         String sql = "SELECT icao_origen, MIN(fecha_hora_registro) AS min_l, MAX(fecha_hora_registro) AS max_l " +
                      "FROM ENVIO GROUP BY icao_origen";
         LocalDateTime min = null;
@@ -297,8 +297,8 @@ public class CargadorDatos {
                                                    Aeropuerto destino) {
         int origenOffset = origen.getOffsetHorario() != null ? origen.getOffsetHorario() : 0;
         int destinoOffset = destino.getOffsetHorario() != null ? destino.getOffsetHorario() : 0;
-        int depWall = toMinutes(fechaSalida.toLocalTime());
-        int arrWall = toMinutes(horaLlegada);
+        int depWall = aMinutos(fechaSalida.toLocalTime());
+        int arrWall = aMinutos(horaLlegada);
         int durReal = Math.floorMod((arrWall - destinoOffset * 60) - (depWall - origenOffset * 60), 1440);
         return fechaSalida.plusMinutes(durReal + (long) (destinoOffset - origenOffset) * 60);
     }
@@ -325,7 +325,7 @@ public class CargadorDatos {
         return LocalTime.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
     }
 
-    private static int toMinutes(LocalTime time) {
+    private static int aMinutos(LocalTime time) {
         return time.getHour() * 60 + time.getMinute();
     }
 

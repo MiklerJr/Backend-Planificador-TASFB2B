@@ -19,16 +19,16 @@ import java.util.stream.Collectors;
 public class MapeadorAlgoritmo {
 
 
-    public Grafo mapToGraph(List<Aeropuerto> aeropuertos, List<Vuelo> vuelos) {
+    public Grafo mapearAGrafo(List<Aeropuerto> aeropuertos, List<Vuelo> vuelos) {
         Grafo graph = new Grafo();
 
         // 1. Mapear Nodos (Aeropuertos)
         for (Aeropuerto a : aeropuertos) {
-            graph.addNode(a.getCodigo());
-            Nodo nodo = graph.nodes.get(a.getCodigo());
+            graph.agregarNodo(a.getCodigo());
+            Nodo nodo = graph.nodos.get(a.getCodigo());
             int capacidadAlmacen = a.getCapacidad() != null ? a.getCapacidad() : 0;
-            nodo.capacity = capacidadAlmacen;
-            nodo.storageCapacity = capacidadAlmacen;
+            nodo.capacidad = capacidadAlmacen;
+            nodo.capacidadAlmacen = capacidadAlmacen;
         }
 
         // 2. Mapear Aristas (Vuelos)
@@ -44,10 +44,10 @@ public class MapeadorAlgoritmo {
                         v.getFechaHoraSalida().toLocalTime().toString();
             }
 
-            edge.from = graph.nodes.get(v.getAeropuertoOrigen().getCodigo());
-            edge.to = graph.nodes.get(v.getAeropuertoDestino().getCodigo());
+            edge.origen = graph.nodos.get(v.getAeropuertoOrigen().getCodigo());
+            edge.destino = graph.nodos.get(v.getAeropuertoDestino().getCodigo());
 
-            edge.capacity = v.getCapacidad() != null ? v.getCapacidad() : 0;
+            edge.capacidad = v.getCapacidad() != null ? v.getCapacidad() : 0;
 
             int originOffset = v.getAeropuertoOrigen().getOffsetHorario();
             int destOffset   = v.getAeropuertoDestino().getOffsetHorario();
@@ -61,22 +61,22 @@ public class MapeadorAlgoritmo {
             LocalDateTime arrUtc = depUtc.plusMinutes(durMin);
             Duration utcDur = Duration.ofMinutes(durMin);
 
-            edge.departureTime     = depUtc;
-            edge.arrivalTime       = arrUtc;
-            edge.duration          = utcDur;
-            edge.cost              = durMin;
-            edge.departureLocalTime = depUtc.toLocalTime();
-            edge.durationMinutes   = durMin;
-            edge.depMinuteOfDay    = depUtc.getHour() * 60 + depUtc.getMinute();
-            edge.idx               = edgeIdx++;
+            edge.horaSalida     = depUtc;
+            edge.horaLlegada       = arrUtc;
+            edge.duracion          = utcDur;
+            edge.costo              = durMin;
+            edge.horaSalidaLocal = depUtc.toLocalTime();
+            edge.duracionMinutos   = durMin;
+            edge.minutoDelDiaSalida    = depUtc.getHour() * 60 + depUtc.getMinute();
+            edge.indice               = edgeIdx++;
 
-            graph.addEdge(edge);
+            graph.agregarArista(edge);
         }
 
         return graph;
     }
 
-    public List<LoteEnvio> mapToBatches(List<Envio> maletas) {
+    public List<LoteEnvio> mapearALotes(List<Envio> maletas) {
         return maletas.stream().map(m -> {
 
             int offset = m.getAeropuertoOrigen().getOffsetHorario();

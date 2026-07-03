@@ -29,17 +29,17 @@ public class ConsultaTrabajosService {
     static final int DEFAULT_MAX_FILAS_PAGINA = 5000;
 
     private final RegistroTrabajos jobs;
-    private final CargadorDatos dataLoader;
+    private final CargadorDatos cargadorDatos;
     private final LectorSolucionBd solucionBdReader;
     private final PersistenciaSolucionService persistencia;
     private final int maxFilasPagina;
 
     @Autowired
-    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos dataLoader,
+    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos cargadorDatos,
                            LectorSolucionBd solucionBdReader, PersistenciaSolucionService persistencia,
                            PlanificadorProperties props) {
         this.jobs = jobs;
-        this.dataLoader = dataLoader;
+        this.cargadorDatos = cargadorDatos;
         this.solucionBdReader = solucionBdReader;
         this.persistencia = persistencia;
         this.maxFilasPagina = (props != null && props.getConsulta() != null
@@ -48,8 +48,8 @@ public class ConsultaTrabajosService {
                 : DEFAULT_MAX_FILAS_PAGINA;
     }
 
-    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos dataLoader) {
-        this(jobs, dataLoader, null, null, null);
+    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos cargadorDatos) {
+        this(jobs, cargadorDatos, null, null, null);
     }
 
     private int limitEfectivo(int limit) {
@@ -63,12 +63,12 @@ public class ConsultaTrabajosService {
                 && persistencia.reflejaEnBd(job.getJobId());
     }
 
-    private EstadoTrabajo getJob(String jobId) {
+    private EstadoTrabajo getTrabajo(String jobId) {
         return jobs.get(jobId);
     }
 
-    public TableroResponse getDashboardJob(String jobId) {
-        EstadoTrabajo job = getJob(jobId);
+    public TableroResponse getTableroTrabajo(String jobId) {
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         Metricas metricas = job.resultado != null
@@ -100,8 +100,8 @@ public class ConsultaTrabajosService {
         return body;
     }
 
-    public IndicadoresResponse getIndicadoresJob(String jobId) {
-        EstadoTrabajo job = getJob(jobId);
+    public IndicadoresResponse getIndicadoresTrabajo(String jobId) {
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         IndicadoresResponse body = new IndicadoresResponse();
@@ -139,8 +139,8 @@ public class ConsultaTrabajosService {
         return acc;
     }
 
-    public CargaVuelosResponse getCargaVuelosJob(String jobId, int desde, int limit) {
-        EstadoTrabajo job = getJob(jobId);
+    public CargaVuelosResponse getCargaVuelosTrabajo(String jobId, int desde, int limit) {
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -179,8 +179,8 @@ public class ConsultaTrabajosService {
         return body;
     }
 
-    public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
-        EstadoTrabajo job = getJob(jobId);
+    public VuelosUsadosResponse getVuelosUsadosTrabajo(String jobId, int desde) {
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         int desdeNormalizado = Math.max(0, desde);
@@ -203,8 +203,8 @@ public class ConsultaTrabajosService {
         return response;
     }
 
-    public OcupacionAlmacenesResponse getOcupacionAlmacenesJob(String jobId, int desde, int limit) {
-        EstadoTrabajo job = getJob(jobId);
+    public OcupacionAlmacenesResponse getOcupacionAlmacenesTrabajo(String jobId, int desde, int limit) {
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -233,11 +233,11 @@ public class ConsultaTrabajosService {
         return body;
     }
 
-    public AsignacionesResponse getAsignacionesJob(String jobId, int desde,
+    public AsignacionesResponse getAsignacionesTrabajo(String jobId, int desde,
                                                   String aeropuerto,
                                                   String vueloId,
                                                   boolean soloEnrutadas) {
-        EstadoTrabajo job = getJob(jobId);
+        EstadoTrabajo job = getTrabajo(jobId);
         if (job == null) return null;
 
         String aeropuertoNorm = normalizarCodigo(aeropuerto);
@@ -426,7 +426,7 @@ public class ConsultaTrabajosService {
 
     private Map<String, Integer> capacidadesVuelosPorId() {
         Map<String, Integer> out = new HashMap<>();
-        for (Vuelo vuelo : dataLoader.getVuelos()) {
+        for (Vuelo vuelo : cargadorDatos.getVuelos()) {
             out.put(vueloFrontId(vuelo), vuelo.getCapacidad() != null ? vuelo.getCapacidad() : 0);
         }
         return out;
@@ -434,7 +434,7 @@ public class ConsultaTrabajosService {
 
     private Map<String, Integer> capacidadesAlmacenPorCodigo() {
         Map<String, Integer> out = new HashMap<>();
-        for (Aeropuerto aeropuerto : dataLoader.getAeropuertos()) {
+        for (Aeropuerto aeropuerto : cargadorDatos.getAeropuertos()) {
             out.put(aeropuerto.getCodigo(), aeropuerto.getCapacidad() != null ? aeropuerto.getCapacidad() : 0);
         }
         return out;

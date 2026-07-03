@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Regresión (hallazgo "ocupación fantasma tras cancelación + purga"): al cancelar un vuelo en
  * vivo, los envíos afectados se reencolan como replanificables con su ruta rota aún COMMITEADA a
- * la ocupación global; la liberación ({@code releaseFromGlobal} + {@code clearRoute}) es diferida
+ * la ocupación global; la liberación ({@code liberarDeGlobal} + {@code limpiarRuta}) es diferida
  * al momento en que salen del backlog en un bloque posterior. Si el envío VENCÍA antes de salir
  * (p. ej. por el tope {@code max-reproceso-por-bloque}), {@code GestorBacklog.purgarVencidas} lo
  * descartaba SIN liberar: la capacidad de los vuelos posteriores y la estadía de almacén de una
@@ -43,42 +43,42 @@ class CancelacionOcupacionFantasmaTest {
     void purgarVencidasLiberaLaOcupacionGlobalDeUnaRutaRotaPorCancelacion() {
         Grafo graph = grafoEscalaLarga();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
-        Arista f1 = graph.edges.get(0);   // AAA→BBB 08:30-09:30
-        Arista f2 = graph.edges.get(1);   // BBB→CCC 18:00-19:00
+        Arista f1 = graph.aristas.get(0);   // AAA→BBB 08:30-09:30
+        Arista f2 = graph.aristas.get(1);   // BBB→CCC 18:00-19:00
 
         // 1. Enrutar y commitear B1 por AAA→BBB→CCC (estadía 09:30-18:00 en BBB).
         LoteEnvio b1 = enrutarYCommitear(op);
 
-        long depF2 = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
-        long estadiaBbb = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
+        long depF2 = OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
+        long estadiaBbb = OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
         assertEquals(CAPACIDAD_VUELO - 20, op.capacidadRestante(f2, depF2, new HashMap<>()),
                 "sanidad: B1 ocupa 20 plazas del tramo BBB→CCC");
-        assertEquals(CAPACIDAD_ALMACEN - 20, op.capacidadAlmacen(graph.nodes.get("BBB"), estadiaBbb, new HashMap<>()),
+        assertEquals(CAPACIDAD_ALMACEN - 20, op.capacidadAlmacen(graph.nodos.get("BBB"), estadiaBbb, new HashMap<>()),
                 "sanidad: la estadía de B1 ocupa el almacén de BBB");
 
         // 2. Cancelación en vivo del primer tramo (F1 del día): B1 ya no puede volar esa ruta.
-        long keyF1 = CodificadorClaveVuelo.flightKey(f1.idx,
-                OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(8, 30))));
-        assertTrue(op.addCancelledFlight(keyF1));
+        long keyF1 = CodificadorClaveVuelo.claveVuelo(f1.indice,
+                OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(8, 30))));
+        assertTrue(op.agregarVueloCancelado(keyF1));
 
         // 3. Reencolado como replanificable (igual que reencolarAfectadosPorCancelacion) y
         //    purga por vencimiento ANTES de que un bloque lo reprocese (deadline 02/01 07:00).
         GestorBacklog backlog = backlogConHookDeProduccion(op);
-        backlog.addReplanificable(b1);
+        backlog.agregarReplanificable(b1);
         int purgados = backlog.purgarVencidas(LocalDateTime.of(2026, 1, 2, 8, 0));
         assertEquals(1, purgados, "B1 vence en el backlog sin haber sido reprocesado");
-        assertEquals(0, backlog.size());
+        assertEquals(0, backlog.tamaño());
         assertEquals(1, backlog.sinRutaDefinitivo(),
                 "B1 sale sin ruta utilizable → cuenta como sinRutaDefinitivo");
 
         // 4. Comportamiento corregido: al purgar se libera la ocupación global de la ruta rota.
         assertEquals(CAPACIDAD_VUELO, op.capacidadRestante(f2, depF2, new HashMap<>()),
                 "las 20 plazas de BBB→CCC vuelven a estar disponibles al purgar");
-        assertEquals(CAPACIDAD_ALMACEN, op.capacidadAlmacen(graph.nodes.get("BBB"), estadiaBbb, new HashMap<>()),
+        assertEquals(CAPACIDAD_ALMACEN, op.capacidadAlmacen(graph.nodos.get("BBB"), estadiaBbb, new HashMap<>()),
                 "la estadía fantasma en BBB se libera al purgar");
-        assertTrue(b1.getAssignedRoute() == null || b1.getAssignedRoute().isEmpty(),
+        assertTrue(b1.getRutaAsignada() == null || b1.getRutaAsignada().isEmpty(),
                 "B1 queda sin ruta: deja de contar como 'enrutado' en métricas/auditoría");
-        assertEquals(0, op.capacidadRestante(f1, OperadorReparacionVoraz.toEpochMinPublic(
+        assertEquals(0, op.capacidadRestante(f1, OperadorReparacionVoraz.aMinutoEpochPublico(
                         LocalDateTime.of(DIA, LocalTime.of(8, 30))), new HashMap<>()),
                 "sanidad: el vuelo cancelado no ofrece capacidad");
     }
@@ -87,22 +87,22 @@ class CancelacionOcupacionFantasmaTest {
     void purgarReplanificablePreventivoConRutaValidaNoLiberaNiCuentaComoDefinitivo() {
         Grafo graph = grafoEscalaLarga();
         OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
-        Arista f2 = graph.edges.get(1);   // BBB→CCC 18:00-19:00
+        Arista f2 = graph.aristas.get(1);   // BBB→CCC 18:00-19:00
 
         // B1 enrutado y commiteado SIN cancelación: replanificable preventivo (poca holgura SLA).
         LoteEnvio b1 = enrutarYCommitear(op);
-        long depF2 = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
+        long depF2 = OperadorReparacionVoraz.aMinutoEpochPublico(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
 
         GestorBacklog backlog = backlogConHookDeProduccion(op);
-        backlog.addReplanificable(b1);
+        backlog.agregarReplanificable(b1);
         int purgados = backlog.purgarVencidas(LocalDateTime.of(2026, 1, 2, 8, 0));
 
         // Su entrega on-time ya está comprometida: sale del backlog (ya no hay nada que
         // replanificar) pero NO es un vencido real — no libera, no cuenta, no colapsa E3.
         assertEquals(0, purgados, "una ruta válida on-time no es un incumplimiento");
-        assertEquals(0, backlog.size(), "sale del backlog: su ventana de replanificación pasó");
+        assertEquals(0, backlog.tamaño(), "sale del backlog: su ventana de replanificación pasó");
         assertEquals(0, backlog.sinRutaDefinitivo(), "no infla el conteo de definitivos");
-        assertFalse(b1.getAssignedRoute().isEmpty(), "conserva su ruta commiteada");
+        assertFalse(b1.getRutaAsignada().isEmpty(), "conserva su ruta commiteada");
         assertEquals(CAPACIDAD_VUELO - 20, op.capacidadRestante(f2, depF2, new HashMap<>()),
                 "su ocupación sigue cobrada: la entrega sigue en pie");
     }
@@ -120,7 +120,7 @@ class CancelacionOcupacionFantasmaTest {
                 .findFirst().orElseThrow();
         op.aplicarCandidatoRuta(b1, ruta);
         op.aplicarCandidatoBloque(b1, ruta, blockFlight, blockAirport);
-        op.commitBlock(blockFlight, blockAirport);
+        op.confirmarBloque(blockFlight, blockAirport);
         return b1;
     }
 
@@ -128,8 +128,8 @@ class CancelacionOcupacionFantasmaTest {
     private static GestorBacklog backlogConHookDeProduccion(OperadorReparacionVoraz op) {
         return new GestorBacklog(1000, true, b -> {
             if (op.rutaUsaVueloCancelado(b)) {
-                op.releaseFromGlobal(b);
-                b.clearRoute();
+                op.liberarDeGlobal(b);
+                b.limpiarRuta();
             }
         });
     }
@@ -138,33 +138,33 @@ class CancelacionOcupacionFantasmaTest {
     private static Grafo grafoEscalaLarga() {
         Grafo g = new Grafo();
         Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
-        g.nodes.put("AAA", aaa);
-        g.nodes.put("BBB", bbb);
-        g.nodes.put("CCC", ccc);
-        addEdge(g, 0, aaa, bbb, "F1", "08:30", "09:30");
-        addEdge(g, 1, bbb, ccc, "F2", "18:00", "19:00");
+        g.nodos.put("AAA", aaa);
+        g.nodos.put("BBB", bbb);
+        g.nodos.put("CCC", ccc);
+        agregarArista(g, 0, aaa, bbb, "F1", "08:30", "09:30");
+        agregarArista(g, 1, bbb, ccc, "F2", "18:00", "19:00");
         return g;
     }
 
     private static Nodo node(String code) {
         Nodo n = new Nodo(code);
-        n.capacity = CAPACIDAD_ALMACEN;
+        n.capacidad = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
+    private static void agregarArista(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
         Arista e = new Arista();
-        e.idx = idx;
+        e.indice = idx;
         e.id = id;
-        e.from = from;
-        e.to = to;
-        e.capacity = CAPACIDAD_VUELO;
-        e.departureTime = LocalDateTime.of(DIA, LocalTime.parse(dep));
-        e.arrivalTime = LocalDateTime.of(DIA, LocalTime.parse(arr));
-        e.departureLocalTime = e.departureTime.toLocalTime();
-        e.depMinuteOfDay = e.departureLocalTime.getHour() * 60 + e.departureLocalTime.getMinute();
-        e.durationMinutes = (int) Duration.between(e.departureTime, e.arrivalTime).toMinutes();
-        e.cost = e.durationMinutes;
-        g.addEdge(e);
+        e.origen = from;
+        e.destino = to;
+        e.capacidad = CAPACIDAD_VUELO;
+        e.horaSalida = LocalDateTime.of(DIA, LocalTime.parse(dep));
+        e.horaLlegada = LocalDateTime.of(DIA, LocalTime.parse(arr));
+        e.horaSalidaLocal = e.horaSalida.toLocalTime();
+        e.minutoDelDiaSalida = e.horaSalidaLocal.getHour() * 60 + e.horaSalidaLocal.getMinute();
+        e.duracionMinutos = (int) Duration.between(e.horaSalida, e.horaLlegada).toMinutes();
+        e.costo = e.duracionMinutos;
+        g.agregarArista(e);
     }
 }

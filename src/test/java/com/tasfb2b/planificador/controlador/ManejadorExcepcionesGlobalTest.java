@@ -36,7 +36,7 @@ class ManejadorExcepcionesGlobalTest {
     @Test
     void excepcionDeDominioProduce400ConClaveError() {
         ResponseEntity<ErrorResponse> resp =
-                handler.handleIllegalArgument(new ParametroInvalidoException("k es fijo en el escenario 2: 144 (recibido: 7)"), null);
+                handler.manejarArgumentoIlegal(new ParametroInvalidoException("k es fijo en el escenario 2: 144 (recibido: 7)"), null);
 
         assertEquals(400, resp.getStatusCode().value());
         ErrorResponse body = resp.getBody();
@@ -64,7 +64,7 @@ class ManejadorExcepcionesGlobalTest {
     void rutaInexistenteProduce404SinTratarseComoErrorInterno() {
         // Sondas de bots (/api/.env, /api/v0/run_sql, …) llegaban al handler genérico como 500 con
         // stack trace ERROR; el contrato correcto para una ruta que no existe es 404.
-        ResponseEntity<ErrorResponse> resp = handler.handleRutaInexistente(
+        ResponseEntity<ErrorResponse> resp = handler.manejarRutaInexistente(
                 new org.springframework.web.servlet.resource.NoResourceFoundException(
                         org.springframework.http.HttpMethod.GET, "api/.env", null), null);
 
