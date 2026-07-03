@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.controlador;
 
-import com.tasfb2b.planificador.services.PlanificadorService;
+import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.format.annotation.DateTimeFormat;

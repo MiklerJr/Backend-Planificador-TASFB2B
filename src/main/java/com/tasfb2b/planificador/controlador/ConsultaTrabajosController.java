@@ -1,14 +1,14 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.controlador;
 
-import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
+import com.tasfb2b.planificador.dto.trabajos.AlertaColapso;
 import com.tasfb2b.planificador.dto.almacenes.*;
-import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.trabajos.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
-import com.tasfb2b.planificador.services.jobs.JobQueryService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.PlanificadorService;
+import com.tasfb2b.planificador.servicios.trabajos.ConsultaTrabajosService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,25 +21,25 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/planificador")
-public class JobQueryController {
+public class ConsultaTrabajosController {
 
     private final PlanificadorService service;
-    private final JobQueryService jobQuery;
+    private final ConsultaTrabajosService jobQuery;
 
-    public JobQueryController(PlanificadorService service, JobQueryService jobQuery) {
+    public ConsultaTrabajosController(PlanificadorService service, ConsultaTrabajosService jobQuery) {
         this.service = service;
         this.jobQuery = jobQuery;
     }
 
     @GetMapping("/jobs")
-    public ResponseEntity<JobsListResponse> listarJobs(
+    public ResponseEntity<ListaTrabajosResponse> listarJobs(
             @RequestParam(defaultValue = "true") boolean activos) {
         return ResponseEntity.ok(service.listarJobsResponse(activos));
     }
 
     @GetMapping("/jobs/{jobId}/estado-inicial")
     public ResponseEntity<EstadoInicialResponse> estadoInicialJob(@PathVariable String jobId) {
-        JobState job = service.getJob(jobId);
+        EstadoTrabajo job = service.getJob(jobId);
         if (job == null) return ResponseEntity.notFound().build();
         if (job.estadoInicial == null) return ResponseEntity.noContent().build();
         return ResponseEntity.ok(service.buildEstadoInicialResponse(job));
@@ -55,22 +55,22 @@ public class JobQueryController {
     }
 
     @GetMapping("/jobs/{jobId}/estado")
-    public ResponseEntity<EstadoJobResponse> estadoJob(@PathVariable String jobId) {
-        EstadoJobResponse body = service.getEstadoJob(jobId);
+    public ResponseEntity<EstadoTrabajoResponse> estadoJob(@PathVariable String jobId) {
+        EstadoTrabajoResponse body = service.getEstadoJob(jobId);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/alerta-colapso")
     public ResponseEntity<AlertaColapso> alertaColapsoJob(@PathVariable String jobId) {
-        JobState job = service.getJob(jobId);
+        EstadoTrabajo job = service.getJob(jobId);
         if (job == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(job.alertaColapso != null ? job.alertaColapso : AlertaColapso.verde());
     }
 
     @GetMapping("/jobs/{jobId}/dashboard")
-    public ResponseEntity<DashboardResponse> dashboardJob(@PathVariable String jobId) {
-        DashboardResponse body = jobQuery.getDashboardJob(jobId);
+    public ResponseEntity<TableroResponse> dashboardJob(@PathVariable String jobId) {
+        TableroResponse body = jobQuery.getDashboardJob(jobId);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
@@ -143,7 +143,7 @@ public class JobQueryController {
     public ResponseEntity<Map<String, Object>> bloquesJob(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde) {
-        JobState job = service.getJob(jobId);
+        EstadoTrabajo job = service.getJob(jobId);
         if (job == null) return ResponseEntity.notFound().build();
 
         Map<String, Object> body = new HashMap<>();
@@ -157,7 +157,7 @@ public class JobQueryController {
 
     @GetMapping("/jobs/{jobId}/resultado")
     public ResponseEntity<SimulacionResponse> resultadoJob(@PathVariable String jobId) {
-        JobState job = service.getJob(jobId);
+        EstadoTrabajo job = service.getJob(jobId);
         if (job == null)             return ResponseEntity.notFound().build();
         if (job.resultado == null)   return ResponseEntity.noContent().build(); // 204 = aún ejecutando
         return ResponseEntity.ok(job.resultado);

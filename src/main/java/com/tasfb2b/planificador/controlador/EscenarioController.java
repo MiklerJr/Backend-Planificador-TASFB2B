@@ -1,16 +1,16 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.controlador;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
-import com.tasfb2b.planificador.dto.simulacion.EjecucionParams;
-import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.simulacion.EjecucionParametros;
+import com.tasfb2b.planificador.dto.trabajos.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
-import com.tasfb2b.planificador.exception.ParametroInvalidoException;
-import com.tasfb2b.planificador.services.ingesta.IngestaService;
-import com.tasfb2b.planificador.services.jobs.JobState;
-import com.tasfb2b.planificador.services.ingesta.MigradorEnviosDb;
-import com.tasfb2b.planificador.services.PlanificadorService;
+import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
+import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
+import com.tasfb2b.planificador.servicios.trabajos.EstadoTrabajo;
+import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
+import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -101,7 +101,7 @@ public class EscenarioController {
             if (error != null) throw new ParametroInvalidoException(error);
         }
 
-        JobState job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio, enVivo);
+        EstadoTrabajo job = service.iniciarEscenario1Async(algoritmo, seed, fechaInicio, enVivo);
         Map<String, Object> body = new HashMap<>();
         body.put("jobId",     job.getJobId());
         body.put("escenario", "1");
@@ -135,7 +135,7 @@ public class EscenarioController {
         String error = service.validarParametrosEscenario(null, sa, ta, fechaInicio);
         if (error != null) throw new ParametroInvalidoException(error);
 
-        EjecucionParams params = new EjecucionParams();
+        EjecucionParametros params = new EjecucionParametros();
         // K no se propaga del request: iniciarEscenario2Async fija siempre el del yaml.
         params.setMotor(algoritmo);
         params.setSeed(seed);
@@ -145,7 +145,7 @@ public class EscenarioController {
         params.setDias(dias);
         params.setProcesamientoPrevio(false);
 
-        JobState job = service.iniciarEscenario2Async(params);
+        EstadoTrabajo job = service.iniciarEscenario2Async(params);
         Map<String, Object> body = new HashMap<>();
         body.put("jobId",     job.getJobId());
         body.put("escenario", "2");
@@ -179,7 +179,7 @@ public class EscenarioController {
         if (error != null) throw new ParametroInvalidoException(error);
 
         umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        JobState job = service.iniciarEscenario3Async(umbralColapso, algoritmo, seed, fechaInicio);
+        EstadoTrabajo job = service.iniciarEscenario3Async(umbralColapso, algoritmo, seed, fechaInicio);
         return ResponseEntity.accepted().body(Map.of(
                 "jobId",         job.getJobId(),
                 "escenario",     "3",
@@ -200,10 +200,10 @@ public class EscenarioController {
 
     @PostMapping("/jobs/{jobId}/reiniciar")
     public ResponseEntity<Map<String, Object>> reiniciarJob(@PathVariable String jobId) {
-        JobState viejo = service.getJob(jobId);
+        EstadoTrabajo viejo = service.getJob(jobId);
         if (viejo == null) return ResponseEntity.notFound().build();
 
-        JobState nuevo = service.reiniciarJob(jobId);
+        EstadoTrabajo nuevo = service.reiniciarJob(jobId);
         if (nuevo == null) {
             throw new ParametroInvalidoException("escenario no reiniciable: " + viejo.getEscenario());
         }

@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.controlador;
 
-import com.tasfb2b.planificador.dto.dataset.IngestaEstado;
-import com.tasfb2b.planificador.services.ingesta.IngestaService;
+import com.tasfb2b.planificador.dto.datos.IngestaEstado;
+import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;

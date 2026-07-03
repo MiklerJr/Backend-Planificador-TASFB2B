@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.controlador;
 
-import com.tasfb2b.planificador.dto.dataset.*;
+import com.tasfb2b.planificador.dto.datos.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
-import com.tasfb2b.planificador.services.DatasetMetadataService;
-import com.tasfb2b.planificador.services.PlanificadorService;
+import com.tasfb2b.planificador.servicios.MetadatosDatosService;
+import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -18,18 +18,18 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/planificador")
-public class MetadataController {
+public class MetadatosController {
 
-    private final DatasetMetadataService datasetMetadata;
+    private final MetadatosDatosService datasetMetadata;
     private final PlanificadorService service;
 
-    public MetadataController(DatasetMetadataService datasetMetadata, PlanificadorService service) {
+    public MetadatosController(MetadatosDatosService datasetMetadata, PlanificadorService service) {
         this.datasetMetadata = datasetMetadata;
         this.service = service;
     }
 
     @GetMapping("/dataset/info")
-    public ResponseEntity<DatasetInfoResponse> datasetInfo() {
+    public ResponseEntity<DatosInfoResponse> datasetInfo() {
         return ResponseEntity.ok(datasetMetadata.getDatasetInfo());
     }
 
