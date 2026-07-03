@@ -16,20 +16,20 @@ public class OperadorDestruccionCapacidad implements OperadorDestruccion {
     public OperadorDestruccionCapacidad(Grafo graph) { }
 
     @Override
-    public void setRandom(Random rng) {
+    public void setAleatorio(Random rng) {
         if (rng != null) this.rng = rng;
     }
 
     @Override
-    public List<LoteEnvio> destroy(SolucionAlns solution, double factor) {
-        List<LoteEnvio> all     = solution.getBatches();
+    public List<LoteEnvio> destruir(SolucionAlns solution, double factor) {
+        List<LoteEnvio> all     = solution.getLotes();
         List<LoteEnvio> removed = new ArrayList<>();
         Set<LoteEnvio>  removedSet = new HashSet<>();
         int target = Math.max(1, (int)(all.size() * factor));
 
         // Prioridad 1: tardadas — siempre destruir para intentar mejorar
         for (LoteEnvio b : all) {
-            if (!b.isCumpleSLA() && hasRoute(b)) {
+            if (!b.isCumpleSLA() && tieneRuta(b)) {
                 removed.add(b);
                 removedSet.add(b);
             }
@@ -39,7 +39,7 @@ public class OperadorDestruccionCapacidad implements OperadorDestruccion {
         if (removed.size() < target) {
             List<LoteEnvio> candidatos = new ArrayList<>();
             for (LoteEnvio b : all) {
-                if (hasRoute(b) && !removedSet.contains(b)) candidatos.add(b);
+                if (tieneRuta(b) && !removedSet.contains(b)) candidatos.add(b);
             }
             Collections.shuffle(candidatos, rng);
             for (LoteEnvio b : candidatos) {
@@ -51,7 +51,7 @@ public class OperadorDestruccionCapacidad implements OperadorDestruccion {
         return removed;
     }
 
-    private boolean hasRoute(LoteEnvio b) {
-        return b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
+    private boolean tieneRuta(LoteEnvio b) {
+        return b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
     }
 }

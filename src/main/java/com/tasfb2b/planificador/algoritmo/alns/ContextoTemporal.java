@@ -5,24 +5,24 @@ import java.time.LocalDateTime;
 public class ContextoTemporal {
 
     // ── Eje de datos (inmutable durante el bloque) ──────────────────────────
-    public final LocalDateTime scStart;
-    public final LocalDateTime scEnd;
+    public final LocalDateTime scInicio;
+    public final LocalDateTime scFin;
     public final int scMinutos;
     public final int saMinutos;
     public final int k;
     public final int bloqueIdx;
 
     // ── Eje real (mutable: se llena al ejecutar el bloque) ──────────────────
-    public long wallStartMs;
-    public long wallEndMs;
+    public long relojInicioMs;
+    public long relojFinMs;
     public long taMs;
     public long taRealMs;
     public double tasaSinRutaPrevia = 0.0;
 
-    public ContextoTemporal(LocalDateTime scStart, LocalDateTime scEnd,
+    public ContextoTemporal(LocalDateTime scInicio, LocalDateTime scFin,
                            int scMinutos, int saMinutos, int k, int bloqueIdx) {
-        this.scStart   = scStart;
-        this.scEnd     = scEnd;
+        this.scInicio   = scInicio;
+        this.scFin     = scFin;
         this.scMinutos = scMinutos;
         this.saMinutos = saMinutos;
         this.k         = k;
@@ -30,12 +30,12 @@ public class ContextoTemporal {
     }
 
     public void marcarInicio() {
-        this.wallStartMs = System.currentTimeMillis();
+        this.relojInicioMs = System.currentTimeMillis();
     }
 
     public void marcarFin(long taFijoMs) {
-        this.wallEndMs = System.currentTimeMillis();
-        this.taRealMs  = wallEndMs - wallStartMs;
+        this.relojFinMs = System.currentTimeMillis();
+        this.taRealMs  = relojFinMs - relojInicioMs;
         this.taMs      = taFijoMs > 0 ? taFijoMs : this.taRealMs;
     }
 

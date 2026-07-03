@@ -13,78 +13,78 @@ import java.util.function.BooleanSupplier;
 @Slf4j
 public class OperadorReparacionVoraz implements OperadorReparacion {
 
-    private static final long CONNECTION_MIN   = 10L;
-    private static final long DEST_STORAGE_MIN = 10L;
-    public static final long STORAGE_SLOT_MIN = 60L;
-    private static final long MAX_HORIZON_MIN  = 3 * 24 * 60L;
-    private static final long DAY_MIN          = CodificadorClaveVuelo.DAY_MIN;
-    private static final int  DAY_BITS         = CodificadorClaveVuelo.DAY_BITS;
-    private static final int  MAX_CANDIDATE_LEGS = 10;
-    private static final long SKELETON_BUCKET_MIN = 60L;   // bucket de hora-del-dÃ­a para la cache cross-bloque
-    private static final int  MAX_SKELETONS_POR_CLAVE = 8;   // sitio para esqueletos hub-avoiding
+    private static final long CONEXION_MIN   = 10L;
+    private static final long ALMACEN_DEST_MIN = 10L;
+    public static final long SLOT_ALMACEN_MIN = 60L;
+    private static final long HORIZONTE_MAX_MIN  = 3 * 24 * 60L;
+    private static final long MIN_DIA          = CodificadorClaveVuelo.MIN_DIA;
+    private static final int  BITS_DIA         = CodificadorClaveVuelo.BITS_DIA;
+    private static final int  MAX_TRAMOS_CANDIDATO = 10;
+    private static final long BUCKET_ESQUELETO_MIN = 60L;   // bucket de hora-del-dÃ­a para la cache cross-bloque
+    private static final int  MAX_ESQUELETOS_POR_CLAVE = 8;   // sitio para esqueletos hub-avoiding
     private static final int    HUB_RECLASIFICAR_CADA = 10;   // bloques entre reclasificaciones
     private double umbralHubPico      = 0.65;   // fracciÃ³n de cap a la que un nodo pasa a hub
     private double precioHubExponente = 2.0;    // exponente p de u^p/(1âˆ’u) en el precio de hub
-    private boolean[] hubByIdx;          // consulta O(1) en el bucle caliente; arranca vacÃ­o
-    private int commitsDesdeReclasificar = 0;
+    private boolean[] hubPorIndice;          // consulta O(1) en el bucle caliente; arranca vacÃ­o
+    private int confirmacionesDesdeReclasificar = 0;
 
-    private final Grafo graph;
+    private final Grafo grafo;
 
-    private final int      nodeCount;
-    private static final int DAY_SLOTS = (int)(MAX_HORIZON_MIN / DAY_MIN) + 1; // 4
+    private final int      conteoNodos;
+    private static final int SLOTS_DIA = (int)(HORIZONTE_MAX_MIN / MIN_DIA) + 1; // 4
 
-    private final Arista[]       edgeByIdx;
-    private final String[]     nodeByIdx;
-    private final List<Arista>[] adjByIdx;   // adjByIdx[node.idx] â†’ vecinos salientes
+    private final Arista[]       aristaPorIndice;
+    private final String[]     nodoPorIndice;
+    private final List<Arista>[] adyacenciaPorIndice;   // adyacenciaPorIndice[node.indice] â†’ vecinos salientes
 
-    private final ConcurrentHashMap<Long, Integer> flightOccupancy  = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Integer> airportOccupancy = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Integer> ocupacionVuelo  = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Integer> ocupacionAeropuerto = new ConcurrentHashMap<>();
 
-    private final Set<Long> cancelledFlightDays = ConcurrentHashMap.newKeySet();
+    private final Set<Long> vueloDiasCancelados = ConcurrentHashMap.newKeySet();
 
-    private final ConcurrentHashMap<Long, Integer> backlogOrigenOcc = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Integer> ocupacionOrigenBacklog = new ConcurrentHashMap<>();
     private long relojUtcMin = Long.MIN_VALUE;
     private final Set<String> origenAdmitidos = new HashSet<>();
 
-    final Map<Long, List<int[]>> rutaSkeletonCache;   // package-private para tests; se asigna en el constructor
+    final Map<Long, List<int[]>> rutaCacheEsqueleto;   // package-private para tests; se asigna en el constructor
     private final Set<Long> reSeeded = new HashSet<>();
 
-    public OperadorReparacionVoraz(Grafo graph) {
-        this(graph, new HashMap<>());
+    public OperadorReparacionVoraz(Grafo grafo) {
+        this(grafo, new HashMap<>());
     }
 
-    public OperadorReparacionVoraz(Grafo graph, Map<Long, List<int[]>> rutaSkeletonCache) {
-        this.rutaSkeletonCache = rutaSkeletonCache;
-        this.graph = graph;
+    public OperadorReparacionVoraz(Grafo grafo, Map<Long, List<int[]>> rutaCacheEsqueleto) {
+        this.rutaCacheEsqueleto = rutaCacheEsqueleto;
+        this.grafo = grafo;
 
         // Asignar idx entero a cada nodo
-        Map<String, Integer> nodeIndex = new HashMap<>(graph.nodes.size() * 2);
+        Map<String, Integer> nodeIndex = new HashMap<>(grafo.nodos.size() * 2);
         int i = 0;
-        for (Map.Entry<String, Nodo> entry : graph.nodes.entrySet()) {
+        for (Map.Entry<String, Nodo> entry : grafo.nodos.entrySet()) {
             nodeIndex.put(entry.getKey(), i);
-            entry.getValue().idx = i;
+            entry.getValue().indice = i;
             i++;
         }
-        nodeCount = i;
+        conteoNodos = i;
 
-        nodeByIdx = new String[nodeCount];
-        for (Map.Entry<String, Integer> e : nodeIndex.entrySet()) nodeByIdx[e.getValue()] = e.getKey();
+        nodoPorIndice = new String[conteoNodos];
+        for (Map.Entry<String, Integer> e : nodeIndex.entrySet()) nodoPorIndice[e.getValue()] = e.getKey();
 
         int maxIdx = -1;
-        for (Arista e : graph.edges) if (e.idx > maxIdx) maxIdx = e.idx;
-        edgeByIdx = new Arista[maxIdx + 1];
-        for (Arista e : graph.edges) edgeByIdx[e.idx] = e;
+        for (Arista e : grafo.aristas) if (e.indice > maxIdx) maxIdx = e.indice;
+        aristaPorIndice = new Arista[maxIdx + 1];
+        for (Arista e : grafo.aristas) aristaPorIndice[e.indice] = e;
 
-        // Lista de adyacencia indexada por node.idx (evita HashMap lookup en inner loop)
+        // Lista de adyacencia indexada por node.indice (evita HashMap lookup en inner loop)
         @SuppressWarnings("unchecked")
-        List<Arista>[] adj = new List[nodeCount];
-        for (int j = 0; j < nodeCount; j++) adj[j] = new ArrayList<>();
-        for (Arista e : graph.edges) {
-            if (e.from != null && e.from.idx >= 0) adj[e.from.idx].add(e);
+        List<Arista>[] adj = new List[conteoNodos];
+        for (int j = 0; j < conteoNodos; j++) adj[j] = new ArrayList<>();
+        for (Arista e : grafo.aristas) {
+            if (e.origen != null && e.origen.indice >= 0) adj[e.origen.indice].add(e);
         }
-        adjByIdx = adj;
+        adyacenciaPorIndice = adj;
 
-        this.hubByIdx = new boolean[nodeCount];
+        this.hubPorIndice = new boolean[conteoNodos];
     }
 
     public void setHubs(Set<String> codigos) {
@@ -97,34 +97,34 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     }
 
     private void marcarHubs(Set<String> codigos) {
-        boolean[] flags = new boolean[nodeCount];
-        for (int idx = 0; idx < nodeCount; idx++) {
-            flags[idx] = nodeByIdx[idx] != null && codigos.contains(nodeByIdx[idx]);
+        boolean[] flags = new boolean[conteoNodos];
+        for (int idx = 0; idx < conteoNodos; idx++) {
+            flags[idx] = nodoPorIndice[idx] != null && codigos.contains(nodoPorIndice[idx]);
         }
-        this.hubByIdx = flags;
+        this.hubPorIndice = flags;
     }
 
     private boolean esHub(int nodeIdx) {
-        return nodeIdx >= 0 && nodeIdx < hubByIdx.length && hubByIdx[nodeIdx];
+        return nodeIdx >= 0 && nodeIdx < hubPorIndice.length && hubPorIndice[nodeIdx];
     }
 
     public void reclasificarHubsPorUtilizacion(double umbralPico) {
-        double[] picoUtil = new double[nodeCount];
-        for (Map.Entry<Long, Integer> entry : airportOccupancy.entrySet()) {
-            int nodeIdx = (int) (entry.getKey() >> DAY_BITS);
-            if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
-            String code = nodeByIdx[nodeIdx];
-            Nodo nodo = code != null ? graph.nodes.get(code) : null;
-            if (nodo == null || nodo.capacity <= 0) continue;
-            double util = entry.getValue() / (double) nodo.capacity;
+        double[] picoUtil = new double[conteoNodos];
+        for (Map.Entry<Long, Integer> entry : ocupacionAeropuerto.entrySet()) {
+            int nodeIdx = (int) (entry.getKey() >> BITS_DIA);
+            if (nodeIdx < 0 || nodeIdx >= conteoNodos) continue;
+            String code = nodoPorIndice[nodeIdx];
+            Nodo nodo = code != null ? grafo.nodos.get(code) : null;
+            if (nodo == null || nodo.capacidad <= 0) continue;
+            double util = entry.getValue() / (double) nodo.capacidad;
             if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
         }
 
-        boolean[] flags = new boolean[nodeCount];
-        for (int idx = 0; idx < nodeCount; idx++) {
+        boolean[] flags = new boolean[conteoNodos];
+        for (int idx = 0; idx < conteoNodos; idx++) {
             flags[idx] = picoUtil[idx] >= umbralPico;
         }
-        this.hubByIdx = flags;
+        this.hubPorIndice = flags;
     }
 
     public PreColapso evaluarPreColapso(Map<Long, Integer> blockAirport,
@@ -133,14 +133,14 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         String almacenCritico = null;
         if (blockAirport != null) {
             for (Long key : blockAirport.keySet()) {
-                int nodeIdx = (int) (key >> DAY_BITS);
-                if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
-                String code = nodeByIdx[nodeIdx];
-                Nodo nodo = code != null ? graph.nodes.get(code) : null;
-                if (nodo == null || nodo.capacity <= 0) continue;
-                int ocupado = airportOccupancy.getOrDefault(key, 0)
-                        + backlogOrigenOcc.getOrDefault(key, 0);
-                double util = ocupado / (double) nodo.capacity;
+                int nodeIdx = (int) (key >> BITS_DIA);
+                if (nodeIdx < 0 || nodeIdx >= conteoNodos) continue;
+                String code = nodoPorIndice[nodeIdx];
+                Nodo nodo = code != null ? grafo.nodos.get(code) : null;
+                if (nodo == null || nodo.capacidad <= 0) continue;
+                int ocupado = ocupacionAeropuerto.getOrDefault(key, 0)
+                        + ocupacionOrigenBacklog.getOrDefault(key, 0);
+                double util = ocupado / (double) nodo.capacidad;
                 if (util > utilMax) { utilMax = util; almacenCritico = code; }
             }
         }
@@ -149,9 +149,9 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         String envioUrgente = null;
         if (pendientes != null && relojUtcMin != Long.MIN_VALUE) {
             for (LoteEnvio b : pendientes) {
-                if (b == null || b.getReadyTime() == null || b.getSlaLimitHours() <= 0) continue;
-                long slaMin = (long) b.getSlaLimitHours() * 60L;
-                long restante = (toEpochMin(b.getReadyTime()) + slaMin) - relojUtcMin;
+                if (b == null || b.getTiempoListo() == null || b.getHorasLimiteSla() <= 0) continue;
+                long slaMin = (long) b.getHorasLimiteSla() * 60L;
+                long restante = (aMinutoEpoch(b.getTiempoListo()) + slaMin) - relojUtcMin;
                 double ratio = restante / (double) slaMin;       // <0 = ya vencido
                 if (ratio < holguraMin) { holguraMin = ratio; envioUrgente = b.getId(); }
             }
@@ -164,43 +164,43 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private int[] esqueletoEvitandoHubs(int startIdx, int targetIdx, long readyMin, int slaHours) {
         if (startIdx < 0 || targetIdx < 0 || startIdx == targetIdx) return null;
-        long readyDay = readyMin / DAY_MIN;
+        long readyDay = readyMin / MIN_DIA;
         long slaMaxMinutes = (long) slaHours * 60;
 
-        long[] bestTimes = new long[nodeCount * DAY_SLOTS];
+        long[] bestTimes = new long[conteoNodos * SLOTS_DIA];
         Arrays.fill(bestTimes, Long.MAX_VALUE);
         PriorityQueue<EstadoRuta> pq = new PriorityQueue<>(Comparator.comparingLong(s -> s.arrivalMin));
 
-        long horizonDays = MAX_HORIZON_MIN / DAY_MIN;
+        long horizonDays = HORIZONTE_MAX_MIN / MIN_DIA;
         for (long d = 0; d <= horizonDays; d++) {
-            long startMin = readyMin + d * DAY_MIN;
-            bestTimes[startIdx * DAY_SLOTS + (int) d] = startMin;
+            long startMin = readyMin + d * MIN_DIA;
+            bestTimes[startIdx * SLOTS_DIA + (int) d] = startMin;
             pq.add(new EstadoRuta(startIdx, startMin, -1L, null, null));
         }
 
         while (!pq.isEmpty()) {
             EstadoRuta current = pq.poll();
             if (current.nodeIdx == targetIdx) {
-                long transitMinutes = (current.arrivalMin + DEST_STORAGE_MIN) - readyMin;
+                long transitMinutes = (current.arrivalMin + ALMACEN_DEST_MIN) - readyMin;
                 if (transitMinutes > slaMaxMinutes) return null;   // la mejor llegada ya es tardÃ­a
                 int[] sk = new int[current.legs];
                 int i = current.legs - 1;
-                for (EstadoRuta s = current; s.edge != null; s = s.parent) sk[i--] = s.edge.idx;
+                for (EstadoRuta s = current; s.edge != null; s = s.parent) sk[i--] = s.edge.indice;
                 return sk;
             }
-            if (current.legs >= MAX_CANDIDATE_LEGS) continue;
-            for (Arista flight : adjByIdx[current.nodeIdx]) {
-                int nextIdx = (flight.to == null) ? -1 : flight.to.idx;
+            if (current.legs >= MAX_TRAMOS_CANDIDATO) continue;
+            for (Arista flight : adyacenciaPorIndice[current.nodeIdx]) {
+                int nextIdx = (flight.destino == null) ? -1 : flight.destino.indice;
                 if (nextIdx < 0) continue;
                 if (nextIdx != targetIdx && esHub(nextIdx)) continue;   // no transitar por hubs
-                long minWait  = (current.edge == null) ? 0L : CONNECTION_MIN;
-                long actualDep = nextDepartureMin(flight.depMinuteOfDay, current.arrivalMin + minWait);
-                long actualArr = actualDep + flight.durationMinutes;
-                long dayOffset = actualArr / DAY_MIN - readyDay;
-                if (dayOffset < 0 || dayOffset >= DAY_SLOTS) continue;
-                if (actualArr - readyMin > MAX_HORIZON_MIN) continue;
+                long minWait  = (current.edge == null) ? 0L : CONEXION_MIN;
+                long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, current.arrivalMin + minWait);
+                long actualArr = actualDep + flight.duracionMinutos;
+                long dayOffset = actualArr / MIN_DIA - readyDay;
+                if (dayOffset < 0 || dayOffset >= SLOTS_DIA) continue;
+                if (actualArr - readyMin > HORIZONTE_MAX_MIN) continue;
                 // capacity-free: NO se chequea vuelo ni almacÃ©n (plantilla cross-bloque).
-                int cell = nextIdx * DAY_SLOTS + (int) dayOffset;
+                int cell = nextIdx * SLOTS_DIA + (int) dayOffset;
                 if (actualArr < bestTimes[cell]) {
                     bestTimes[cell] = actualArr;
                     pq.add(new EstadoRuta(nextIdx, actualArr, actualDep, flight, current));
@@ -211,9 +211,9 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     }
 
     public void reSeedHubAvoiding(int maxClaves, long deadlineNs) {
-        if (maxClaves <= 0 || rutaSkeletonCache.isEmpty()) return;
+        if (maxClaves <= 0 || rutaCacheEsqueleto.isEmpty()) return;
         int procesadas = 0;
-        for (Map.Entry<Long, List<int[]>> e : rutaSkeletonCache.entrySet()) {
+        for (Map.Entry<Long, List<int[]>> e : rutaCacheEsqueleto.entrySet()) {
             if (procesadas >= maxClaves || System.nanoTime() >= deadlineNs) break;
             long key = e.getKey();
             if (!reSeeded.add(key)) continue;        // ya intentada
@@ -222,10 +222,10 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             int targetIdx  = (int) ((key >>> 24) & 0xFFFFL);
             int hourBucket = (int) ((key >>> 8) & 0xFFFFL);
             int slaHours   = (int) (key & 0xFFL);
-            int[] sk = esqueletoEvitandoHubs(startIdx, targetIdx, hourBucket * SKELETON_BUCKET_MIN, slaHours);
+            int[] sk = esqueletoEvitandoHubs(startIdx, targetIdx, hourBucket * BUCKET_ESQUELETO_MIN, slaHours);
             if (sk == null || sk.length == 0) continue;
             List<int[]> lista = e.getValue();
-            if (lista == null || lista.size() >= MAX_SKELETONS_POR_CLAVE) continue;
+            if (lista == null || lista.size() >= MAX_ESQUELETOS_POR_CLAVE) continue;
             boolean existe = false;
             for (int[] s : lista) if (Arrays.equals(s, sk)) { existe = true; break; }
             if (!existe) lista.add(sk);
@@ -237,14 +237,14 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     // -----------------------------------------------------------------------
 
     @Override
-    public void repair(SolucionAlns solution, List<LoteEnvio> unassigned,
+    public void reparar(SolucionAlns solution, List<LoteEnvio> unassigned,
                        Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
         for (LoteEnvio batch : unassigned) {
-            ResultadoRuta result = findShortestPath(batch, blockFlight, blockAirport);
-            batch.setAssignedRoute(result.edges);
-            batch.setAssignedDepartures(result.actualDepartures);
+            ResultadoRuta result = buscarRutaMasCorta(batch, blockFlight, blockAirport);
+            batch.setRutaAsignada(result.aristas);
+            batch.setSalidasAsignadas(result.salidasReales);
             batch.setCumpleSLA(result.cumpleSLA);
-            applyToBlock(batch, result, blockFlight, blockAirport);
+            aplicarABloque(batch, result, blockFlight, blockAirport);
         }
     }
 
@@ -252,51 +252,51 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     // MÃ©todos de gestiÃ³n de ocupaciÃ³n por bloque
     // -----------------------------------------------------------------------
 
-    public void releaseFromBlock(LoteEnvio batch,
+    public void liberarDeBloque(LoteEnvio batch,
                                   Map<Long, Integer> blockFlight,
                                   Map<Long, Integer> blockAirport) {
-        List<Arista> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
+        List<Arista> route = batch.getRutaAsignada();
+        List<Long> deps  = batch.getSalidasAsignadas();
         if (route == null || route.isEmpty() || deps == null || deps.isEmpty()) return;
 
         for (int i = 0; i < route.size(); i++) {
             Arista e      = route.get(i);
             long depMin = deps.get(i);
-            long arrMin = depMin + e.durationMinutes;
+            long arrMin = depMin + e.duracionMinutos;
 
-            blockFlight.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
+            blockFlight.merge(claveVuelo(e.indice, depMin), -batch.getCantidad(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
-            // Libera exactamente los slots de estadÃ­a que cargÃ³ applyToBlock.
-            if (!esFinalLeg && e.to.idx >= 0) {
-                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, deps.get(i + 1),
-                        -batch.getQuantity());
-            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
-                        -batch.getQuantity());
+            // Libera exactamente los slots de estadÃ­a que cargÃ³ aplicarABloque.
+            if (!esFinalLeg && e.destino.indice >= 0) {
+                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, deps.get(i + 1),
+                        -batch.getCantidad());
+            } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                        -batch.getCantidad());
             }
         }
-        // Libera la ocupaciÃ³n de origen (espejo de applyToBlock).
+        // Libera la ocupaciÃ³n de origen (espejo de aplicarABloque).
         cargarOrigen(blockAirport, batch, route, deps, -1);
     }
 
-    public boolean addCancelledFlight(long flightKey) {
-        return cancelledFlightDays.add(flightKey);
+    public boolean agregarVueloCancelado(long claveVuelo) {
+        return vueloDiasCancelados.add(claveVuelo);
     }
 
-    public boolean isCancelledFlight(long flightKey) {
-        return cancelledFlightDays.contains(flightKey);
+    public boolean esVueloCancelado(long claveVuelo) {
+        return vueloDiasCancelados.contains(claveVuelo);
     }
 
     public boolean rutaUsaVueloCancelado(LoteEnvio batch) {
-        if (batch == null || cancelledFlightDays.isEmpty()) return false;
-        List<Arista> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
+        if (batch == null || vueloDiasCancelados.isEmpty()) return false;
+        List<Arista> route = batch.getRutaAsignada();
+        List<Long> deps  = batch.getSalidasAsignadas();
         if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
             return false;
         }
         for (int i = 0; i < route.size(); i++) {
-            if (cancelledFlightDays.contains(flightKey(route.get(i).idx, deps.get(i)))) {
+            if (vueloDiasCancelados.contains(claveVuelo(route.get(i).indice, deps.get(i)))) {
                 return true;
             }
         }
@@ -306,23 +306,23 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     private void cargarOrigen(Map<Long, Integer> mapa, LoteEnvio batch,
                              List<Arista> edges, List<Long> deps, int signo) {
         if (edges == null || edges.isEmpty() || deps == null || deps.isEmpty()) return;
-        Nodo origen = edges.get(0).from;
-        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return;
-        long desde = toEpochMin(batch.getReadyTime());
+        Nodo origen = edges.get(0).origen;
+        if (origen == null || origen.indice < 0 || origen.capacidad <= 0) return;
+        long desde = aMinutoEpoch(batch.getTiempoListo());
         long firstDep = deps.get(0);
         if (firstDep <= desde) return;
-        cargarAlmacenPierna(mapa, origen.idx, desde, firstDep, signo * batch.getQuantity());
+        cargarAlmacenPierna(mapa, origen.indice, desde, firstDep, signo * batch.getCantidad());
     }
 
     private boolean cabeOrigen(LoteEnvio batch, List<Arista> edges, List<Long> deps,
                                Map<Long, Integer> blockAirport) {
         if (edges == null || edges.isEmpty() || deps == null || deps.isEmpty()) return true;
-        Nodo origen = edges.get(0).from;
-        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return true;
-        long desde = toEpochMin(batch.getReadyTime());
+        Nodo origen = edges.get(0).origen;
+        if (origen == null || origen.indice < 0 || origen.capacidad <= 0) return true;
+        long desde = aMinutoEpoch(batch.getTiempoListo());
         long firstDep = deps.get(0);
         if (firstDep <= desde) return true;
-        return cabeAlmacenPierna(origen, desde, firstDep, batch.getQuantity(), blockAirport);
+        return cabeAlmacenPierna(origen, desde, firstDep, batch.getCantidad(), blockAirport);
     }
 
     // -----------------------------------------------------------------------
@@ -333,21 +333,21 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                                        Collection<LoteEnvio> bloqueLote) {
         if (bloqueLote != null) {
             for (LoteEnvio b : bloqueLote) {
-                if (b == null || b.getReadyTime() == null) continue;
-                relojUtcMin = Math.max(relojUtcMin, toEpochMin(b.getReadyTime()));
+                if (b == null || b.getTiempoListo() == null) continue;
+                relojUtcMin = Math.max(relojUtcMin, aMinutoEpoch(b.getTiempoListo()));
             }
         }
-        backlogOrigenOcc.clear();
+        ocupacionOrigenBacklog.clear();
         origenAdmitidos.clear();
         if (pendientes == null || relojUtcMin == Long.MIN_VALUE) return null;
 
         List<LoteEnvio> orden = new ArrayList<>();
         for (LoteEnvio b : pendientes) {
-            if (b == null || b.getReadyTime() == null) continue;
-            if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) continue; // con ruta â‡’ ya contabilizado
+            if (b == null || b.getTiempoListo() == null) continue;
+            if (b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty()) continue; // con ruta â‡’ ya contabilizado
             orden.add(b);
         }
-        orden.sort(Comparator.comparingLong(b -> toEpochMin(b.readyEfectivo())));
+        orden.sort(Comparator.comparingLong(b -> aMinutoEpoch(b.tiempoListoEfectivo())));
         LoteEnvio desbordado = null;
         for (LoteEnvio b : orden) {
             if (cabeEsperaOrigen(b)) {
@@ -362,150 +362,150 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     public void removerEsperaOrigenBacklog(LoteEnvio batch) {
         if (batch == null) return;
-        if (batch.getAssignedRoute() != null && !batch.getAssignedRoute().isEmpty()) return;
+        if (batch.getRutaAsignada() != null && !batch.getRutaAsignada().isEmpty()) return;
         if (origenAdmitidos.remove(batch.getId())) {
             acumularEsperaOrigen(batch, -1);
         }
     }
 
     private boolean cabeEsperaOrigen(LoteEnvio batch) {
-        Nodo origen = graph.nodes.get(batch.origenEfectivo());
-        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return true;
-        long desde = toEpochMin(batch.readyEfectivo());
+        Nodo origen = grafo.nodos.get(batch.origenEfectivo());
+        if (origen == null || origen.indice < 0 || origen.capacidad <= 0) return true;
+        long desde = aMinutoEpoch(batch.tiempoListoEfectivo());
         if (relojUtcMin <= desde) return true;
-        return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getQuantity(), Map.of());
+        return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getCantidad(), Map.of());
     }
 
     private void acumularEsperaOrigen(LoteEnvio batch, int signo) {
-        if (batch == null || batch.readyEfectivo() == null || relojUtcMin == Long.MIN_VALUE) return;
-        Nodo origen = graph.nodes.get(batch.origenEfectivo());
-        if (origen == null || origen.idx < 0 || origen.capacity <= 0) return;
-        long desde = toEpochMin(batch.readyEfectivo());
+        if (batch == null || batch.tiempoListoEfectivo() == null || relojUtcMin == Long.MIN_VALUE) return;
+        Nodo origen = grafo.nodos.get(batch.origenEfectivo());
+        if (origen == null || origen.indice < 0 || origen.capacidad <= 0) return;
+        long desde = aMinutoEpoch(batch.tiempoListoEfectivo());
         if (relojUtcMin <= desde) return;
-        cargarAlmacenPierna(backlogOrigenOcc, origen.idx, desde, relojUtcMin, signo * batch.getQuantity());
+        cargarAlmacenPierna(ocupacionOrigenBacklog, origen.indice, desde, relojUtcMin, signo * batch.getCantidad());
     }
 
-    public void commitBlock(Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
+    public void confirmarBloque(Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
         blockFlight.forEach((key, qty) -> {
-            if (qty != 0) flightOccupancy.merge(key, qty, Integer::sum);
+            if (qty != 0) ocupacionVuelo.merge(key, qty, Integer::sum);
         });
         blockAirport.forEach((key, qty) -> {
-            if (qty != 0) airportOccupancy.merge(key, qty, Integer::sum);
+            if (qty != 0) ocupacionAeropuerto.merge(key, qty, Integer::sum);
         });
         // Redescubrir hubs desde la ocupaciÃ³n real cada N bloques (todos los escenarios).
         // Fuera del bucle caliente por-batch â†’ Ta-safe; el conjunto solo crece (sin flapping).
-        if (++commitsDesdeReclasificar >= HUB_RECLASIFICAR_CADA) {
-            commitsDesdeReclasificar = 0;
+        if (++confirmacionesDesdeReclasificar >= HUB_RECLASIFICAR_CADA) {
+            confirmacionesDesdeReclasificar = 0;
             reclasificarHubsPorUtilizacion(umbralHubPico);
         }
     }
 
-    public void releaseFromGlobal(LoteEnvio batch) {
-        List<Arista> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
+    public void liberarDeGlobal(LoteEnvio batch) {
+        List<Arista> route = batch.getRutaAsignada();
+        List<Long> deps  = batch.getSalidasAsignadas();
         if (route == null || route.isEmpty() || deps == null || deps.isEmpty()) return;
 
         for (int i = 0; i < route.size(); i++) {
             Arista e      = route.get(i);
             long depMin = deps.get(i);
-            long arrMin = depMin + e.durationMinutes;
+            long arrMin = depMin + e.duracionMinutos;
 
-            flightOccupancy.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
+            ocupacionVuelo.merge(claveVuelo(e.indice, depMin), -batch.getCantidad(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
-            // Libera por slots de estadÃ­a (mismo intervalo que cargÃ³ applyToBlock).
-            if (!esFinalLeg && e.to.idx >= 0) {
-                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, deps.get(i + 1),
-                        -batch.getQuantity());
-            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
-                        -batch.getQuantity());
+            // Libera por slots de estadÃ­a (mismo intervalo que cargÃ³ aplicarABloque).
+            if (!esFinalLeg && e.destino.indice >= 0) {
+                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, deps.get(i + 1),
+                        -batch.getCantidad());
+            } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                        -batch.getCantidad());
             }
         }
-        // Libera la ocupaciÃ³n de origen en la ocupaciÃ³n global (espejo de applyToBlock).
-        cargarOrigen(airportOccupancy, batch, route, deps, -1);
+        // Libera la ocupaciÃ³n de origen en la ocupaciÃ³n global (espejo de aplicarABloque).
+        cargarOrigen(ocupacionAeropuerto, batch, route, deps, -1);
     }
 
-    public void releaseSuffixFromGlobal(LoteEnvio batch, int k) {
-        List<Arista> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
+    public void liberarSufijoDeGlobal(LoteEnvio batch, int k) {
+        List<Arista> route = batch.getRutaAsignada();
+        List<Long> deps  = batch.getSalidasAsignadas();
         if (route == null || deps == null || deps.size() != route.size()) return;
         int n = route.size();
         if (k <= 0 || k >= n) return;
 
         // EstadÃ­a vieja del nodo de corte k-1: [arr_{k-1}, deps[k]).
         Arista corte = route.get(k - 1);
-        if (corte.to != null && corte.to.idx >= 0) {
-            long arrCorte = deps.get(k - 1) + corte.durationMinutes;
-            cargarAlmacenPierna(airportOccupancy, corte.to.idx, arrCorte, deps.get(k),
-                    -batch.getQuantity());
+        if (corte.destino != null && corte.destino.indice >= 0) {
+            long arrCorte = deps.get(k - 1) + corte.duracionMinutos;
+            cargarAlmacenPierna(ocupacionAeropuerto, corte.destino.indice, arrCorte, deps.get(k),
+                    -batch.getCantidad());
         }
         // Sufijo: vuelos y estadÃ­as de destino, desde k.
         for (int i = k; i < n; i++) {
             Arista e      = route.get(i);
             long depMin = deps.get(i);
-            long arrMin = depMin + e.durationMinutes;
-            flightOccupancy.merge(flightKey(e.idx, depMin), -batch.getQuantity(), Integer::sum);
+            long arrMin = depMin + e.duracionMinutos;
+            ocupacionVuelo.merge(claveVuelo(e.indice, depMin), -batch.getCantidad(), Integer::sum);
             boolean esFinalLeg = (i == n - 1);
-            if (!esFinalLeg && e.to.idx >= 0) {
-                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, deps.get(i + 1),
-                        -batch.getQuantity());
-            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                cargarAlmacenPierna(airportOccupancy, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
-                        -batch.getQuantity());
+            if (!esFinalLeg && e.destino.indice >= 0) {
+                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, deps.get(i + 1),
+                        -batch.getCantidad());
+            } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                        -batch.getCantidad());
             }
         }
     }
 
     public boolean cumpleSlaDesdeOrigen(RutaCandidata sufijo, LoteEnvio original) {
         if (sufijo == null || original == null) return false;
-        long deadlineMin = toEpochMin(original.getReadyTime()) + (long) original.getSlaLimitHours() * 60L;
-        return (sufijo.getArrivalMin() + DEST_STORAGE_MIN) <= deadlineMin;
+        long deadlineMin = aMinutoEpoch(original.getTiempoListo()) + (long) original.getHorasLimiteSla() * 60L;
+        return (sufijo.getLlegadaMin() + ALMACEN_DEST_MIN) <= deadlineMin;
     }
 
     // -----------------------------------------------------------------------
     // Dijkstra earliest-arrival con capacidad global + bloque
     // -----------------------------------------------------------------------
 
-    private ResultadoRuta findShortestPath(LoteEnvio batch,
+    private ResultadoRuta buscarRutaMasCorta(LoteEnvio batch,
                                           Map<Long, Integer> blockFlight,
                                           Map<Long, Integer> blockAirport) {
-        return findShortestPath(batch, blockFlight, blockAirport, false);
+        return buscarRutaMasCorta(batch, blockFlight, blockAirport, false);
     }
 
     public boolean sinRutaPorAlmacenLleno(LoteEnvio batch) {
         if (batch == null) return false;
-        ResultadoRuta con = findShortestPath(batch, Map.of(), Map.of(), false);
-        if (con.cumpleSLA && !con.edges.isEmpty()) return false;  // sÃ­ habÃ­a ruta on-time â†’ no fue almacÃ©n
-        ResultadoRuta sin = findShortestPath(batch, Map.of(), Map.of(), true);
-        return sin.cumpleSLA && !sin.edges.isEmpty();
+        ResultadoRuta con = buscarRutaMasCorta(batch, Map.of(), Map.of(), false);
+        if (con.cumpleSLA && !con.aristas.isEmpty()) return false;  // sÃ­ habÃ­a ruta on-time â†’ no fue almacÃ©n
+        ResultadoRuta sin = buscarRutaMasCorta(batch, Map.of(), Map.of(), true);
+        return sin.cumpleSLA && !sin.aristas.isEmpty();
     }
 
-    private ResultadoRuta findShortestPath(LoteEnvio batch,
+    private ResultadoRuta buscarRutaMasCorta(LoteEnvio batch,
                                           Map<Long, Integer> blockFlight,
                                           Map<Long, Integer> blockAirport,
                                           boolean ignorarAlmacen) {
-        Nodo startNodeObj  = graph.nodes.get(batch.getOriginCode());
-        Nodo targetNodeObj = graph.nodes.get(batch.getDestCode());
+        Nodo startNodeObj  = grafo.nodos.get(batch.getCodigoOrigen());
+        Nodo targetNodeObj = grafo.nodos.get(batch.getCodigoDestino());
         if (startNodeObj == null || targetNodeObj == null) return ResultadoRuta.EMPTY;
 
-        int startIdx      = startNodeObj.idx;
-        int targetNodeIdx = targetNodeObj.idx;
+        int startIdx      = startNodeObj.indice;
+        int targetNodeIdx = targetNodeObj.indice;
         if (startIdx < 0 || targetNodeIdx < 0) return ResultadoRuta.EMPTY;
 
-        long readyMin      = toEpochMin(batch.getReadyTime());
-        long readyDay      = readyMin / DAY_MIN;
-        long slaMaxMinutes = (long) batch.getSlaLimitHours() * 60;
+        long readyMin      = aMinutoEpoch(batch.getTiempoListo());
+        long readyDay      = readyMin / MIN_DIA;
+        long slaMaxMinutes = (long) batch.getHorasLimiteSla() * 60;
 
-        long[] bestTimes = new long[nodeCount * DAY_SLOTS];
+        long[] bestTimes = new long[conteoNodos * SLOTS_DIA];
         Arrays.fill(bestTimes, Long.MAX_VALUE);
 
         PriorityQueue<EstadoRuta> pq = new PriorityQueue<>(Comparator.comparingLong(s -> s.arrivalMin));
 
-        long horizonDays = MAX_HORIZON_MIN / DAY_MIN;
+        long horizonDays = HORIZONTE_MAX_MIN / MIN_DIA;
         for (long d = 0; d <= horizonDays; d++) {
-            long startMin = readyMin + d * DAY_MIN;
-            bestTimes[startIdx * DAY_SLOTS + (int)d] = startMin;
+            long startMin = readyMin + d * MIN_DIA;
+            bestTimes[startIdx * SLOTS_DIA + (int)d] = startMin;
             pq.add(new EstadoRuta(startIdx, startMin, -1L, null, null));
         }
 
@@ -520,42 +520,42 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                     deps.add(0, s.depMin);
                 }
                 if (!ignorarAlmacen
-                        && !cabeEstadiasRuta(edges, deps, batch.getQuantity(), blockAirport)) {
+                        && !cabeEstadiasRuta(edges, deps, batch.getCantidad(), blockAirport)) {
                     continue;
                 }
-                long transitMinutes = (current.arrivalMin + DEST_STORAGE_MIN) - readyMin;
+                long transitMinutes = (current.arrivalMin + ALMACEN_DEST_MIN) - readyMin;
                 return new ResultadoRuta(edges, deps, transitMinutes <= slaMaxMinutes);
             }
 
-            for (Arista flight : adjByIdx[current.nodeIdx]) {
-                long minWait  = (current.edge == null) ? 0L : CONNECTION_MIN;
+            for (Arista flight : adyacenciaPorIndice[current.nodeIdx]) {
+                long minWait  = (current.edge == null) ? 0L : CONEXION_MIN;
                 long earliest = current.arrivalMin + minWait;
 
-                long actualDep = nextDepartureMin(flight.depMinuteOfDay, earliest);
-                long actualArr = actualDep + flight.durationMinutes;
+                long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, earliest);
+                long actualArr = actualDep + flight.duracionMinutos;
 
-                long dayOffset = actualArr / DAY_MIN - readyDay;
-                if (dayOffset < 0 || dayOffset >= DAY_SLOTS) continue;
-                if (actualArr - readyMin > MAX_HORIZON_MIN) continue;
+                long dayOffset = actualArr / MIN_DIA - readyDay;
+                if (dayOffset < 0 || dayOffset >= SLOTS_DIA) continue;
+                if (actualArr - readyMin > HORIZONTE_MAX_MIN) continue;
 
                 if (!ignorarAlmacen && current.edge == null
                         && !cabeAlmacenPierna(startNodeObj, readyMin, actualDep,
-                                batch.getQuantity(), blockAirport)) continue;
+                                batch.getCantidad(), blockAirport)) continue;
 
-                if (remainingFlight(flight, actualDep, blockFlight) < batch.getQuantity()) continue;
+                if (vueloRestante(flight, actualDep, blockFlight) < batch.getCantidad()) continue;
 
-                int nextIdx = flight.to.idx;
+                int nextIdx = flight.destino.indice;
                 if (nextIdx < 0) continue;
-                if (!ignorarAlmacen && flight.to.capacity > 0) {
-                    int qty = batch.getQuantity();
-                    long ak = airportKey(nextIdx, actualArr);
-                    if (airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0)
-                            + backlogOrigenOcc.getOrDefault(ak, 0) + qty
-                            > flight.to.capacity)
+                if (!ignorarAlmacen && flight.destino.capacidad > 0) {
+                    int qty = batch.getCantidad();
+                    long ak = claveAeropuerto(nextIdx, actualArr);
+                    if (ocupacionAeropuerto.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0)
+                            + ocupacionOrigenBacklog.getOrDefault(ak, 0) + qty
+                            > flight.destino.capacidad)
                         continue;
                 }
 
-                int cell = nextIdx * DAY_SLOTS + (int)dayOffset;
+                int cell = nextIdx * SLOTS_DIA + (int)dayOffset;
                 if (actualArr < bestTimes[cell]) {
                     bestTimes[cell] = actualArr;
                     pq.add(new EstadoRuta(nextIdx, actualArr, actualDep, flight, current));
@@ -572,30 +572,30 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                                        int maxCandidatos) {
         if (batch == null || maxCandidatos <= 0) return Collections.emptyList();
 
-        Nodo startNodeObj = graph.nodes.get(batch.getOriginCode());
-        Nodo targetNodeObj = graph.nodes.get(batch.getDestCode());
+        Nodo startNodeObj = grafo.nodos.get(batch.getCodigoOrigen());
+        Nodo targetNodeObj = grafo.nodos.get(batch.getCodigoDestino());
         if (startNodeObj == null || targetNodeObj == null) return Collections.emptyList();
 
-        int startIdx = startNodeObj.idx;
-        int targetIdx = targetNodeObj.idx;
+        int startIdx = startNodeObj.indice;
+        int targetIdx = targetNodeObj.indice;
         if (startIdx < 0 || targetIdx < 0) return Collections.emptyList();
 
-        long readyMin = toEpochMin(batch.getReadyTime());
-        long readyDay = readyMin / DAY_MIN;
-        long slaMaxMinutes = (long) batch.getSlaLimitHours() * 60L;
+        long readyMin = aMinutoEpoch(batch.getTiempoListo());
+        long readyDay = readyMin / MIN_DIA;
+        long slaMaxMinutes = (long) batch.getHorasLimiteSla() * 60L;
 
-        long skKey = skeletonKey(startIdx, targetIdx, readyMin, batch.getSlaLimitHours());
-        List<int[]> cachedSk = rutaSkeletonCache.get(skKey);
+        long skKey = skeletonKey(startIdx, targetIdx, readyMin, batch.getHorasLimiteSla());
+        List<int[]> cachedSk = rutaCacheEsqueleto.get(skKey);
         if (cachedSk != null && !cachedSk.isEmpty()) {
             List<RutaCandidata> reuso = new ArrayList<>(cachedSk.size());
             Set<String> firmasReuso = new HashSet<>();
             for (int[] sk : cachedSk) {
-                RutaCandidata c = materializarSkeleton(batch, sk, blockFlight, blockAirport);
+                RutaCandidata c = materializarEsqueleto(batch, sk, blockFlight, blockAirport);
                 if (c == null) continue;
                 if (firmasReuso.add(c.signature())) reuso.add(c);
             }
             if (reuso.size() >= maxCandidatos) {
-                reuso.sort(OperadorReparacionVoraz::compareRouteCandidates);
+                reuso.sort(OperadorReparacionVoraz::compararCandidatosRuta);
                 if (reuso.get(0).cumpleSLA) {
                     return reuso.size() <= maxCandidatos ? reuso
                             : new ArrayList<>(reuso.subList(0, maxCandidatos));
@@ -605,23 +605,23 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
         int labelsPorCelda = Math.max(1, Math.min(4, maxCandidatos + 1));
         @SuppressWarnings("unchecked")
-        List<EtiquetaRuta>[] labels = new List[nodeCount * DAY_SLOTS];
+        List<EtiquetaRuta>[] labels = new List[conteoNodos * SLOTS_DIA];
 
         PriorityQueue<EstadoRuta> pq = new PriorityQueue<>(
                 Comparator.comparingLong((EstadoRuta s) -> s.arrivalMin)
                         .thenComparingInt(s -> s.legs));
 
-        long horizonDays = MAX_HORIZON_MIN / DAY_MIN;
+        long horizonDays = HORIZONTE_MAX_MIN / MIN_DIA;
         for (long d = 0; d <= horizonDays; d++) {
-            long startMin = readyMin + d * DAY_MIN;
-            int cell = startIdx * DAY_SLOTS + (int) d;
+            long startMin = readyMin + d * MIN_DIA;
+            int cell = startIdx * SLOTS_DIA + (int) d;
             EtiquetaRuta label = new EtiquetaRuta(startMin, 0, 0.0);
             addLabel(labels, cell, label, labelsPorCelda);
             pq.add(new EstadoRuta(startIdx, startMin, -1L, null, null, 0, 0.0));
         }
 
         int limiteObjetivo = maxCandidatos <= 1 ? 1 : Math.max(maxCandidatos, maxCandidatos * 2);
-        int maxExpansiones = Math.max(256, maxCandidatos * Math.max(1, nodeCount) * DAY_SLOTS * 8);
+        int maxExpansiones = Math.max(256, maxCandidatos * Math.max(1, conteoNodos) * SLOTS_DIA * 8);
         int expansiones = 0;
         int candidatosOnTime = 0;
         List<RutaCandidata> candidatos = new ArrayList<>(limiteObjetivo);
@@ -631,7 +631,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             EstadoRuta current = pq.poll();
 
             if (current.nodeIdx == targetIdx && current.edge != null) {
-                RutaCandidata candidate = toRouteCandidate(current, batch, readyMin, slaMaxMinutes,
+                RutaCandidata candidate = aCandidatoRuta(current, batch, readyMin, slaMaxMinutes,
                         blockFlight, blockAirport);
                 if (candidate != null && firmas.add(candidate.signature())) {
                     if (candidate.cumpleSLA) {
@@ -644,37 +644,37 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 continue;
             }
 
-            if (current.legs >= MAX_CANDIDATE_LEGS) continue;
+            if (current.legs >= MAX_TRAMOS_CANDIDATO) continue;
 
-            for (Arista flight : adjByIdx[current.nodeIdx]) {
-                if (flight.to == null || flight.to.idx < 0) continue;
-                int nextIdx = flight.to.idx;
-                if (containsNode(current, nextIdx)) continue;
+            for (Arista flight : adyacenciaPorIndice[current.nodeIdx]) {
+                if (flight.destino == null || flight.destino.indice < 0) continue;
+                int nextIdx = flight.destino.indice;
+                if (contieneNodo(current, nextIdx)) continue;
 
-                long minWait = (current.edge == null) ? 0L : CONNECTION_MIN;
+                long minWait = (current.edge == null) ? 0L : CONEXION_MIN;
                 long earliest = current.arrivalMin + minWait;
-                long actualDep = nextDepartureMin(flight.depMinuteOfDay, earliest);
-                long actualArr = actualDep + flight.durationMinutes;
+                long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, earliest);
+                long actualArr = actualDep + flight.duracionMinutos;
 
-                long dayOffset = actualArr / DAY_MIN - readyDay;
-                if (dayOffset < 0 || dayOffset >= DAY_SLOTS) continue;
-                if (actualArr - readyMin > MAX_HORIZON_MIN) continue;
+                long dayOffset = actualArr / MIN_DIA - readyDay;
+                if (dayOffset < 0 || dayOffset >= SLOTS_DIA) continue;
+                if (actualArr - readyMin > HORIZONTE_MAX_MIN) continue;
                 if (candidatosOnTime >= maxCandidatos
-                        && (actualArr + DEST_STORAGE_MIN) - readyMin > slaMaxMinutes) {
+                        && (actualArr + ALMACEN_DEST_MIN) - readyMin > slaMaxMinutes) {
                     continue;
                 }
                 // Primer vuelo viable solo si la espera en almacÃ©n de origen cabe.
                 if (current.edge == null
                         && !cabeAlmacenPierna(startNodeObj, readyMin, actualDep,
-                                batch.getQuantity(), blockAirport)) continue;
-                if (remainingFlight(flight, actualDep, blockFlight) < batch.getQuantity()) continue;
-                if (!hasAirportCapacity(flight.to, nextIdx == targetIdx, actualArr, batch.getQuantity(), blockAirport)) {
+                                batch.getCantidad(), blockAirport)) continue;
+                if (vueloRestante(flight, actualDep, blockFlight) < batch.getCantidad()) continue;
+                if (!tieneCapacidadAeropuerto(flight.destino, nextIdx == targetIdx, actualArr, batch.getCantidad(), blockAirport)) {
                     continue;
                 }
 
-                int cell = nextIdx * DAY_SLOTS + (int) dayOffset;
-                double pressure = Math.max(current.pressure, projectedStepPressure(
-                        flight, actualDep, nextIdx == targetIdx, batch.getQuantity(), blockFlight, blockAirport));
+                int cell = nextIdx * SLOTS_DIA + (int) dayOffset;
+                double pressure = Math.max(current.pressure, presionPasoProyectada(
+                        flight, actualDep, nextIdx == targetIdx, batch.getCantidad(), blockFlight, blockAirport));
                 EtiquetaRuta label = new EtiquetaRuta(actualArr, current.legs + 1, pressure);
                 if (isDominated(labels[cell], label)) continue;
                 addLabel(labels, cell, label, labelsPorCelda);
@@ -683,19 +683,19 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             }
         }
 
-        candidatos.sort(OperadorReparacionVoraz::compareRouteCandidates);
+        candidatos.sort(OperadorReparacionVoraz::compararCandidatosRuta);
 
         // Guardar los esqueletos hallados para reusarlos en bloques futuros.
         if (!candidatos.isEmpty()) {
-            List<int[]> sks = new ArrayList<>(Math.min(candidatos.size(), MAX_SKELETONS_POR_CLAVE));
+            List<int[]> sks = new ArrayList<>(Math.min(candidatos.size(), MAX_ESQUELETOS_POR_CLAVE));
             for (RutaCandidata c : candidatos) {
-                if (sks.size() >= MAX_SKELETONS_POR_CLAVE) break;
-                List<Arista> es = c.getEdges();
+                if (sks.size() >= MAX_ESQUELETOS_POR_CLAVE) break;
+                List<Arista> es = c.getAristas();
                 int[] arr = new int[es.size()];
-                for (int i = 0; i < es.size(); i++) arr[i] = es.get(i).idx;
+                for (int i = 0; i < es.size(); i++) arr[i] = es.get(i).indice;
                 sks.add(arr);
             }
-            rutaSkeletonCache.put(skKey, sks);
+            rutaCacheEsqueleto.put(skKey, sks);
         }
 
         if (candidatos.size() <= maxCandidatos) return candidatos;
@@ -715,35 +715,35 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         int calentadas = 0;
         for (LoteEnvio b : batches) {
             if (cancelado != null && cancelado.getAsBoolean()) break;
-            if (b == null || b.getReadyTime() == null) continue;
-            Nodo o = graph.nodes.get(b.getOriginCode());
-            Nodo d = graph.nodes.get(b.getDestCode());
-            if (o == null || d == null || o.idx < 0 || d.idx < 0) continue;
-            long key = skeletonKey(o.idx, d.idx, toEpochMin(b.getReadyTime()), b.getSlaLimitHours());
+            if (b == null || b.getTiempoListo() == null) continue;
+            Nodo o = grafo.nodos.get(b.getCodigoOrigen());
+            Nodo d = grafo.nodos.get(b.getCodigoDestino());
+            if (o == null || d == null || o.indice < 0 || d.indice < 0) continue;
+            long key = skeletonKey(o.indice, d.indice, aMinutoEpoch(b.getTiempoListo()), b.getHorasLimiteSla());
             if (!vistas.add(key)) continue;                  // un intento por clave Ãºnica
-            generarCandidatosRuta(b, bf, ba, maxCandidatos); // popula rutaSkeletonCache en el miss
+            generarCandidatosRuta(b, bf, ba, maxCandidatos); // popula rutaCacheEsqueleto en el miss
             calentadas++;
         }
         return calentadas;
     }
 
     static long skeletonKey(int startIdx, int targetIdx, long readyMin, int slaHours) {   // package-private para tests
-        long hourBucket = (readyMin % DAY_MIN) / SKELETON_BUCKET_MIN;   // 0..23
+        long hourBucket = (readyMin % MIN_DIA) / BUCKET_ESQUELETO_MIN;   // 0..23
         return ((long) startIdx << 40)
                 | ((long) targetIdx << 24)
                 | (hourBucket << 8)
                 | (slaHours & 0xFFL);
     }
 
-    private RutaCandidata materializarSkeleton(LoteEnvio batch,
+    private RutaCandidata materializarEsqueleto(LoteEnvio batch,
                                                 int[] edgeIdxs,
                                                 Map<Long, Integer> blockFlight,
                                                 Map<Long, Integer> blockAirport) {
         if (edgeIdxs == null || edgeIdxs.length == 0) return null;
         List<Arista> ruta = new ArrayList<>(edgeIdxs.length);
         for (int idx : edgeIdxs) {
-            if (idx < 0 || idx >= edgeByIdx.length) return null;
-            Arista e = edgeByIdx[idx];
+            if (idx < 0 || idx >= aristaPorIndice.length) return null;
+            Arista e = aristaPorIndice[idx];
             if (e == null) return null;
             ruta.add(e);
         }
@@ -754,81 +754,81 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     // Helpers privados
     // -----------------------------------------------------------------------
 
-    private void applyToBlock(LoteEnvio batch, ResultadoRuta result,
+    private void aplicarABloque(LoteEnvio batch, ResultadoRuta result,
                                Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
-        for (int i = 0; i < result.edges.size(); i++) {
-            Arista e      = result.edges.get(i);
-            long depMin = result.actualDepartures.get(i);
-            long arrMin = depMin + e.durationMinutes;
+        for (int i = 0; i < result.aristas.size(); i++) {
+            Arista e      = result.aristas.get(i);
+            long depMin = result.salidasReales.get(i);
+            long arrMin = depMin + e.duracionMinutos;
 
-            blockFlight.merge(flightKey(e.idx, depMin), batch.getQuantity(), Integer::sum);
+            blockFlight.merge(claveVuelo(e.indice, depMin), batch.getCantidad(), Integer::sum);
 
-            boolean esFinalLeg = (i == result.edges.size() - 1);
+            boolean esFinalLeg = (i == result.aristas.size() - 1);
             // Carga por OCUPACIÃ“N concurrente: cada slot de la estadÃ­a real de la pierna.
-            if (!esFinalLeg && e.to.idx >= 0) {
-                long salida = result.actualDepartures.get(i + 1);   // hasta que sale el siguiente vuelo
-                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, salida, batch.getQuantity());
-            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                // Destino final: la maleta se retira ~DEST_STORAGE_MIN tras aterrizar (1 slot).
-                cargarAlmacenPierna(blockAirport, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN,
-                        batch.getQuantity());
+            if (!esFinalLeg && e.destino.indice >= 0) {
+                long salida = result.salidasReales.get(i + 1);   // hasta que sale el siguiente vuelo
+                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, salida, batch.getCantidad());
+            } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                // Destino final: la maleta se retira ~ALMACEN_DEST_MIN tras aterrizar (1 slot).
+                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                        batch.getCantidad());
             }
         }
-        cargarOrigen(blockAirport, batch, result.edges, result.actualDepartures, +1);
+        cargarOrigen(blockAirport, batch, result.aristas, result.salidasReales, +1);
     }
 
-    private long nextDepartureMin(int depMinuteOfDay, long earliest) {
-        long dayStart  = (earliest / DAY_MIN) * DAY_MIN;
+    private long proximaSalidaMin(int depMinuteOfDay, long earliest) {
+        long dayStart  = (earliest / MIN_DIA) * MIN_DIA;
         long candidate = dayStart + depMinuteOfDay;
-        return candidate < earliest ? candidate + DAY_MIN : candidate;
+        return candidate < earliest ? candidate + MIN_DIA : candidate;
     }
 
-    private int remainingFlight(Arista flight, long depMin, Map<Long, Integer> blockFlight) {
-        long key = flightKey(flight.idx, depMin);
-        if (cancelledFlightDays.contains(key)) return 0;  // vuelo cancelado ese dÃ­a
-        return flight.capacity
-             - flightOccupancy.getOrDefault(key, 0)
+    private int vueloRestante(Arista flight, long depMin, Map<Long, Integer> blockFlight) {
+        long key = claveVuelo(flight.indice, depMin);
+        if (vueloDiasCancelados.contains(key)) return 0;  // vuelo cancelado ese dÃ­a
+        return flight.capacidad
+             - ocupacionVuelo.getOrDefault(key, 0)
              - blockFlight.getOrDefault(key, 0);
     }
 
     public long calcularProximaSalida(int depMinuteOfDay, long earliest) {
-        return nextDepartureMin(depMinuteOfDay, earliest);
+        return proximaSalidaMin(depMinuteOfDay, earliest);
     }
 
     public int capacidadRestante(Arista flight, long depMin, Map<Long, Integer> blockFlight) {
-        return remainingFlight(flight, depMin, blockFlight);
+        return vueloRestante(flight, depMin, blockFlight);
     }
 
     public int capacidadAlmacen(Nodo node, long arrMin, Map<Long, Integer> blockAirport) {
-        if (node == null || node.idx < 0 || node.capacity <= 0) return Integer.MAX_VALUE;
-        long key = airportKey(node.idx, arrMin);
-        return node.capacity
-             - airportOccupancy.getOrDefault(key, 0)
+        if (node == null || node.indice < 0 || node.capacidad <= 0) return Integer.MAX_VALUE;
+        long key = claveAeropuerto(node.indice, arrMin);
+        return node.capacidad
+             - ocupacionAeropuerto.getOrDefault(key, 0)
              - blockAirport.getOrDefault(key, 0)
-             - backlogOrigenOcc.getOrDefault(key, 0);
+             - ocupacionOrigenBacklog.getOrDefault(key, 0);
     }
 
-    public int ocupacionGlobalVuelo(long flightKey) {
-        return flightOccupancy.getOrDefault(flightKey, 0);
+    public int ocupacionGlobalVuelo(long claveVuelo) {
+        return ocupacionVuelo.getOrDefault(claveVuelo, 0);
     }
 
-    public int ocupacionGlobalAlmacen(long slotKey) {
-        return airportOccupancy.getOrDefault(slotKey, 0)
-             + backlogOrigenOcc.getOrDefault(slotKey, 0);
+    public int ocupacionGlobalAlmacen(long claveSlot) {
+        return ocupacionAeropuerto.getOrDefault(claveSlot, 0)
+             + ocupacionOrigenBacklog.getOrDefault(claveSlot, 0);
     }
 
     public void aplicarAsignacionBloque(LoteEnvio batch,
                                          Map<Long, Integer> blockFlight,
                                          Map<Long, Integer> blockAirport) {
-        List<Arista> route = batch.getAssignedRoute();
-        List<Long> deps  = batch.getAssignedDepartures();
+        List<Arista> route = batch.getRutaAsignada();
+        List<Long> deps  = batch.getSalidasAsignadas();
         if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) return;
         ResultadoRuta fake = new ResultadoRuta(route, deps, batch.isCumpleSLA());
-        applyToBlock(batch, fake, blockFlight, blockAirport);
+        aplicarABloque(batch, fake, blockFlight, blockAirport);
     }
 
-    public static long toEpochMinPublic(LocalDateTime dt) {
-        return toEpochMin(dt);
+    public static long aMinutoEpochPublico(LocalDateTime dt) {
+        return aMinutoEpoch(dt);
     }
 
     public boolean intentarDijkstraDirecto(LoteEnvio batch,
@@ -846,53 +846,53 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                                     Map<Long, Integer> blockAirport) {
         if (batch == null || ruta == null || ruta.isEmpty()) return null;
 
-        long readyMin = toEpochMin(batch.getReadyTime());
-        long slaMaxMinutes = (long) batch.getSlaLimitHours() * 60L;
+        long readyMin = aMinutoEpoch(batch.getTiempoListo());
+        long slaMaxMinutes = (long) batch.getHorasLimiteSla() * 60L;
         long earliest = readyMin;
-        String expectedFrom = batch.getOriginCode();
+        String expectedFrom = batch.getCodigoOrigen();
         List<Arista> edges = new ArrayList<>(ruta.size());
         List<Long> deps = new ArrayList<>(ruta.size());
 
         for (int i = 0; i < ruta.size(); i++) {
             Arista edge = ruta.get(i);
-            if (edge == null || edge.from == null || edge.to == null) return null;
-            if (!Objects.equals(expectedFrom, edge.from.code)) return null;
+            if (edge == null || edge.origen == null || edge.destino == null) return null;
+            if (!Objects.equals(expectedFrom, edge.origen.codigo)) return null;
 
             boolean finalLeg = i == ruta.size() - 1;
-            if (finalLeg && !Objects.equals(batch.getDestCode(), edge.to.code)) return null;
+            if (finalLeg && !Objects.equals(batch.getCodigoDestino(), edge.destino.codigo)) return null;
 
-            long minDeparture = (i == 0) ? earliest : earliest + CONNECTION_MIN;
-            long depMin = nextDepartureMin(edge.depMinuteOfDay, minDeparture);
-            long arrMin = depMin + edge.durationMinutes;
+            long minDeparture = (i == 0) ? earliest : earliest + CONEXION_MIN;
+            long depMin = proximaSalidaMin(edge.minutoDelDiaSalida, minDeparture);
+            long arrMin = depMin + edge.duracionMinutos;
             boolean found = false;
-            while (arrMin - readyMin <= MAX_HORIZON_MIN) {
+            while (arrMin - readyMin <= HORIZONTE_MAX_MIN) {
                 boolean origenOk = i != 0
-                        || cabeAlmacenPierna(edge.from, readyMin, depMin,
-                                batch.getQuantity(), blockAirport);
+                        || cabeAlmacenPierna(edge.origen, readyMin, depMin,
+                                batch.getCantidad(), blockAirport);
                 if (origenOk
-                        && remainingFlight(edge, depMin, blockFlight) >= batch.getQuantity()
-                        && hasAirportCapacity(edge.to, finalLeg, arrMin, batch.getQuantity(), blockAirport)) {
+                        && vueloRestante(edge, depMin, blockFlight) >= batch.getCantidad()
+                        && tieneCapacidadAeropuerto(edge.destino, finalLeg, arrMin, batch.getCantidad(), blockAirport)) {
                     found = true;
                     break;
                 }
-                depMin += DAY_MIN;
-                arrMin = depMin + edge.durationMinutes;
+                depMin += MIN_DIA;
+                arrMin = depMin + edge.duracionMinutos;
             }
             if (!found) return null;
 
             edges.add(edge);
             deps.add(depMin);
             earliest = arrMin;
-            expectedFrom = edge.to.code;
+            expectedFrom = edge.destino.codigo;
         }
 
-        return toRouteCandidate(edges, deps, batch, readyMin, slaMaxMinutes, blockFlight, blockAirport);
+        return aCandidatoRuta(edges, deps, batch, readyMin, slaMaxMinutes, blockFlight, blockAirport);
     }
 
     public void aplicarCandidatoRuta(LoteEnvio batch, RutaCandidata candidate) {
         if (batch == null || candidate == null) return;
-        batch.setAssignedRoute(new ArrayList<>(candidate.edges));
-        batch.setAssignedDepartures(new ArrayList<>(candidate.actualDepartures));
+        batch.setRutaAsignada(new ArrayList<>(candidate.aristas));
+        batch.setSalidasAsignadas(new ArrayList<>(candidate.salidasReales));
         batch.setCumpleSLA(candidate.cumpleSLA);
     }
 
@@ -901,73 +901,73 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                        Map<Long, Integer> blockFlight,
                                        Map<Long, Integer> blockAirport) {
         if (batch == null || candidate == null) return;
-        ResultadoRuta fake = new ResultadoRuta(candidate.edges, candidate.actualDepartures, candidate.cumpleSLA);
-        applyToBlock(batch, fake, blockFlight, blockAirport);
+        ResultadoRuta fake = new ResultadoRuta(candidate.aristas, candidate.salidasReales, candidate.cumpleSLA);
+        aplicarABloque(batch, fake, blockFlight, blockAirport);
     }
 
-    public boolean rutaSirveParaBatch(RutaCandidata candidate,
+    public boolean rutaSirveParaLote(RutaCandidata candidate,
                                       LoteEnvio batch,
                                       Map<Long, Integer> blockFlight,
                                       Map<Long, Integer> blockAirport) {
-        return rutaSirveParaBatch(candidate, batch, blockFlight, blockAirport, 0.0, 0.0);
+        return rutaSirveParaLote(candidate, batch, blockFlight, blockAirport, 0.0, 0.0);
     }
 
-    public boolean rutaSirveParaBatch(RutaCandidata candidate,
+    public boolean rutaSirveParaLote(RutaCandidata candidate,
                                       LoteEnvio batch,
                                       Map<Long, Integer> blockFlight,
                                       Map<Long, Integer> blockAirport,
                                       double reservaBase) {
-        return rutaSirveParaBatch(candidate, batch, blockFlight, blockAirport, reservaBase, 0.0);
+        return rutaSirveParaLote(candidate, batch, blockFlight, blockAirport, reservaBase, 0.0);
     }
 
-    public boolean rutaSirveParaBatch(RutaCandidata candidate,
+    public boolean rutaSirveParaLote(RutaCandidata candidate,
                                       LoteEnvio batch,
                                       Map<Long, Integer> blockFlight,
                                       Map<Long, Integer> blockAirport,
                                       double reservaBase,
                                       double reservaAlmacenBase) {
         if (candidate == null || batch == null) return false;
-        List<Arista> edges = candidate.getEdges();
-        List<Long> deps = candidate.getActualDepartures();
+        List<Arista> edges = candidate.getAristas();
+        List<Long> deps = candidate.getSalidasReales();
         if (edges.isEmpty() || deps.size() != edges.size()) return false;
 
-        long readyMin = toEpochMin(batch.getReadyTime());
+        long readyMin = aMinutoEpoch(batch.getTiempoListo());
         if (deps.get(0) < readyMin) return false;   // el envÃ­o aÃºn no estaba listo
 
-        long arrMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).durationMinutes;
-        long transitMin = (arrMin + DEST_STORAGE_MIN) - readyMin;
-        if (transitMin > (long) batch.getSlaLimitHours() * 60L) return false;   // tardarÃ­a
+        long arrMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).duracionMinutos;
+        long transitMin = (arrMin + ALMACEN_DEST_MIN) - readyMin;
+        if (transitMin > (long) batch.getHorasLimiteSla() * 60L) return false;   // tardarÃ­a
 
         // ColchÃ³n de reserva proporcional a la holgura (urgente â‡’ 0 â‡’ sin reserva).
         double slackRatio = 0.0;
         if (reservaBase > 0.0 || reservaAlmacenBase > 0.0) {
-            double slaMin = Math.max(1.0, batch.getSlaLimitHours() * 60.0);
-            slackRatio = Math.max(0.0, Math.min(1.0, candidate.getSlackMin() / slaMin));
+            double slaMin = Math.max(1.0, batch.getHorasLimiteSla() * 60.0);
+            slackRatio = Math.max(0.0, Math.min(1.0, candidate.getHolguraMin() / slaMin));
         }
         double reservaVuelo = reservaBase * slackRatio;
         double reservaAlmacen = reservaAlmacenBase * slackRatio;
 
-        int qty = batch.getQuantity();
+        int qty = batch.getCantidad();
         for (int i = 0; i < edges.size(); i++) {
             Arista e = edges.get(i);
             long depMin = deps.get(i);
-            int colchonVuelo = reservaVuelo > 0.0 && e.capacity > 0
-                    ? (int) Math.ceil(reservaVuelo * e.capacity) : 0;
-            if (remainingFlight(e, depMin, blockFlight) < qty + colchonVuelo) return false;
+            int colchonVuelo = reservaVuelo > 0.0 && e.capacidad > 0
+                    ? (int) Math.ceil(reservaVuelo * e.capacidad) : 0;
+            if (vueloRestante(e, depMin, blockFlight) < qty + colchonVuelo) return false;
             boolean finalLeg = (i == edges.size() - 1);
-            long llegada = depMin + e.durationMinutes;
+            long llegada = depMin + e.duracionMinutos;
             // Capacidad CONCURRENTE: la estadÃ­a real ocupa [llegada, salida); cada slot
-            // del intervalo debe caber. Destino final â‰ˆ DEST_STORAGE_MIN; escala = hasta salir.
-            long salida = finalLeg ? llegada + DEST_STORAGE_MIN : deps.get(i + 1);
-            if (!cabeAlmacenPierna(e.to, llegada, salida, qty, blockAirport)) {
+            // del intervalo debe caber. Destino final â‰ˆ ALMACEN_DEST_MIN; escala = hasta salir.
+            long salida = finalLeg ? llegada + ALMACEN_DEST_MIN : deps.get(i + 1);
+            if (!cabeAlmacenPierna(e.destino, llegada, salida, qty, blockAirport)) {
                 return false;
             }
             // ColchÃ³n en almacÃ©n de HUB para la estadÃ­a de una ESCALA (no destino final).
             // Protege el storage concurrente de hub para los envÃ­os urgentes/24h.
-            if (!finalLeg && reservaAlmacen > 0.0 && e.to != null && e.to.capacity > 0
-                    && esHub(e.to.idx)) {
-                int colchonAlm = (int) Math.ceil(reservaAlmacen * e.to.capacity);
-                if (!cabeAlmacenPierna(e.to, llegada, salida, qty + colchonAlm, blockAirport)) {
+            if (!finalLeg && reservaAlmacen > 0.0 && e.destino != null && e.destino.capacidad > 0
+                    && esHub(e.destino.indice)) {
+                int colchonAlm = (int) Math.ceil(reservaAlmacen * e.destino.capacidad);
+                if (!cabeAlmacenPierna(e.destino, llegada, salida, qty + colchonAlm, blockAirport)) {
                     return false;
                 }
             }
@@ -979,63 +979,63 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     public Set<Long> clavesOcupadas(RutaCandidata candidate, LoteEnvio batch) {
         if (candidate == null) return Collections.emptySet();
-        List<Arista> edges = candidate.getEdges();
-        List<Long> deps = candidate.getActualDepartures();
+        List<Arista> edges = candidate.getAristas();
+        List<Long> deps = candidate.getSalidasReales();
         if (edges.isEmpty() || deps.size() != edges.size()) return Collections.emptySet();
 
         Set<Long> keys = new HashSet<>(edges.size() * 3);
         // Incluye los slots de espera en el almacÃ©n de origen.
         if (batch != null) {
-            Nodo origen = edges.get(0).from;
-            if (origen != null && origen.idx >= 0 && origen.capacity > 0) {
-                long desde = toEpochMin(batch.getReadyTime());
+            Nodo origen = edges.get(0).origen;
+            if (origen != null && origen.indice >= 0 && origen.capacidad > 0) {
+                long desde = aMinutoEpoch(batch.getTiempoListo());
                 long firstDep = deps.get(0);
-                if (firstDep > desde) agregarSlotsEstadia(keys, origen.idx, desde, firstDep);
+                if (firstDep > desde) agregarSlotsEstadia(keys, origen.indice, desde, firstDep);
             }
         }
         for (int i = 0; i < edges.size(); i++) {
             Arista e = edges.get(i);
             long depMin = deps.get(i);
-            long arrMin = depMin + e.durationMinutes;
+            long arrMin = depMin + e.duracionMinutos;
 
-            keys.add(flightKey(e.idx, depMin));
+            keys.add(claveVuelo(e.indice, depMin));
 
             boolean esFinalLeg = (i == edges.size() - 1);
-            // Claves por SLOT de la estadÃ­a concurrente (mismo intervalo que applyToBlock).
-            if (!esFinalLeg && e.to.idx >= 0) {
-                agregarSlotsEstadia(keys, e.to.idx, arrMin, deps.get(i + 1));
-            } else if (esFinalLeg && e.to.idx >= 0 && e.to.capacity > 0) {
-                agregarSlotsEstadia(keys, e.to.idx, arrMin, arrMin + DEST_STORAGE_MIN);
+            // Claves por SLOT de la estadÃ­a concurrente (mismo intervalo que aplicarABloque).
+            if (!esFinalLeg && e.destino.indice >= 0) {
+                agregarSlotsEstadia(keys, e.destino.indice, arrMin, deps.get(i + 1));
+            } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                agregarSlotsEstadia(keys, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN);
             }
         }
         return keys;
     }
 
-    private static long flightKey(int edgeIdx, long epochMin) {
-        return CodificadorClaveVuelo.flightKey(edgeIdx, epochMin);
+    private static long claveVuelo(int edgeIdx, long epochMin) {
+        return CodificadorClaveVuelo.claveVuelo(edgeIdx, epochMin);
     }
 
-    private static long airportKey(int nodeIdx, long epochMin) {
-        return slotKey(nodeIdx, epochMin / STORAGE_SLOT_MIN);
+    private static long claveAeropuerto(int nodeIdx, long epochMin) {
+        return claveSlot(nodeIdx, epochMin / SLOT_ALMACEN_MIN);
     }
 
-    private static long slotKey(int nodeIdx, long slot) {
-        return (((long) nodeIdx) << DAY_BITS) | (slot & CodificadorClaveVuelo.DAY_MASK);
+    private static long claveSlot(int nodeIdx, long slot) {
+        return (((long) nodeIdx) << BITS_DIA) | (slot & CodificadorClaveVuelo.MASCARA_DIA);
     }
 
     public static long claveAlmacenDeSlot(int nodeIdx, long epochMin) {
-        return airportKey(nodeIdx, epochMin);
+        return claveAeropuerto(nodeIdx, epochMin);
     }
 
     private static long ultimoSlot(long llegada, long salida) {
-        return (Math.max(llegada + 1, salida) - 1) / STORAGE_SLOT_MIN;
+        return (Math.max(llegada + 1, salida) - 1) / SLOT_ALMACEN_MIN;
     }
 
     private void agregarSlotsEstadia(Set<Long> keys, int nodeIdx, long llegada, long salida) {
         if (nodeIdx < 0) return;
         long s1 = ultimoSlot(llegada, salida);
-        for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
-            keys.add(slotKey(nodeIdx, s));
+        for (long s = llegada / SLOT_ALMACEN_MIN; s <= s1; s++) {
+            keys.add(claveSlot(nodeIdx, s));
         }
     }
 
@@ -1043,8 +1043,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                      long llegada, long salida, int delta) {
         if (nodeIdx < 0) return;
         long s1 = ultimoSlot(llegada, salida);
-        for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
-            mapa.merge(slotKey(nodeIdx, s), delta, Integer::sum);
+        for (long s = llegada / SLOT_ALMACEN_MIN; s <= s1; s++) {
+            mapa.merge(claveSlot(nodeIdx, s), delta, Integer::sum);
         }
     }
 
@@ -1052,43 +1052,43 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                      Map<Long, Integer> blockAirport) {
         for (int i = 0; i < edges.size(); i++) {
             Arista e = edges.get(i);
-            long llegada = deps.get(i) + e.durationMinutes;
-            long salida = (i < edges.size() - 1) ? deps.get(i + 1) : llegada + DEST_STORAGE_MIN;
-            if (!cabeAlmacenPierna(e.to, llegada, salida, qty, blockAirport)) return false;
+            long llegada = deps.get(i) + e.duracionMinutos;
+            long salida = (i < edges.size() - 1) ? deps.get(i + 1) : llegada + ALMACEN_DEST_MIN;
+            if (!cabeAlmacenPierna(e.destino, llegada, salida, qty, blockAirport)) return false;
         }
         return true;
     }
 
     private boolean cabeAlmacenPierna(Nodo node, long llegada, long salida, int qty,
                                       Map<Long, Integer> blockAirport) {
-        if (node == null || node.idx < 0 || node.capacity <= 0) return true;
+        if (node == null || node.indice < 0 || node.capacidad <= 0) return true;
         long s1 = ultimoSlot(llegada, salida);
-        for (long s = llegada / STORAGE_SLOT_MIN; s <= s1; s++) {
-            long k = slotKey(node.idx, s);
-            if (airportOccupancy.getOrDefault(k, 0) + blockAirport.getOrDefault(k, 0)
-                    + backlogOrigenOcc.getOrDefault(k, 0) + qty > node.capacity) {
+        for (long s = llegada / SLOT_ALMACEN_MIN; s <= s1; s++) {
+            long k = claveSlot(node.indice, s);
+            if (ocupacionAeropuerto.getOrDefault(k, 0) + blockAirport.getOrDefault(k, 0)
+                    + ocupacionOrigenBacklog.getOrDefault(k, 0) + qty > node.capacidad) {
                 return false;
             }
         }
         return true;
     }
 
-    private static long toEpochMin(LocalDateTime dt) {
-        return dt.toLocalDate().toEpochDay() * DAY_MIN + dt.getHour() * 60L + dt.getMinute();
+    private static long aMinutoEpoch(LocalDateTime dt) {
+        return dt.toLocalDate().toEpochDay() * MIN_DIA + dt.getHour() * 60L + dt.getMinute();
     }
 
-    private boolean hasAirportCapacity(Nodo node,
+    private boolean tieneCapacidadAeropuerto(Nodo node,
                                        boolean destinoFinal,
                                        long arrMin,
                                        int qty,
                                        Map<Long, Integer> blockAirport) {
-        if (node == null || node.idx < 0 || node.capacity <= 0) return true;
-        long ak = airportKey(node.idx, arrMin);
-        return airportOccupancy.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0)
-                + backlogOrigenOcc.getOrDefault(ak, 0) + qty <= node.capacity;
+        if (node == null || node.indice < 0 || node.capacidad <= 0) return true;
+        long ak = claveAeropuerto(node.indice, arrMin);
+        return ocupacionAeropuerto.getOrDefault(ak, 0) + blockAirport.getOrDefault(ak, 0)
+                + ocupacionOrigenBacklog.getOrDefault(ak, 0) + qty <= node.capacidad;
     }
 
-    private RutaCandidata toRouteCandidate(EstadoRuta state,
+    private RutaCandidata aCandidatoRuta(EstadoRuta state,
                                             LoteEnvio batch,
                                             long readyMin,
                                             long slaMaxMinutes,
@@ -1100,10 +1100,10 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             edges.add(0, s.edge);
             deps.add(0, s.depMin);
         }
-        return toRouteCandidate(edges, deps, batch, readyMin, slaMaxMinutes, blockFlight, blockAirport);
+        return aCandidatoRuta(edges, deps, batch, readyMin, slaMaxMinutes, blockFlight, blockAirport);
     }
 
-    private RutaCandidata toRouteCandidate(List<Arista> edges,
+    private RutaCandidata aCandidatoRuta(List<Arista> edges,
                                             List<Long> deps,
                                             LoteEnvio batch,
                                             long readyMin,
@@ -1112,12 +1112,12 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                                             Map<Long, Integer> blockAirport) {
         if (edges.isEmpty() || deps.size() != edges.size()) return null;
 
-        if (!cabeEstadiasRuta(edges, deps, batch.getQuantity(), blockAirport)) return null;
+        if (!cabeEstadiasRuta(edges, deps, batch.getCantidad(), blockAirport)) return null;
 
-        long arrivalMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).durationMinutes;
-        long transitMin = (arrivalMin + DEST_STORAGE_MIN) - readyMin;
+        long arrivalMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).duracionMinutos;
+        long transitMin = (arrivalMin + ALMACEN_DEST_MIN) - readyMin;
         long slackMin = slaMaxMinutes - transitMin;
-        double pressure = projectedPressure(edges, deps, batch, blockFlight, blockAirport);
+        double pressure = presionProyectada(edges, deps, batch, blockFlight, blockAirport);
         double scarcity = projectedScarcity(edges, deps, blockFlight, blockAirport);
         return new RutaCandidata(edges, deps, transitMin <= slaMaxMinutes,
                 arrivalMin, transitMin, slackMin, pressure, scarcity);
@@ -1147,88 +1147,88 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         for (int i = 0; i < edges.size(); i++) {
             Arista e = edges.get(i);
             long depMin = deps.get(i);
-            if (e.capacity > 0) {
-                int remaining = remainingFlight(e, depMin, blockFlight);
-                sum += precioCongestion(e.capacity - remaining, e.capacity);
+            if (e.capacidad > 0) {
+                int remaining = vueloRestante(e, depMin, blockFlight);
+                sum += precioCongestion(e.capacidad - remaining, e.capacidad);
             }
-            if (e.to != null && e.to.idx >= 0 && e.to.capacity > 0) {
-                long arrMin = depMin + e.durationMinutes;
+            if (e.destino != null && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                long arrMin = depMin + e.duracionMinutos;
                 boolean transito = i < edges.size() - 1;   // escala (no destino final)
                 // L1: en una escala de HUB el almacÃ©n es el cuello â†’ curva que muerde antes.
                 // El destino final (delivery) y las escalas no-hub conservan la curva base.
-                boolean hubTransito = transito && esHub(e.to.idx);
-                int remaining = capacidadAlmacen(e.to, arrMin, blockAirport);
-                int usadoArr = e.to.capacity - remaining;
+                boolean hubTransito = transito && esHub(e.destino.indice);
+                int remaining = capacidadAlmacen(e.destino, arrMin, blockAirport);
+                int usadoArr = e.destino.capacidad - remaining;
                 sum += hubTransito
-                        ? precioCongestionAlmacenHub(usadoArr, e.to.capacity)
-                        : precioCongestion(usadoArr, e.to.capacity);
+                        ? precioCongestionAlmacenHub(usadoArr, e.destino.capacidad)
+                        : precioCongestion(usadoArr, e.destino.capacidad);
                 if (transito) {
                     // Fase R â€” muestrea el slot de fin de estadÃ­a (salida del siguiente vuelo).
-                    int remNext = capacidadAlmacen(e.to, deps.get(i + 1), blockAirport);
-                    int usadoNext = e.to.capacity - remNext;
+                    int remNext = capacidadAlmacen(e.destino, deps.get(i + 1), blockAirport);
+                    int usadoNext = e.destino.capacidad - remNext;
                     sum += hubTransito
-                            ? precioCongestionAlmacenHub(usadoNext, e.to.capacity)
-                            : precioCongestion(usadoNext, e.to.capacity);
+                            ? precioCongestionAlmacenHub(usadoNext, e.destino.capacidad)
+                            : precioCongestion(usadoNext, e.destino.capacidad);
                 }
             }
         }
         return sum;
     }
 
-    private double projectedStepPressure(Arista edge,
+    private double presionPasoProyectada(Arista edge,
                                          long depMin,
                                          boolean destinoFinal,
                                          int qty,
                                          Map<Long, Integer> blockFlight,
                                          Map<Long, Integer> blockAirport) {
         double max = 0.0;
-        if (edge.capacity > 0) {
-            int remaining = remainingFlight(edge, depMin, blockFlight);
-            max = Math.max(max, (double) (edge.capacity - remaining + qty) / edge.capacity);
+        if (edge.capacidad > 0) {
+            int remaining = vueloRestante(edge, depMin, blockFlight);
+            max = Math.max(max, (double) (edge.capacidad - remaining + qty) / edge.capacidad);
         }
-        if (edge.to != null && edge.to.idx >= 0 && edge.to.capacity > 0) {
-            long arrMin = depMin + edge.durationMinutes;
-            int remaining = capacidadAlmacen(edge.to, arrMin, blockAirport);
-            max = Math.max(max, (double) (edge.to.capacity - remaining + qty) / edge.to.capacity);
+        if (edge.destino != null && edge.destino.indice >= 0 && edge.destino.capacidad > 0) {
+            long arrMin = depMin + edge.duracionMinutos;
+            int remaining = capacidadAlmacen(edge.destino, arrMin, blockAirport);
+            max = Math.max(max, (double) (edge.destino.capacidad - remaining + qty) / edge.destino.capacidad);
             if (!destinoFinal) {
                 // Fase R â€” proxy de presencia continua: muestrea el slot siguiente al de llegada.
-                int remainingNextDay = capacidadAlmacen(edge.to, arrMin + STORAGE_SLOT_MIN, blockAirport);
-                max = Math.max(max, (double) (edge.to.capacity - remainingNextDay + qty) / edge.to.capacity);
+                int remainingNextDay = capacidadAlmacen(edge.destino, arrMin + SLOT_ALMACEN_MIN, blockAirport);
+                max = Math.max(max, (double) (edge.destino.capacidad - remainingNextDay + qty) / edge.destino.capacidad);
             }
         }
         return max;
     }
 
-    private double projectedPressure(List<Arista> edges,
+    private double presionProyectada(List<Arista> edges,
                                      List<Long> deps,
                                      LoteEnvio batch,
                                      Map<Long, Integer> blockFlight,
                                      Map<Long, Integer> blockAirport) {
         double max = 0.0;
-        int qty = batch.getQuantity();
+        int qty = batch.getCantidad();
         for (int i = 0; i < edges.size(); i++) {
             Arista e = edges.get(i);
             long depMin = deps.get(i);
-            if (e.capacity > 0) {
-                int remaining = remainingFlight(e, depMin, blockFlight);
-                max = Math.max(max, (double) (e.capacity - remaining + qty) / e.capacity);
+            if (e.capacidad > 0) {
+                int remaining = vueloRestante(e, depMin, blockFlight);
+                max = Math.max(max, (double) (e.capacidad - remaining + qty) / e.capacidad);
             }
 
-            if (e.to != null && e.to.idx >= 0 && e.to.capacity > 0) {
-                long arrMin = depMin + e.durationMinutes;
-                int remaining = capacidadAlmacen(e.to, arrMin, blockAirport);
-                max = Math.max(max, (double) (e.to.capacity - remaining + qty) / e.to.capacity);
+            if (e.destino != null && e.destino.indice >= 0 && e.destino.capacidad > 0) {
+                long arrMin = depMin + e.duracionMinutos;
+                int remaining = capacidadAlmacen(e.destino, arrMin, blockAirport);
+                max = Math.max(max, (double) (e.destino.capacidad - remaining + qty) / e.destino.capacidad);
                 if (i < edges.size() - 1) {
                     // Fase R â€” muestrea el slot de fin de estadÃ­a (salida del siguiente vuelo).
-                    int remainingNextDay = capacidadAlmacen(e.to, deps.get(i + 1), blockAirport);
-                    max = Math.max(max, (double) (e.to.capacity - remainingNextDay + qty) / e.to.capacity);
+                    int remainingNextDay = capacidadAlmacen(e.destino, deps.get(i + 1), blockAirport);
+                    max = Math.max(max, (double) (e.destino.capacidad - remainingNextDay + qty) / e.destino.capacidad);
                 }
             }
         }
         return max;
     }
 
-    private boolean containsNode(EstadoRuta state, int nodeIdx) {
+    private boolean contieneNodo(EstadoRuta state, int nodeIdx) {
         for (EstadoRuta s = state; s != null; s = s.parent) {
             if (s.nodeIdx == nodeIdx) return true;
         }
@@ -1282,7 +1282,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return Double.compare(a.pressure, b.pressure);
     }
 
-    private static int compareRouteCandidates(RutaCandidata a, RutaCandidata b) {
+    private static int compararCandidatosRuta(RutaCandidata a, RutaCandidata b) {
         int c = Boolean.compare(b.cumpleSLA, a.cumpleSLA);
         if (c != 0) return c;
         c = Long.compare(Math.max(0L, -a.slackMin), Math.max(0L, -b.slackMin));
@@ -1291,7 +1291,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (c != 0) return c;
         c = Double.compare(a.pressure, b.pressure);
         if (c != 0) return c;
-        c = Integer.compare(a.edges.size(), b.edges.size());
+        c = Integer.compare(a.aristas.size(), b.aristas.size());
         if (c != 0) return c;
         return Long.compare(b.slackMin, a.slackMin);
     }
@@ -1302,21 +1302,21 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     public void logEstadisticasCapacidad() {
         log.info("--- Capacidad de vuelos ---");
-        long flightDaysUsados = flightOccupancy.size();
+        long flightDaysUsados = ocupacionVuelo.size();
         long flightDaysLlenos = 0, flightDaysSobre = 0, totalAsignado = 0, totalCapacidad = 0;
         List<String> sobre = new ArrayList<>();
 
-        for (Map.Entry<Long, Integer> entry : flightOccupancy.entrySet()) {
-            int edgeIdx  = (int)(entry.getKey() >> DAY_BITS);
+        for (Map.Entry<Long, Integer> entry : ocupacionVuelo.entrySet()) {
+            int edgeIdx  = (int)(entry.getKey() >> BITS_DIA);
             int asignado = entry.getValue();
             totalAsignado += asignado;
-            if (edgeIdx < edgeByIdx.length && edgeByIdx[edgeIdx] != null) {
-                int cap = edgeByIdx[edgeIdx].capacity;
+            if (edgeIdx < aristaPorIndice.length && aristaPorIndice[edgeIdx] != null) {
+                int cap = aristaPorIndice[edgeIdx].capacidad;
                 totalCapacidad += cap;
                 if (asignado >= cap) flightDaysLlenos++;
                 if (asignado > cap) {
                     flightDaysSobre++;
-                    sobre.add(edgeByIdx[edgeIdx].id + "=" + asignado + "/" + cap);
+                    sobre.add(aristaPorIndice[edgeIdx].id + "=" + asignado + "/" + cap);
                 }
             }
         }
@@ -1332,16 +1332,16 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         }
 
         log.info("--- Capacidad de aeropuertos (almacÃ©n) ---");
-        long airportDaysUsados = airportOccupancy.size();
+        long airportDaysUsados = ocupacionAeropuerto.size();
         long airportDaysLlenos = 0, airportDaysSobre = 0, totalAirportAsig = 0, totalAirportCap = 0;
         Map<String, long[]> porAero = new HashMap<>();
-        for (Map.Entry<Long, Integer> entry : airportOccupancy.entrySet()) {
-            int    nodeIdx  = (int)(entry.getKey() >> DAY_BITS);
+        for (Map.Entry<Long, Integer> entry : ocupacionAeropuerto.entrySet()) {
+            int    nodeIdx  = (int)(entry.getKey() >> BITS_DIA);
             int    asignado = entry.getValue();
             totalAirportAsig += asignado;
-            String code = (nodeIdx < nodeByIdx.length) ? nodeByIdx[nodeIdx] : "?";
-            Nodo nodo   = graph.nodes.get(code);
-            int cap = (nodo != null && nodo.capacity > 0) ? nodo.capacity : -1;
+            String code = (nodeIdx < nodoPorIndice.length) ? nodoPorIndice[nodeIdx] : "?";
+            Nodo nodo   = grafo.nodos.get(code);
+            int cap = (nodo != null && nodo.capacidad > 0) ? nodo.capacidad : -1;
             long[] s = porAero.computeIfAbsent(code, k -> new long[2]);
             s[0] += asignado;
             if (cap > 0) {
@@ -1415,68 +1415,68 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     }
 
     public static final class RutaCandidata {
-        private final List<Arista> edges;
-        private final List<Long> actualDepartures;
+        private final List<Arista> aristas;
+        private final List<Long> salidasReales;
         private final boolean cumpleSLA;
         private final long arrivalMin;
         private final long transitMin;
         private final long slackMin;
         private final double pressure;
-        private final double scarcityCost;
-        private String signatureCache;
+        private final double costoEscasez;
+        private String cacheFirma;
 
         private RutaCandidata(List<Arista> edges,
-                               List<Long> actualDepartures,
+                               List<Long> salidasReales,
                                boolean cumpleSLA,
                                long arrivalMin,
                                long transitMin,
                                long slackMin,
                                double pressure,
-                               double scarcityCost) {
-            this.edges = List.copyOf(edges);
-            this.actualDepartures = List.copyOf(actualDepartures);
+                               double costoEscasez) {
+            this.aristas = List.copyOf(edges);
+            this.salidasReales = List.copyOf(salidasReales);
             this.cumpleSLA = cumpleSLA;
             this.arrivalMin = arrivalMin;
             this.transitMin = transitMin;
             this.slackMin = slackMin;
             this.pressure = pressure;
-            this.scarcityCost = scarcityCost;
+            this.costoEscasez = costoEscasez;
         }
 
-        public List<Arista> getEdges() { return edges; }
-        public List<Long> getActualDepartures() { return actualDepartures; }
+        public List<Arista> getAristas() { return aristas; }
+        public List<Long> getSalidasReales() { return salidasReales; }
         public boolean isCumpleSLA() { return cumpleSLA; }
-        public long getArrivalMin() { return arrivalMin; }
-        public long getTransitMin() { return transitMin; }
-        public long getSlackMin() { return slackMin; }
-        public double getPressure() { return pressure; }
-        public double getScarcityCost() { return scarcityCost; }
-        public int getLegs() { return edges.size(); }
+        public long getLlegadaMin() { return arrivalMin; }
+        public long getTransitoMin() { return transitMin; }
+        public long getHolguraMin() { return slackMin; }
+        public double getPresion() { return pressure; }
+        public double getCostoEscasez() { return costoEscasez; }
+        public int getTramos() { return aristas.size(); }
 
         public String signature() {
-            String cached = signatureCache;
+            String cached = cacheFirma;
             if (cached != null) return cached;
-            StringBuilder sb = new StringBuilder(edges.size() * 12);
-            for (int i = 0; i < edges.size(); i++) {
-                sb.append(edges.get(i).idx).append('@').append(actualDepartures.get(i)).append(';');
+            StringBuilder sb = new StringBuilder(aristas.size() * 12);
+            for (int i = 0; i < aristas.size(); i++) {
+                sb.append(aristas.get(i).indice).append('@').append(salidasReales.get(i)).append(';');
             }
             cached = sb.toString();
-            signatureCache = cached;
+            cacheFirma = cached;
             return cached;
         }
     }
 
     private static class ResultadoRuta {
-        final List<Arista> edges;
-        final List<Long> actualDepartures;
+        final List<Arista> aristas;
+        final List<Long> salidasReales;
         final boolean    cumpleSLA;
 
         static final ResultadoRuta EMPTY =
                 new ResultadoRuta(Collections.emptyList(), Collections.emptyList(), false);
 
-        ResultadoRuta(List<Arista> edges, List<Long> actualDepartures, boolean cumpleSLA) {
-            this.edges            = edges;
-            this.actualDepartures = actualDepartures;
+        ResultadoRuta(List<Arista> edges, List<Long> salidasReales, boolean cumpleSLA) {
+            this.aristas            = edges;
+            this.salidasReales = salidasReales;
             this.cumpleSLA        = cumpleSLA;
         }
     }

@@ -5,25 +5,25 @@ import java.util.List;
 
 public class SolucionAlns {
 
-    private List<LoteEnvio> batches;
+    private List<LoteEnvio> lotes;
 
     private double pesoTransit    = 1.0;
     private double pesoTarde      = 5000.0;
     private double pesoUsoAlmacen = 0.0;   // 0 = desactivado
 
-    public SolucionAlns(List<LoteEnvio> batches) {
-        this.batches = batches;
+    public SolucionAlns(List<LoteEnvio> lotes) {
+        this.lotes = lotes;
     }
 
-    public SolucionAlns(List<LoteEnvio> batches, double pesoTransit, double pesoTarde) {
-        this.batches      = batches;
+    public SolucionAlns(List<LoteEnvio> lotes, double pesoTransit, double pesoTarde) {
+        this.lotes        = lotes;
         this.pesoTransit  = pesoTransit;
         this.pesoTarde    = pesoTarde;
     }
 
-    public SolucionAlns(List<LoteEnvio> batches,
+    public SolucionAlns(List<LoteEnvio> lotes,
                         double pesoTransit, double pesoTarde, double pesoUsoAlmacen) {
-        this.batches        = batches;
+        this.lotes          = lotes;
         this.pesoTransit    = pesoTransit;
         this.pesoTarde      = pesoTarde;
         this.pesoUsoAlmacen = pesoUsoAlmacen;
@@ -38,37 +38,37 @@ public class SolucionAlns {
         this.pesoUsoAlmacen = pesoUsoAlmacen;
     }
 
-    public double calculateCost() {
+    public double calcularCosto() {
         double totalCost = 0.0;
-        for (LoteEnvio batch : batches) {
-            double transitTime = batch.getTotalTransitTimeMins();
+        for (LoteEnvio batch : lotes) {
+            double transitTime = batch.getTiempoTransitoTotalMin();
             totalCost += pesoTransit * transitTime;
 
             // Penalización fija si supera el SLA (24h o 48h).
-            if (transitTime > batch.getSlaLimitHours() * 60) {
+            if (transitTime > batch.getHorasLimiteSla() * 60) {
                 totalCost += pesoTarde;
             }
 
             // Penalización por uso de almacén: # escalas intermedias × cantidad.
-            if (pesoUsoAlmacen > 0 && batch.getAssignedRoute() != null
-                    && batch.getAssignedRoute().size() > 1) {
-                int escalas = batch.getAssignedRoute().size() - 1;
-                totalCost += pesoUsoAlmacen * escalas * batch.getQuantity();
+            if (pesoUsoAlmacen > 0 && batch.getRutaAsignada() != null
+                    && batch.getRutaAsignada().size() > 1) {
+                int escalas = batch.getRutaAsignada().size() - 1;
+                totalCost += pesoUsoAlmacen * escalas * batch.getCantidad();
             }
         }
         return totalCost;
     }
 
-    public SolucionAlns cloneSolution() {
+    public SolucionAlns clonar() {
         List<LoteEnvio> clonedBatches = new ArrayList<>();
-        for (LoteEnvio b : this.batches) {
-            clonedBatches.add(b.cloneBatch());
+        for (LoteEnvio b : this.lotes) {
+            clonedBatches.add(b.clonar());
         }
         SolucionAlns clon = new SolucionAlns(clonedBatches, pesoTransit, pesoTarde, pesoUsoAlmacen);
         return clon;
     }
 
-    public List<LoteEnvio> getBatches() {
-        return batches;
+    public List<LoteEnvio> getLotes() {
+        return lotes;
     }
 }

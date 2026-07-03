@@ -11,13 +11,13 @@ public class OperadorDestruccionPeorRuta implements OperadorDestruccion {
     public OperadorDestruccionPeorRuta(Grafo graph) { }
 
     @Override
-    public List<LoteEnvio> destroy(SolucionAlns solution, double factor) {
-        List<LoteEnvio> all    = solution.getBatches();
+    public List<LoteEnvio> destruir(SolucionAlns solution, double factor) {
+        List<LoteEnvio> all    = solution.getLotes();
         int                target = Math.max(1, (int)(all.size() * factor));
 
         return all.stream()
-                .filter(b -> b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty())
-                .sorted(Comparator.comparingDouble(LoteEnvio::getTotalTransitTimeMins).reversed())
+                .filter(b -> b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty())
+                .sorted(Comparator.comparingDouble(LoteEnvio::getTiempoTransitoTotalMin).reversed())
                 .limit(target)
                 .collect(Collectors.toList());
     }

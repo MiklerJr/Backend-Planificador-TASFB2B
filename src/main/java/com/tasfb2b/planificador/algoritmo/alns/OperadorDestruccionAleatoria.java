@@ -14,18 +14,18 @@ public class OperadorDestruccionAleatoria implements OperadorDestruccion {
     public OperadorDestruccionAleatoria(Grafo graph) { }
 
     @Override
-    public void setRandom(Random rng) {
+    public void setAleatorio(Random rng) {
         if (rng != null) this.rng = rng;
     }
 
     @Override
-    public List<LoteEnvio> destroy(SolucionAlns solution, double factor) {
-        List<LoteEnvio> all    = solution.getBatches();
+    public List<LoteEnvio> destruir(SolucionAlns solution, double factor) {
+        List<LoteEnvio> all    = solution.getLotes();
         int                target = Math.max(1, (int)(all.size() * factor));
 
         List<LoteEnvio> candidatos = new ArrayList<>();
         for (LoteEnvio b : all) {
-            if (b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()) {
+            if (b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty()) {
                 candidatos.add(b);
             }
         }

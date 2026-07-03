@@ -15,122 +15,122 @@ import java.util.Random;
 public class AlgoritmoALNS {
 
     // ── Hiperparámetros ──────────────────────────────────────────────────────
-    public double destroyFactor = 0.20;   // fracción de lotes destruidos por iter
-    public double initialTemp   = 500.0;  // temperatura SA inicial
-    public double coolingRate   = 0.85;   // factor de enfriamiento por iteración
-    public double minTemp       = 0.1;    // temperatura mínima (parada anticipada)
-    public int    minBlockSize  = 3;      // bloques menores no ejecutan ALNS
-    public int    segmentLength = 3;      // iters entre actualizaciones de pesos
+    public double factorDestruccion = 0.20;   // fracción de lotes destruidos por iter
+    public double tempInicial       = 500.0;  // temperatura SA inicial
+    public double tasaEnfriamiento  = 0.85;   // factor de enfriamiento por iteración
+    public double tempMinima        = 0.1;    // temperatura mínima (parada anticipada)
+    public int    tamañoMinBloque   = 3;      // bloques menores no ejecutan ALNS
+    public int    longitudSegmento  = 3;      // iters entre actualizaciones de pesos
 
     public long   tiempoLimiteMs = Long.MAX_VALUE;
 
     // ── Parámetros adaptativos (Ropke & Pisinger 2006) ───────────────────────
-    private static final double REWARD_NEW_BEST    = 3.0;
-    private static final double REWARD_IMPROVEMENT = 2.0;
-    private static final double REWARD_ACCEPTED    = 1.0;
-    private static final double REACTION_FACTOR    = 0.15; // r ∈ (0,1]
+    private static final double RECOMPENSA_NUEVO_MEJOR = 3.0;
+    private static final double RECOMPENSA_MEJORA      = 2.0;
+    private static final double RECOMPENSA_ACEPTADO    = 1.0;
+    private static final double FACTOR_REACCION        = 0.15; // r ∈ (0,1]
 
     // ── Estado del algoritmo ─────────────────────────────────────────────────
-    private final Grafo                  graph;
+    private final Grafo                  grafo;
     private final OperadorReparacionVoraz   enrutador;
-    private final List<OperadorDestruccion>  destroyOps;
+    private final List<OperadorDestruccion>  operadoresDestruccion;
 
-    // Pesos adaptativos: un elemento por operador de destroy
-    private final double[] weights;
-    private final double[] scores;  // acumulado en el segmento actual
-    private final int[]    uses;    // usos en el segmento actual
+    // Pesos adaptativos: un elemento por operador de destruir
+    private final double[] pesos;
+    private final double[] puntajes;  // acumulado en el segmento actual
+    private final int[]    usos;    // usos en el segmento actual
 
-    private SolucionAlns     currentSolution;
-    private SolucionAlns     bestSolution;
-    private Map<Long,Integer> currentFlight;
-    private Map<Long,Integer> currentAirport;
-    private Map<Long,Integer> bestFlight;
-    private Map<Long,Integer> bestAirport;
+    private SolucionAlns     solucionActual;
+    private SolucionAlns     mejorSolucion;
+    private Map<Long,Integer> vueloActual;
+    private Map<Long,Integer> aeropuertoActual;
+    private Map<Long,Integer> mejorVuelo;
+    private Map<Long,Integer> mejorAeropuerto;
 
-    private double temperature;
+    private double temperatura;
 
     private Random rng = new Random();
 
-    public void setRandom(Random rng) {
+    public void setAleatorio(Random rng) {
         if (rng == null) return;
         this.rng = rng;
-        if (destroyOps != null) {
-            for (OperadorDestruccion op : destroyOps) op.setRandom(rng);
+        if (operadoresDestruccion != null) {
+            for (OperadorDestruccion op : operadoresDestruccion) op.setAleatorio(rng);
         }
     }
 
     // ────────────────────────────────────────────────────────────────────────
 
-    public AlgoritmoALNS(Grafo graph,
+    public AlgoritmoALNS(Grafo grafo,
                           OperadorReparacionVoraz enrutador,
                           List<LoteEnvio> batches,
                           Map<Long,Integer> blockFlight,
                           Map<Long,Integer> blockAirport) {
-        this(graph, enrutador, batches, blockFlight, blockAirport, null);
+        this(grafo, enrutador, batches, blockFlight, blockAirport, null);
     }
 
-    public AlgoritmoALNS(Grafo graph,
+    public AlgoritmoALNS(Grafo grafo,
                           OperadorReparacionVoraz enrutador,
                           List<LoteEnvio> batches,
                           Map<Long,Integer> blockFlight,
                           Map<Long,Integer> blockAirport,
                           PlanificadorProperties props) {
-        // 1. Aplicar config externa si está disponible (antes de usar initialTemp).
+        // 1. Aplicar config externa si está disponible (antes de usar tempInicial).
         if (props != null) {
             PlanificadorProperties.Alns a = props.getAlns();
-            this.destroyFactor  = a.getDestroyFactor();
-            this.initialTemp    = a.getInitialTemp();
-            this.coolingRate    = a.getCoolingRate();
-            this.minTemp        = a.getMinTemp();
-            this.minBlockSize   = a.getMinBlockSize();
-            this.segmentLength  = a.getSegmentLength();
+            this.factorDestruccion = a.getDestroyFactor();
+            this.tempInicial       = a.getInitialTemp();
+            this.tasaEnfriamiento  = a.getCoolingRate();
+            this.tempMinima        = a.getMinTemp();
+            this.tamañoMinBloque   = a.getMinBlockSize();
+            this.longitudSegmento  = a.getSegmentLength();
         }
 
-        this.graph       = graph;
+        this.grafo       = grafo;
         this.enrutador   = enrutador;
-        this.temperature = initialTemp;
+        this.temperatura = tempInicial;
 
         if (props != null && props.getAlns().getOperadoresDestroy() != null
                 && !props.getAlns().getOperadoresDestroy().isEmpty()) {
-            this.destroyOps = construirOperadoresDestroy(props.getAlns().getOperadoresDestroy(), graph);
+            this.operadoresDestruccion = construirOperadoresDestruccion(props.getAlns().getOperadoresDestroy(), grafo);
         } else {
-            this.destroyOps = List.of(
-                    new OperadorDestruccionCapacidad(graph),
-                    new OperadorDestruccionPeorRuta(graph)
+            this.operadoresDestruccion = List.of(
+                    new OperadorDestruccionCapacidad(grafo),
+                    new OperadorDestruccionPeorRuta(grafo)
             );
         }
 
-        int n = destroyOps.size();
-        this.weights = new double[n];
-        this.scores  = new double[n];
-        this.uses    = new int[n];
-        Arrays.fill(weights, 1.0);
+        int n = operadoresDestruccion.size();
+        this.pesos    = new double[n];
+        this.puntajes = new double[n];
+        this.usos     = new int[n];
+        Arrays.fill(pesos, 1.0);
 
         if (props != null) {
-            this.currentSolution = new SolucionAlns(batches,
+            this.solucionActual = new SolucionAlns(batches,
                     props.getObjetivo().getPesoTransit(),
                     props.getObjetivo().getPesoTarde(),
                     props.getObjetivo().getPesoUsoAlmacen());
         } else {
-            this.currentSolution = new SolucionAlns(batches);
+            this.solucionActual = new SolucionAlns(batches);
         }
-        this.currentFlight   = new HashMap<>(blockFlight);
-        this.currentAirport  = new HashMap<>(blockAirport);
+        this.vueloActual      = new HashMap<>(blockFlight);
+        this.aeropuertoActual = new HashMap<>(blockAirport);
 
         // La solución greedy es la mejor conocida al arrancar
-        this.bestSolution = currentSolution.cloneSolution();
-        this.bestFlight   = new HashMap<>(currentFlight);
-        this.bestAirport  = new HashMap<>(currentAirport);
+        this.mejorSolucion  = solucionActual.clonar();
+        this.mejorVuelo     = new HashMap<>(vueloActual);
+        this.mejorAeropuerto = new HashMap<>(aeropuertoActual);
     }
 
-    public void run(int maxIterations) {
-        if (currentSolution.getBatches().size() < minBlockSize) return;
+    public void ejecutar(int maxIterations) {
+        if (solucionActual.getLotes().size() < tamañoMinBloque) return;
 
-        double bestCost    = bestSolution.calculateCost();
+        double bestCost    = mejorSolucion.calcularCosto();
         double currentCost = bestCost;
         long   tInicio     = System.nanoTime();
 
-        for (int iter = 0; iter < maxIterations && temperature > minTemp; iter++) {
+        for (int iter = 0; iter < maxIterations && temperatura > tempMinima; iter++) {
 
             // Presupuesto de tiempo: aborta si excede tiempoLimiteMs.
             if (tiempoLimiteMs < Long.MAX_VALUE) {
@@ -144,108 +144,108 @@ public class AlgoritmoALNS {
 
 
             // ── 1. Selección adaptativa (ruleta proporcional a pesos) ────────
-            int selectedIdx = selectDestroyOp();
-            uses[selectedIdx]++;
+            int selectedIdx = seleccionarOperadorDestruccion();
+            usos[selectedIdx]++;
 
             // ── 2. Clonar estado actual ───────────────────────────────────────
-            SolucionAlns     candidate = currentSolution.cloneSolution();
-            Map<Long,Integer> cFlight  = new HashMap<>(currentFlight);
-            Map<Long,Integer> cAirport = new HashMap<>(currentAirport);
+            SolucionAlns     candidate = solucionActual.clonar();
+            Map<Long,Integer> cFlight  = new HashMap<>(vueloActual);
+            Map<Long,Integer> cAirport = new HashMap<>(aeropuertoActual);
 
             // ── 3. Destrucción ────────────────────────────────────────────────
             List<LoteEnvio> unassigned =
-                    destroyOps.get(selectedIdx).destroy(candidate, destroyFactor);
+                    operadoresDestruccion.get(selectedIdx).destruir(candidate, factorDestruccion);
 
             for (LoteEnvio b : unassigned) {
-                enrutador.releaseFromBlock(b, cFlight, cAirport);
-                b.clearRoute();
+                enrutador.liberarDeBloque(b, cFlight, cAirport);
+                b.limpiarRuta();
             }
 
             // ── 4. Reparación ─────────────────────────────────────────────────
-            enrutador.repair(candidate, unassigned, cFlight, cAirport);
+            enrutador.reparar(candidate, unassigned, cFlight, cAirport);
 
             // ── 5. Evaluación y aceptación SA ─────────────────────────────────
-            double candidateCost = candidate.calculateCost();
-            boolean accepted     = accept(currentCost, candidateCost, temperature);
+            double candidateCost = candidate.calcularCosto();
+            boolean accepted     = aceptar(currentCost, candidateCost, temperatura);
 
             // ── 6. Recompensa al operador y actualización de estado ───────────
             double reward = 0;
             if (accepted) {
                 boolean mejora = candidateCost < currentCost;
 
-                currentSolution = candidate;
-                currentFlight   = cFlight;
-                currentAirport  = cAirport;
+                solucionActual  = candidate;
+                vueloActual     = cFlight;
+                aeropuertoActual = cAirport;
                 currentCost     = candidateCost;
 
                 if (candidateCost < bestCost) {
-                    reward       = REWARD_NEW_BEST;
-                    bestSolution = currentSolution.cloneSolution();
-                    bestFlight   = new HashMap<>(currentFlight);
-                    bestAirport  = new HashMap<>(currentAirport);
-                    bestCost     = candidateCost;
+                    reward        = RECOMPENSA_NUEVO_MEJOR;
+                    mejorSolucion = solucionActual.clonar();
+                    mejorVuelo    = new HashMap<>(vueloActual);
+                    mejorAeropuerto = new HashMap<>(aeropuertoActual);
+                    bestCost      = candidateCost;
                 } else if (mejora) {
-                    reward = REWARD_IMPROVEMENT;
+                    reward = RECOMPENSA_MEJORA;
                 } else {
-                    reward = REWARD_ACCEPTED;   // aceptado por SA pero no mejora
+                    reward = RECOMPENSA_ACEPTADO;   // aceptado por SA pero no mejora
                 }
             }
-            scores[selectedIdx] += reward;
+            puntajes[selectedIdx] += reward;
 
             // ── 7. Actualización periódica de pesos adaptativos ───────────────
-            if ((iter + 1) % segmentLength == 0) updateWeights();
+            if ((iter + 1) % longitudSegmento == 0) actualizarPesos();
 
             // ── 8. Enfriamiento ───────────────────────────────────────────────
-            temperature *= coolingRate;
+            temperatura *= tasaEnfriamiento;
         }
     }
 
-    private int selectDestroyOp() {
+    private int seleccionarOperadorDestruccion() {
         double total = 0;
-        for (double w : weights) total += w;
+        for (double w : pesos) total += w;
         double rand = rng.nextDouble() * total;
         double cum  = 0;
-        for (int i = 0; i < weights.length; i++) {
-            cum += weights[i];
+        for (int i = 0; i < pesos.length; i++) {
+            cum += pesos[i];
             if (rand <= cum) return i;
         }
-        return weights.length - 1;
+        return pesos.length - 1;
     }
 
-    private void updateWeights() {
-        for (int i = 0; i < weights.length; i++) {
-            if (uses[i] > 0)
-                weights[i] = (1 - REACTION_FACTOR) * weights[i]
-                           + REACTION_FACTOR * (scores[i] / uses[i]);
-            scores[i] = 0;
-            uses[i]   = 0;
+    private void actualizarPesos() {
+        for (int i = 0; i < pesos.length; i++) {
+            if (usos[i] > 0)
+                pesos[i] = (1 - FACTOR_REACCION) * pesos[i]
+                           + FACTOR_REACCION * (puntajes[i] / usos[i]);
+            puntajes[i] = 0;
+            usos[i]   = 0;
         }
     }
 
-    private boolean accept(double current, double candidate, double temp) {
+    private boolean aceptar(double current, double candidate, double temp) {
         if (candidate <= current) return true;
         return rng.nextDouble() < Math.exp((current - candidate) / temp);
     }
 
-    public SolucionAlns      getBestSolution()     { return bestSolution; }
-    public Map<Long,Integer> getBestBlockFlight()  { return bestFlight;   }
-    public Map<Long,Integer> getBestBlockAirport() { return bestAirport;  }
+    public SolucionAlns      getMejorSolucion()      { return mejorSolucion; }
+    public Map<Long,Integer> getMejorBloqueVuelo()   { return mejorVuelo;   }
+    public Map<Long,Integer> getMejorBloqueAeropuerto() { return mejorAeropuerto;  }
 
-    private static List<OperadorDestruccion> construirOperadoresDestroy(List<String> nombres, Grafo graph) {
+    private static List<OperadorDestruccion> construirOperadoresDestruccion(List<String> nombres, Grafo grafo) {
         java.util.ArrayList<OperadorDestruccion> ops = new java.util.ArrayList<>(nombres.size());
         for (String n : nombres) {
             switch (n.toLowerCase().trim()) {
-                case "capacity"           -> ops.add(new OperadorDestruccionCapacidad(graph));
-                case "worst-route"        -> ops.add(new OperadorDestruccionPeorRuta(graph));
-                case "random"             -> ops.add(new OperadorDestruccionAleatoria(graph));
-                case "airport-congestion" -> ops.add(new OperadorDestruccionCongestionAeropuerto(graph));
-                default -> log.warn("Operador destroy desconocido en config: '{}' (ignorado)", n);
+                case "capacity"           -> ops.add(new OperadorDestruccionCapacidad(grafo));
+                case "worst-route"        -> ops.add(new OperadorDestruccionPeorRuta(grafo));
+                case "random"             -> ops.add(new OperadorDestruccionAleatoria(grafo));
+                case "airport-congestion" -> ops.add(new OperadorDestruccionCongestionAeropuerto(grafo));
+                default -> log.warn("Operador destruir desconocido en config: '{}' (ignorado)", n);
             }
         }
         if (ops.isEmpty()) {
-            log.warn("Lista de operadores destroy vacía tras parseo — usando defaults");
-            ops.add(new OperadorDestruccionCapacidad(graph));
-            ops.add(new OperadorDestruccionPeorRuta(graph));
+            log.warn("Lista de operadores destruir vacía tras parseo — usando defaults");
+            ops.add(new OperadorDestruccionCapacidad(grafo));
+            ops.add(new OperadorDestruccionPeorRuta(grafo));
         }
         return ops;
     }

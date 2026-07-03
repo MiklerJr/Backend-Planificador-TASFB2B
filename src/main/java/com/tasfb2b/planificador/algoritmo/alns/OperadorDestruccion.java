@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Random;
 
 public interface OperadorDestruccion {
-    List<LoteEnvio> destroy(SolucionAlns solution, double factor);
+    List<LoteEnvio> destruir(SolucionAlns solution, double factor);
 
-    default void setRandom(Random rng) {}
+    default void setAleatorio(Random rng) {}
 }

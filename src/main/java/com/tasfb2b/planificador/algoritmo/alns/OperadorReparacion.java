@@ -5,6 +5,6 @@ import java.util.Map;
 
 public interface OperadorReparacion {
 
-    void repair(SolucionAlns solution, List<LoteEnvio> unassigned,
+    void reparar(SolucionAlns solution, List<LoteEnvio> unassigned,
                 Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport);
 }

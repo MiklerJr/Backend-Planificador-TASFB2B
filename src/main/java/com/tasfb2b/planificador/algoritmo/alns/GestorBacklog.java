@@ -18,33 +18,33 @@ public class GestorBacklog {
     private final Deque<LoteEnvio> replanificables = new ArrayDeque<>();
     private int     sinRutaDefinitivo = 0;
     private int     picoHistorico     = 0;
-    private final int     maxSize;
+    private final int     tamañoMax;
     private final boolean purgarVencidas;
-    private final Consumer<LoteEnvio> onDescarte;
+    private final Consumer<LoteEnvio> alDescartar;
 
-    public GestorBacklog(int maxSize, boolean purgarVencidas) {
-        this(maxSize, purgarVencidas, null);
+    public GestorBacklog(int tamañoMax, boolean purgarVencidas) {
+        this(tamañoMax, purgarVencidas, null);
     }
 
-    public GestorBacklog(int maxSize, boolean purgarVencidas, Consumer<LoteEnvio> onDescarte) {
-        this.maxSize        = Math.max(0, maxSize);
+    public GestorBacklog(int tamañoMax, boolean purgarVencidas, Consumer<LoteEnvio> alDescartar) {
+        this.tamañoMax      = Math.max(0, tamañoMax);
         this.purgarVencidas = purgarVencidas;
-        this.onDescarte     = onDescarte;
+        this.alDescartar    = alDescartar;
     }
 
-    public void addSinRuta(LoteEnvio batch) {
+    public void agregarSinRuta(LoteEnvio batch) {
         sinRuta.addLast(batch);
         actualizarPico();
         aplicarTope();
     }
 
-    public void addReplanificable(LoteEnvio batch) {
+    public void agregarReplanificable(LoteEnvio batch) {
         replanificables.addLast(batch);
         actualizarPico();
         aplicarTope();
     }
 
-    public List<LoteEnvio> pollPendientes() {
+    public List<LoteEnvio> sacarPendientes() {
         if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
         List<LoteEnvio> result = new ArrayList<>(sinRuta.size() + replanificables.size());
         result.addAll(sinRuta);
@@ -54,7 +54,7 @@ public class GestorBacklog {
         return result;
     }
 
-    public List<LoteEnvio> peekPendientes() {
+    public List<LoteEnvio> verPendientes() {
         if (sinRuta.isEmpty() && replanificables.isEmpty()) return List.of();
         List<LoteEnvio> result = new ArrayList<>(sinRuta.size() + replanificables.size());
         result.addAll(sinRuta);
@@ -62,9 +62,9 @@ public class GestorBacklog {
         return result;
     }
 
-    public List<LoteEnvio> pollPendientes(int max) {
+    public List<LoteEnvio> sacarPendientes(int max) {
         if (max <= 0) return List.of();
-        List<LoteEnvio> result = new ArrayList<>(Math.min(max, size()));
+        List<LoteEnvio> result = new ArrayList<>(Math.min(max, tamaño()));
         // Prioridad: sinRuta primero (críticos), luego replanificables.
         while (!sinRuta.isEmpty() && result.size() < max) {
             result.add(sinRuta.pollFirst());
@@ -75,10 +75,10 @@ public class GestorBacklog {
         return result;
     }
 
-    public List<LoteEnvio> pollPendientesUrgentes(int max) {
+    public List<LoteEnvio> sacarPendientesUrgentes(int max) {
         int total = sinRuta.size() + replanificables.size();
         if (max <= 0 || max >= total) {
-            return pollPendientes();
+            return sacarPendientes();
         }
         List<LoteEnvio> todos = new ArrayList<>(total);
         todos.addAll(sinRuta);
@@ -86,7 +86,7 @@ public class GestorBacklog {
         sinRuta.clear();
         replanificables.clear();
         todos.sort(Comparator.comparing(
-                b -> b.getReadyTime().plusHours(b.getSlaLimitHours())));
+                b -> b.getTiempoListo().plusHours(b.getHorasLimiteSla())));
         List<LoteEnvio> out = new ArrayList<>(todos.subList(0, max));
         // Re-encolar los menos urgentes (ya ordenados por deadline) para el próximo bloque.
         for (int i = max; i < todos.size(); i++) {
@@ -109,7 +109,7 @@ public class GestorBacklog {
         Iterator<LoteEnvio> it = deque.iterator();
         while (it.hasNext()) {
             LoteEnvio b = it.next();
-            LocalDateTime deadline = b.getReadyTime().plusHours(b.getSlaLimitHours());
+            LocalDateTime deadline = b.getTiempoListo().plusHours(b.getHorasLimiteSla());
             if (deadline.isBefore(scNow)) {
                 it.remove();
                 if (descartarDefinitivamente(b)) count++;
@@ -119,8 +119,8 @@ public class GestorBacklog {
     }
 
     private void aplicarTope() {
-        if (maxSize <= 0) return;
-        while (sinRuta.size() + replanificables.size() > maxSize) {
+        if (tamañoMax <= 0) return;
+        while (sinRuta.size() + replanificables.size() > tamañoMax) {
             LoteEnvio b;
             if (!sinRuta.isEmpty())              b = sinRuta.pollFirst();
             else if (!replanificables.isEmpty()) b = replanificables.pollFirst();
@@ -130,8 +130,8 @@ public class GestorBacklog {
     }
 
     private boolean descartarDefinitivamente(LoteEnvio b) {
-        if (onDescarte != null) onDescarte.accept(b);
-        return b.getAssignedRoute() == null || b.getAssignedRoute().isEmpty();
+        if (alDescartar != null) alDescartar.accept(b);
+        return b.getRutaAsignada() == null || b.getRutaAsignada().isEmpty();
     }
 
     private void actualizarPico() {
@@ -139,9 +139,9 @@ public class GestorBacklog {
         if (total > picoHistorico) picoHistorico = total;
     }
 
-    public int     size()              { return sinRuta.size() + replanificables.size(); }
-    public int     sinRutaCount()      { return sinRuta.size(); }
-    public int     replanificablesCount() { return replanificables.size(); }
+    public int     tamaño()             { return sinRuta.size() + replanificables.size(); }
+    public int     conteoSinRuta()      { return sinRuta.size(); }
+    public int     conteoReplanificables() { return replanificables.size(); }
     public int     sinRutaDefinitivo() { return sinRutaDefinitivo; }
     public int     picoHistorico()     { return picoHistorico; }
 }
