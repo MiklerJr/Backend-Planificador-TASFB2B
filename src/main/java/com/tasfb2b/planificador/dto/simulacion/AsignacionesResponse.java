@@ -12,6 +12,7 @@ public class AsignacionesResponse {
     private String vueloId;
     private boolean soloEnrutadas;
     private int total;
+    private int primerBloqueDisponible;
     private List<AsignacionItem> asignaciones;
 
     @Data

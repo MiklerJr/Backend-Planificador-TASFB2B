@@ -67,6 +67,39 @@ public class ConsultaJobsService {
         return jobs.get(jobId);
     }
 
+    /** Reenganche: el job en curso (a lo sumo uno ejecuta a la vez) o, si solo hay
+     *  encolados, el más antiguo (el próximo a ejecutar). Sin jobs activos ⇒ activo=false. */
+    public JobActivoResponse getJobActivo() {
+        JobActivoResponse body = new JobActivoResponse();
+        List<EstadoJob> activos = jobs.listarActivos();   // ordenados por inicio ascendente
+        EstadoJob elegido = null;
+        for (EstadoJob j : activos) {
+            if ("ejecutando".equals(j.estado) || "calentando".equals(j.estado)) {
+                elegido = j;
+                break;
+            }
+        }
+        if (elegido == null && !activos.isEmpty()) elegido = activos.get(0);
+        if (elegido == null) {
+            body.setActivo(false);
+            return body;
+        }
+        body.setActivo(true);
+        body.setJobId(elegido.getJobId());
+        body.setEscenario(elegido.getEscenario());
+        body.setAlgoritmo(elegido.algoritmo);
+        body.setEstado(elegido.estado);
+        body.setEnVivo(elegido.enVivo);
+        body.setProgreso(elegido.getProgreso());
+        body.setTotalBloques(elegido.bloquesPublicados());
+        body.setPrimerBloqueDisponible(elegido.primerBloqueDisponible());
+        if (elegido.primerBloqueRealMs != null) {
+            body.setTemporizadorInicioUtc(java.time.Instant.ofEpochMilli(elegido.primerBloqueRealMs).toString());
+        }
+        body.setDuracionRealMs(elegido.getDuracionRealMs());
+        return body;
+    }
+
     public TableroResponse getTableroJob(String jobId) {
         EstadoJob job = getJob(jobId);
         if (job == null) return null;
@@ -244,7 +277,7 @@ public class ConsultaJobsService {
         String vueloNorm = normalizarTexto(vueloId);
         List<AsignacionesResponse.AsignacionItem> asignaciones = new ArrayList<>();
 
-        for (BloqueSimulacion bloque : job.bloquesDesde(desde)) {
+        for (BloqueSimulacion bloque : job.bloquesDesdeExacto(desde)) {   // desde purgado ⇒ vacío
             if (bloque.getAsignaciones() == null) continue;
             for (AsignacionMaleta asignacion : bloque.getAsignaciones()) {
                 if (soloEnrutadas && !asignacion.isEnrutada()) continue;
@@ -267,6 +300,7 @@ public class ConsultaJobsService {
         body.setVueloId(vueloNorm);
         body.setSoloEnrutadas(soloEnrutadas);
         body.setTotal(asignaciones.size());
+        body.setPrimerBloqueDisponible(job.primerBloqueDisponible());
         body.setAsignaciones(asignaciones);
         return body;
     }

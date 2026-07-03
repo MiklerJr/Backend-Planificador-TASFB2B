@@ -37,6 +37,11 @@ public class ConsultaJobsController {
         return ResponseEntity.ok(service.listarJobsResponse(activos));
     }
 
+    @GetMapping("/jobs/activo")
+    public ResponseEntity<JobActivoResponse> jobActivo() {
+        return ResponseEntity.ok(jobQuery.getJobActivo());
+    }
+
     @GetMapping("/jobs/{jobId}/estado-inicial")
     public ResponseEntity<EstadoInicialResponse> estadoInicialJob(@PathVariable String jobId) {
         EstadoJob job = service.getJob(jobId);
@@ -147,8 +152,11 @@ public class ConsultaJobsController {
         if (job == null) return ResponseEntity.notFound().build();
 
         Map<String, Object> body = new HashMap<>();
-        body.put("bloques",   job.bloquesDesde(desde));
+        body.put("bloques",   job.bloquesDesdeExacto(desde));   // desde purgado ⇒ vacío, no bloques viejos
         body.put("total",     job.bloquesPublicados());
+        body.put("primerBloqueDisponible", job.primerBloqueDisponible());
+        Long duracionRealMs = job.getDuracionRealMs();
+        if (duracionRealMs != null) body.put("duracionRealMs", duracionRealMs);
         body.put("terminado", !"encolado".equals(job.estado)
                            && !"calentando".equals(job.estado)
                            && !"ejecutando".equals(job.estado));

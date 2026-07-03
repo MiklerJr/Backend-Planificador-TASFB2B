@@ -279,6 +279,27 @@ Lista de jobs en memoria (por defecto solo activos). Para re-enganchar tras un r
 > simulación. El front lo usa para auto-detectar la operación en curso tras un refresh; si por lo que
 > fuera no llegara, cae a filtrar por `escenario === "1"` activo (menos preciso).
 
+### `GET /jobs/activo` — **reenganche en un solo round-trip (F5 / cliente nuevo)**
+El backend alimenta a varias páginas/usuarios con la misma simulación: al cargar la página (F5 o una
+computadora nueva) el front llama **primero** aquí. Devuelve **siempre 200**: el job en curso (a lo
+sumo hay uno ejecutando; si solo hay encolados, el próximo a ejecutar) o `activo=false`.
+```json
+{ "activo": true, "jobId": "...", "escenario": "2", "algoritmo": "aco", "estado": "ejecutando",
+  "enVivo": false, "progreso": 0.35, "totalBloques": 100, "primerBloqueDisponible": 65,
+  "temporizadorInicioUtc": "2026-07-03T15:02:11Z", "duracionRealMs": 754000 }
+```
+Sin simulación en curso: `{ "activo": false }` (el resto de campos se omite).
+> **Flujo de reenganche recomendado:** si `activo`, pintar el estado actual con `/dashboard` +
+> `/indicadores` (+ `/estado-inicial` si aplica) y arrancar el polling de `/bloques` **con
+> `desde = totalBloques`** — así el mapa retoma en la punta y nunca pide el rango ya purgado del
+> buffer (ver `/bloques`). **NO** arrancar con `desde=0` tras un refresh en una corrida larga.
+>
+> **`temporizadorInicioUtc` / `duracionRealMs`** — temporizador REAL de la simulación, almacenado en
+> el backend para que todos los clientes vean el mismo valor: arranca al publicarse el **primer
+> bloque** y `duracionRealMs` (lo calcula el servidor en cada respuesta) se congela al terminar el
+> job. El front solo lo formatea (754000 ⇒ `12:34`) y puede hacerlo avanzar localmente entre polls,
+> re-sincronizando con cada respuesta. `null`/omitidos mientras no haya primer bloque.
+
 ### `GET /jobs/{jobId}/estado`
 Estado y progreso. **Incluye `alertaColapso`** (ver §7) cuando existe.
 ```json
@@ -287,6 +308,7 @@ Estado y progreso. **Incluye `alertaColapso`** (ver §7) cuando existe.
   "estado":"ejecutando", "bloqueActual":42, "totalBloques":120, "progreso":0.35,
   "bloqueWarmup":0, "totalBloquesWarmup":0, "progresoWarmup":0.0,
   "posicionEnCola":0, "canceladoPorUsuario":false, "taPromedioMs":10000,
+  "temporizadorInicioUtc":"2026-07-03T15:02:11Z", "duracionRealMs":754000,
   "inicio":"2026-06-08T20:46:24", "fin":null, "error":null,
   "alertaColapso": { "nivel":"AMBAR", "mensaje":"almacén SEQM al 88% de capacidad", "bloque":42, ... },
   "vuelosCancelados": [ { "origen":"SKBO", "destino":"SEQM",
@@ -311,6 +333,10 @@ Estado y progreso. **Incluye `alertaColapso`** (ver §7) cuando existe.
 > `enviosInyectados` lista los envíos agregados **EN VIVO** ya aplicados (registro manual, carga TXT o
 > inyección), en orden de entrada, con su id sintético `INV-bloque-n`, `readyTimeUtc` (UTC) y —en la
 > operación E1— `registrador`/`sede`. Es el registro operativo del día a día.
+>
+> `temporizadorInicioUtc`/`duracionRealMs` — el temporizador real de la simulación (mismos campos y
+> semántica que en `GET /jobs/activo`): arranca con el primer bloque publicado, lo calcula el
+> servidor y se congela al terminar. Omitidos mientras no haya primer bloque.
 
 ### `GET /jobs/{jobId}/estado-inicial` — **aviones ya en el aire al inicio (jobs con warm-up)**
 Snapshot del estado al llegar a `fechaInicio` tras el pre-cálculo (E1/E3 con `fechaInicio`):
@@ -329,10 +355,23 @@ escala o con tramos aún por salir — con sus `tramos[]` UTC completos.
 ### `GET /jobs/{jobId}/bloques?desde=N` — **stream incremental (clave para dibujar)**
 Devuelve los bloques publicados desde el índice `N`.
 ```json
-{ "bloques": [ /* BloqueSimulacion[] */ ], "total": 43, "terminado": false }
+{ "bloques": [ /* BloqueSimulacion[] */ ], "total": 43, "primerBloqueDisponible": 8,
+  "duracionRealMs": 754000, "terminado": false }
 ```
 `terminado` = el job ya no está `encolado`/`calentando`/`ejecutando`. Patrón: guardar `total`
 recibido y volver a pedir con `desde = total`.
+> **`desde` purgado ⇒ `bloques: []` (cambio anti-desincronización).** Los bloques viejos se purgan
+> del buffer en RAM (`max-bloques-buffer`); `primerBloqueDisponible` indica el índice del primer
+> bloque aún retenido. Si `desde < primerBloqueDisponible`, el backend devuelve `bloques` **vacío**
+> — ya **NO** realinea en silencio ni suelta la ventana retenida (eso hacía que un front que
+> recargaba con `desde=0` animara bloques históricos mezclados con los nuevos). **Resync del
+> cliente:** si `bloques` llega vacío y `desde < primerBloqueDisponible`, saltar a la punta con
+> `desde = total` (o `desde = primerBloqueDisponible` si se quiere repintar la ventana retenida,
+> a sabiendas de que son bloques pasados). Cada `BloqueSimulacion` trae su `bloqueIdx` absoluto:
+> úsalo para verificar continuidad en vez de contar respuestas.
+>
+> `duracionRealMs` = temporizador real de la simulación (ver `GET /jobs/activo`); viene en cada poll
+> para que las páginas del mapa lo mantengan al día sin llamadas extra. Omitido hasta el primer bloque.
 
 ### `GET /jobs/{jobId}/alerta-colapso`
 Alerta de colapso **inminente** (pre-colapso). Siempre responde (VERDE si no hay riesgo). Ver §7.
@@ -397,11 +436,14 @@ modelo interno — para actualizar en vivo las maletas de cada almacén mientras
 animación recorre el bloque. Una serie por bloque publicado; misma paginación que `/bloques`
 (`desde` = índice de bloque; patrón: `desde = total` recibido).
 ```json
-{ "jobId":"...", "desde":0, "total":43, "terminado":false,
+{ "jobId":"...", "desde":0, "total":43, "primeraSerieDisponible":8, "terminado":false,
   "series": [ { "bloqueIdx":0, "slots": [
       { "aeropuerto":"SEQM", "hora":"2026-01-02T13:00", "capacidadMaxima":430,
         "ocupacion":117, "porcentajeOcupacion":27.2, "semaforo":"VERDE" } ] } ] }
 ```
+> **`desde` purgado ⇒ `series: []`** — misma semántica y mismo patrón de resync que `/bloques`
+> (`primeraSerieDisponible` = primer índice retenido; si `desde` cae antes, la respuesta va vacía
+> en vez de realinear y mal-etiquetar `bloqueIdx`).
 - `hora` = inicio del slot (UTC); el slot cubre `[hora, hora+60min)`. Mientras el reloj de
   animación esté dentro del slot, mostrar esa `ocupacion`.
 - `ocupacion` = maletas presentes **a la vez** en ese slot, ACUMULADO vigente (estadías de
@@ -436,6 +478,7 @@ animación recorre el bloque. Una serie por bloque publicado; misma paginación 
 Asignaciones por envío con filtros opcionales. **Stream INCREMENTAL** (mismo patrón que `/bloques`).
 ```json
 { "jobId","desde":0,"aeropuerto":null,"vueloId":null,"soloEnrutadas":false,"total":N,
+  "primerBloqueDisponible":8,
   "asignaciones": [ { "bloqueIdx","horaInicio","horaFin","asignacion": AsignacionMaleta } ] }
 ```
 > **Consumo INCREMENTAL (importante).** `desde` es un **índice de bloque**: devuelve las asignaciones
@@ -447,8 +490,9 @@ Asignaciones por envío con filtros opcionales. **Stream INCREMENTAL** (mismo pa
 > - **Ventana de retención:** las asignaciones **y los bloques** se conservan en RAM solo para los
 >   **últimos N bloques** (configurable, `planificador.scenario.max-bloques-buffer`); los más viejos se
 >   **purgan** (para sostener corridas del dataset completo sin agotar memoria). Pedir un `desde` ya
->   purgado —o `desde=0` tras recargar en una corrida larga— devuelve esos bloques **sin** `asignaciones`
->   (lista vacía), **no** un error.
+>   purgado —p. ej. `desde=0` tras recargar en una corrida larga— devuelve `asignaciones` **vacía**
+>   (no un error), con `primerBloqueDisponible` = primer bloque aún retenido: misma semántica y
+>   mismo patrón de resync que `/bloques` (reengancharse vía `GET /jobs/activo` y retomar en la punta).
 > - Los **agregados derivados** `/vuelos/usados`, `/vuelos/carga` y `/almacenes/ocupacion` son
 >   **paginados**: `/vuelos/usados` por `desde` (tail incremental); `/vuelos/carga` y
 >   `/almacenes/ocupacion` por `desde`/`limit` (recorrer con `proximoDesde` hasta `hayMas=false`).

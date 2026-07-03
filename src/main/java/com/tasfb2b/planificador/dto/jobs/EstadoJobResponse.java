@@ -27,6 +27,10 @@ public class EstadoJobResponse {
     private int posicionEnCola;
     private boolean canceladoPorUsuario;
     private long taPromedioMs;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String temporizadorInicioUtc;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Long duracionRealMs;
     private String inicio;
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String fin;

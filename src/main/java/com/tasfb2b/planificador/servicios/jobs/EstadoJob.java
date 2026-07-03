@@ -60,6 +60,11 @@ public class EstadoJob {
     public final LocalDateTime inicio = LocalDateTime.now();
     public volatile LocalDateTime fin;
 
+    // Desempate estable cuando dos jobs se crean en el mismo instante (inicio empatado).
+    private static final java.util.concurrent.atomic.AtomicLong SECUENCIA_CREACION =
+            new java.util.concurrent.atomic.AtomicLong();
+    public final long ordenCreacion = SECUENCIA_CREACION.incrementAndGet();
+
     public volatile String algoritmo = "alns";
 
     public volatile long seed = 0L;
@@ -74,6 +79,17 @@ public class EstadoJob {
     public void registrarVentanaSimulada(LocalDateTime scInicio, LocalDateTime scFin) {
         if (ventanaInicioUtc == null) ventanaInicioUtc = scInicio;
         ventanaFinUtc = scFin;
+    }
+
+    // Temporizador real compartido entre clientes: epoch ms del primer bloque publicado y del fin.
+    public volatile Long primerBloqueRealMs;
+    public volatile Long finRealMs;
+
+    public Long getDuracionRealMs() {
+        Long inicioReal = primerBloqueRealMs;
+        if (inicioReal == null) return null;
+        Long finReal = finRealMs;
+        return (finReal != null ? finReal : System.currentTimeMillis()) - inicioReal;
     }
 
     public volatile Integer saMin;
@@ -149,6 +165,7 @@ public class EstadoJob {
 
     public void publicarBloque(BloqueSimulacion bloque) {
         if (bloque == null) return;
+        if (primerBloqueRealMs == null) primerBloqueRealMs = System.currentTimeMillis();
         acumularVuelosUsados(bloque);          // extraer el agregado ANTES de purgar
         indexarRutasSinteticas(bloque);        // idem: rastreo de los INV-* ANTES de purgar
         synchronized (bloquesLock) {
@@ -191,6 +208,21 @@ public class EstadoJob {
         }
     }
 
+    /** Variante para la API: si {@code desde} ya fue purgado devuelve vacío (sin realinear),
+     *  para que el cliente detecte el hueco y se resincronice en vez de recibir series viejas. */
+    public List<List<OcupacionAlmacenSlot>> seriesDesdeExacto(int desde) {
+        synchronized (seriesLock) {
+            if (Math.max(desde, 0) < baseSeriesPurgadas) return List.of();
+            return seriesDesde(desde);
+        }
+    }
+
+    public int primeraSerieDisponible() {
+        synchronized (seriesLock) {
+            return baseSeriesPurgadas;
+        }
+    }
+
     public int seriesPublicadas() {
         synchronized (seriesLock) {
             return baseSeriesPurgadas + seriesAlmacenes.size();
@@ -203,6 +235,21 @@ public class EstadoJob {
             int rel = desde - baseBloquesPurgados;
             if (rel < 0 || rel >= bloquesParciales.size()) return List.of();
             return List.copyOf(bloquesParciales.subList(rel, bloquesParciales.size()));
+        }
+    }
+
+    /** Variante para la API: si {@code desde} ya fue purgado devuelve vacío (sin realinear),
+     *  para que el cliente detecte el hueco y se resincronice en vez de recibir bloques viejos. */
+    public List<BloqueSimulacion> bloquesDesdeExacto(int desde) {
+        synchronized (bloquesLock) {
+            if (Math.max(desde, 0) < baseBloquesPurgados) return List.of();
+            return bloquesDesde(desde);
+        }
+    }
+
+    public int primerBloqueDisponible() {
+        synchronized (bloquesLock) {
+            return baseBloquesPurgados;
         }
     }
 

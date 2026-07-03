@@ -511,7 +511,7 @@ public class PlanificadorService {
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
-        List<List<OcupacionAlmacenSlot>> series = job.seriesDesde(desdeNorm);
+        List<List<OcupacionAlmacenSlot>> series = job.seriesDesdeExacto(desdeNorm);
         List<SerieAlmacenesResponse.SerieItem> filas = new ArrayList<>(series.size());
         for (int i = 0; i < series.size(); i++) {
             SerieAlmacenesResponse.SerieItem item = new SerieAlmacenesResponse.SerieItem();
@@ -524,6 +524,7 @@ public class PlanificadorService {
         body.setJobId(job.getJobId());
         body.setDesde(desdeNorm);
         body.setTotal(job.seriesPublicadas());
+        body.setPrimeraSerieDisponible(job.primeraSerieDisponible());
         body.setTerminado(!"encolado".equals(job.estado)
                 && !"calentando".equals(job.estado)
                 && !"ejecutando".equals(job.estado));
@@ -562,6 +563,10 @@ public class PlanificadorService {
         body.setPosicionEnCola(posicionEnCola(jobId));
         body.setCanceladoPorUsuario(job.canceladoPorUsuario);
         body.setTaPromedioMs(job.taPromedioMs);
+        if (job.primerBloqueRealMs != null) {
+            body.setTemporizadorInicioUtc(java.time.Instant.ofEpochMilli(job.primerBloqueRealMs).toString());
+        }
+        body.setDuracionRealMs(job.getDuracionRealMs());
         body.setInicio(job.inicio.toString());
         if (job.fin != null) body.setFin(job.fin.toString());
         if (job.error != null) body.setError(job.error);

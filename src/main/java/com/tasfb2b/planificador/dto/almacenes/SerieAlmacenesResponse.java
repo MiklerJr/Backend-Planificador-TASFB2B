@@ -9,6 +9,7 @@ public class SerieAlmacenesResponse {
     private String jobId;
     private int desde;
     private int total;
+    private int primeraSerieDisponible;
     private boolean terminado;
     private List<SerieItem> series;
 

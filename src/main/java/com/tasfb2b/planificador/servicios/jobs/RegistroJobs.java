@@ -86,6 +86,7 @@ public class RegistroJobs {
                 log.error("Job {} falló: {}", job.getJobId(), ex.getMessage(), ex);
             } finally {
                 job.fin = java.time.LocalDateTime.now();
+                job.finRealMs = System.currentTimeMillis();   // congela el temporizador real
                 futures.remove(job.getJobId());
             }
         });
@@ -125,18 +126,21 @@ public class RegistroJobs {
         return false;
     }
 
+    private static final Comparator<EstadoJob> POR_CREACION =
+            Comparator.comparing(EstadoJob::getInicio).thenComparingLong(EstadoJob::getOrdenCreacion);
+
     public List<EstadoJob> listarActivos() {
         List<EstadoJob> activos = new ArrayList<>();
         for (EstadoJob j : jobs.values()) {
             if (ESTADOS_ACTIVOS.contains(j.estado)) activos.add(j);
         }
-        activos.sort(Comparator.comparing(EstadoJob::getInicio));
+        activos.sort(POR_CREACION);
         return activos;
     }
 
     public List<EstadoJob> listarTodos() {
         List<EstadoJob> todos = new ArrayList<>(jobs.values());
-        todos.sort(Comparator.comparing(EstadoJob::getInicio));
+        todos.sort(POR_CREACION);
         return todos;
     }
 
