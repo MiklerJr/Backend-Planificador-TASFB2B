@@ -1,30 +1,30 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.dataset.*;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
+import com.tasfb2b.planificador.dto.datos.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.*;
 
-import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
-import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
+import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.safe;
+import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.vueloFrontId;
 
 @Service
-public class DatasetMetadataService {
+public class MetadatosDatosService {
 
     static final int DEFAULT_DEMANDA_MAX_DIAS = 31;
 
-    private final DataLoader dataLoader;
+    private final CargadorDatos dataLoader;
     private final int demandaMaxDias;
 
     @Autowired
-    public DatasetMetadataService(DataLoader dataLoader, PlanificadorProperties props) {
+    public MetadatosDatosService(CargadorDatos dataLoader, PlanificadorProperties props) {
         this.dataLoader = dataLoader;
         this.demandaMaxDias = (props != null && props.getConsulta() != null
                 && props.getConsulta().getDemandaMaxDias() > 0)
@@ -32,7 +32,7 @@ public class DatasetMetadataService {
                 : DEFAULT_DEMANDA_MAX_DIAS;
     }
 
-    public DatasetMetadataService(DataLoader dataLoader) {
+    public MetadatosDatosService(CargadorDatos dataLoader) {
         this(dataLoader, null);
     }
 
@@ -67,7 +67,7 @@ public class DatasetMetadataService {
         return out;
     }
 
-    public DatasetInfoResponse getDatasetInfo() {
+    public DatosInfoResponse getDatasetInfo() {
         LocalDateTime primera = dataLoader.getPrimeraVentana();
         LocalDateTime ultima  = dataLoader.getUltimaVentana();
         long diasDisponibles = 0L;
@@ -75,7 +75,7 @@ public class DatasetMetadataService {
             diasDisponibles = java.time.Duration.between(primera, ultima).toDays();
             if (diasDisponibles < 1) diasDisponibles = 1; // mínimo 1 día si hay datos
         }
-        DatasetInfoResponse out = new DatasetInfoResponse();
+        DatosInfoResponse out = new DatosInfoResponse();
         out.setPrimeraVentana(primera != null ? primera.toString() : null);
         out.setUltimaVentana(ultima  != null ? ultima.toString()  : null);
         out.setDiasDisponibles(diasDisponibles);
@@ -123,7 +123,7 @@ public class DatasetMetadataService {
         long totalMaletas = 0L;
         long totalEnvios = 0L;
 
-        for (DataLoader.DemandaAgrupada fila : dataLoader.agregarDemandaEnRango(inicio, fin)) {
+        for (CargadorDatos.DemandaAgrupada fila : dataLoader.agregarDemandaEnRango(inicio, fin)) {
             String origen = safe(fila.origen());
             String destino = safe(fila.destino());
             totalEnvios += fila.envios();

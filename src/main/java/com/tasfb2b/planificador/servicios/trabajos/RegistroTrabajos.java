@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.services.jobs;
+package com.tasfb2b.planificador.servicios.trabajos;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -17,11 +17,11 @@ import java.util.concurrent.Future;
 
 @Slf4j
 @Component
-public class JobsRegistry {
+public class RegistroTrabajos {
 
     public static final Set<String> ESTADOS_ACTIVOS = Set.of("encolado", "calentando", "ejecutando");
 
-    private final ConcurrentHashMap<String, JobState>      jobs    = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, EstadoTrabajo>      jobs    = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Future<?>>     futures = new ConcurrentHashMap<>();
     private final ExecutorService                          executor =
             Executors.newSingleThreadExecutor(r -> {
@@ -33,17 +33,17 @@ public class JobsRegistry {
     private final int maxJobsEnMemoria;
 
     @Autowired
-    public JobsRegistry(PlanificadorProperties props) {
+    public RegistroTrabajos(PlanificadorProperties props) {
         this.maxJobsEnMemoria = props.getScenario().getMaxJobsEnMemoria();
     }
 
-    public JobsRegistry() {
+    public RegistroTrabajos() {
         this.maxJobsEnMemoria = 3;
     }
 
-    public JobState crear(String escenario, int k) {
+    public EstadoTrabajo crear(String escenario, int k) {
         String jobId = UUID.randomUUID().toString();
-        JobState job = new JobState(jobId, escenario, k);
+        EstadoTrabajo job = new EstadoTrabajo(jobId, escenario, k);
         jobs.put(jobId, job);
         log.info("Job creado: {} (escenario={}, K={}) — estado=encolado", jobId, escenario, k);
         purgarJobsViejos();   // anti-OOM (RAM): libera los pesados de corridas anteriores ya terminadas
@@ -52,24 +52,24 @@ public class JobsRegistry {
     }
 
     public void purgarZipsViejos() {
-        for (JobState j : jobs.values()) {
+        for (EstadoTrabajo j : jobs.values()) {
             if (!ESTADOS_ACTIVOS.contains(j.estado)) j.borrarZip();
         }
     }
 
     public void purgarJobsViejos() {
-        List<JobState> terminados = new ArrayList<>();
-        for (JobState j : jobs.values()) {
+        List<EstadoTrabajo> terminados = new ArrayList<>();
+        for (EstadoTrabajo j : jobs.values()) {
             if (!ESTADOS_ACTIVOS.contains(j.estado) && j.fin != null) terminados.add(j);
         }
         if (terminados.size() <= maxJobsEnMemoria) return;
-        terminados.sort(Comparator.comparing((JobState j) -> j.fin).reversed());
+        terminados.sort(Comparator.comparing((EstadoTrabajo j) -> j.fin).reversed());
         for (int i = maxJobsEnMemoria; i < terminados.size(); i++) {
             terminados.get(i).liberarPesados();
         }
     }
 
-    public void ejecutar(JobState job, Runnable task) {
+    public void ejecutar(EstadoTrabajo job, Runnable task) {
         Future<?> f = executor.submit(() -> {
             if ("encolado".equals(job.estado)) job.estado = "ejecutando";
             try {
@@ -96,7 +96,7 @@ public class JobsRegistry {
         executor.submit(task);
     }
 
-    public JobState get(String jobId) {
+    public EstadoTrabajo get(String jobId) {
         return jobs.get(jobId);
     }
 
@@ -105,7 +105,7 @@ public class JobsRegistry {
     }
 
     public boolean cancelar(String jobId) {
-        JobState job = jobs.get(jobId);
+        EstadoTrabajo job = jobs.get(jobId);
         if (job == null) return false;
 
         Future<?> f = futures.get(jobId);
@@ -125,26 +125,26 @@ public class JobsRegistry {
         return false;
     }
 
-    public List<JobState> listarActivos() {
-        List<JobState> activos = new ArrayList<>();
-        for (JobState j : jobs.values()) {
+    public List<EstadoTrabajo> listarActivos() {
+        List<EstadoTrabajo> activos = new ArrayList<>();
+        for (EstadoTrabajo j : jobs.values()) {
             if (ESTADOS_ACTIVOS.contains(j.estado)) activos.add(j);
         }
-        activos.sort(Comparator.comparing(JobState::getInicio));
+        activos.sort(Comparator.comparing(EstadoTrabajo::getInicio));
         return activos;
     }
 
-    public List<JobState> listarTodos() {
-        List<JobState> todos = new ArrayList<>(jobs.values());
-        todos.sort(Comparator.comparing(JobState::getInicio));
+    public List<EstadoTrabajo> listarTodos() {
+        List<EstadoTrabajo> todos = new ArrayList<>(jobs.values());
+        todos.sort(Comparator.comparing(EstadoTrabajo::getInicio));
         return todos;
     }
 
     public int posicionEnCola(String jobId) {
-        JobState target = jobs.get(jobId);
+        EstadoTrabajo target = jobs.get(jobId);
         if (target == null || !"encolado".equals(target.estado)) return 0;
         int posicion = 1; // el propio job ocupa al menos posición 1
-        for (JobState j : jobs.values()) {
+        for (EstadoTrabajo j : jobs.values()) {
             if (j == target) continue;
             if ("encolado".equals(j.estado) && j.getInicio().isBefore(target.getInicio())) {
                 posicion++;

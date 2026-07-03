@@ -1,17 +1,17 @@
-package com.tasfb2b.planificador.services.persistencia;
+package com.tasfb2b.planificador.servicios.persistencia;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
-import com.tasfb2b.planificador.dto.vuelos.CargaVueloRow;
+import com.tasfb2b.planificador.dto.vuelos.CargaVueloFila;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.TipoEnvio;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.DataLoader;
-import com.tasfb2b.planificador.util.SimulacionFormat;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.TipoEnvio;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
+import com.tasfb2b.planificador.utilidades.FormatoSimulacion;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -30,13 +30,13 @@ import java.util.function.Consumer;
 
 @Slf4j
 @Service
-public class SolucionBdReader {
+public class LectorSolucionBd {
 
     private final JdbcTemplate jdbc;
-    private final DataLoader dataLoader;
+    private final CargadorDatos dataLoader;
     private final TransactionTemplate txReadOnly;
 
-    public SolucionBdReader(JdbcTemplate jdbc, DataLoader dataLoader, PlatformTransactionManager txManager) {
+    public LectorSolucionBd(JdbcTemplate jdbc, CargadorDatos dataLoader, PlatformTransactionManager txManager) {
         this.jdbc = jdbc;
         this.dataLoader = dataLoader;
         if (txManager != null) {
@@ -47,21 +47,21 @@ public class SolucionBdReader {
         }
     }
 
-    public Map<String, Edge> construirIndiceVuelo(Graph graph) {
-        Map<String, Edge> idx = new HashMap<>();
+    public Map<String, Arista> construirIndiceVuelo(Grafo graph) {
+        Map<String, Arista> idx = new HashMap<>();
         if (graph == null) return idx;
-        for (Edge e : graph.edges) {
+        for (Arista e : graph.edges) {
             idx.put(PersistenciaSolucionService.normalizarIdVuelo(e.id), e);
         }
         return idx;
     }
 
-    public void forEachEnrutado(Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer) {
+    public void forEachEnrutado(Map<String, Arista> indiceVuelo, Consumer<LoteEnvio> consumer) {
         forEachEnrutado(indiceVuelo, null, null, consumer);
     }
 
-    public void forEachEnrutado(Map<String, Edge> indiceVuelo, LocalDateTime desde, LocalDateTime hasta,
-                                Consumer<LuggageBatch> consumer) {
+    public void forEachEnrutado(Map<String, Arista> indiceVuelo, LocalDateTime desde, LocalDateTime hasta,
+                                Consumer<LoteEnvio> consumer) {
         final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
         StringBuilder sql = new StringBuilder()
                 .append("SELECT r.id_ruta, r.id_envio, r.cumple_sla, ")
@@ -104,8 +104,8 @@ public class SolucionBdReader {
         forEachEnrutadoInyectado(indiceVuelo, desde, hasta, consumer);
     }
 
-    private void forEachEnrutadoInyectado(Map<String, Edge> indiceVuelo, LocalDateTime desde,
-                                          LocalDateTime hasta, Consumer<LuggageBatch> consumer) {
+    private void forEachEnrutadoInyectado(Map<String, Arista> indiceVuelo, LocalDateTime desde,
+                                          LocalDateTime hasta, Consumer<LoteEnvio> consumer) {
         StringBuilder sql = new StringBuilder()
                 .append("SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, ")
                 .append("       i.icao_origen, i.icao_destino, i.cantidad_maletas, ")
@@ -144,9 +144,9 @@ public class SolucionBdReader {
         emitir(acc, indiceVuelo, consumer, true);      // último batch pendiente
     }
 
-    public List<LuggageBatch> afectadosPorVuelo(List<String> idsVueloNormalizado, LocalDate dia,
-                                                Map<String, Edge> indiceVuelo) {
-        List<LuggageBatch> out = new ArrayList<>();
+    public List<LoteEnvio> afectadosPorVuelo(List<String> idsVueloNormalizado, LocalDate dia,
+                                                Map<String, Arista> indiceVuelo) {
+        List<LoteEnvio> out = new ArrayList<>();
         if (idsVueloNormalizado == null || idsVueloNormalizado.isEmpty() || dia == null) return out;
 
         // 1. id_ruta afectados (ruta activa que usa alguno de los vuelos en ese día UTC).
@@ -192,11 +192,11 @@ public class SolucionBdReader {
         return out;
     }
 
-    public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo) {
+    public List<VueloCancelado> leerCancelaciones(Map<String, Arista> indiceVuelo) {
         return leerCancelaciones(indiceVuelo, null, null);
     }
 
-    public List<VueloCancelado> leerCancelaciones(Map<String, Edge> indiceVuelo,
+    public List<VueloCancelado> leerCancelaciones(Map<String, Arista> indiceVuelo,
                                                   LocalDateTime desde, LocalDateTime hasta) {
         StringBuilder sql = new StringBuilder(
                 "SELECT id_vuelo, fecha_cancelacion, envios_afectados FROM cancelacion_vuelo WHERE 1=1 ");
@@ -208,7 +208,7 @@ public class SolucionBdReader {
             String idVuelo = rs.getString("id_vuelo");
             LocalDate fecha = rs.getObject("fecha_cancelacion", LocalDate.class);
             int afectados = rs.getInt("envios_afectados");
-            Edge e = indiceVuelo != null ? indiceVuelo.get(idVuelo) : null;
+            Arista e = indiceVuelo != null ? indiceVuelo.get(idVuelo) : null;
             String origen, destino;
             int depMin;
             if (e != null) {
@@ -270,7 +270,7 @@ public class SolucionBdReader {
     private Map<String, Vuelo> indiceVueloPorIdBd() {
         Map<String, Vuelo> idx = new HashMap<>();
         for (Vuelo v : dataLoader.getVuelos()) {
-            String front = SimulacionFormat.vueloFrontId(v);
+            String front = FormatoSimulacion.vueloFrontId(v);
             if (front != null && !front.isEmpty()) {
                 idx.put(PersistenciaSolucionService.normalizarIdVuelo(front), v);
             }
@@ -290,7 +290,7 @@ public class SolucionBdReader {
         return jdbc.query(sql, (rs, rowNum) -> {
             String idBD = rs.getString("id_vuelo");
             Vuelo v = idx.get(idBD);
-            String vueloFront = v != null ? SimulacionFormat.vueloFrontId(v) : idBD;
+            String vueloFront = v != null ? FormatoSimulacion.vueloFrontId(v) : idBD;
             String[] partes = vueloFront.split("-");   // ICAO-ICAO-HH:MM
             String salida = rs.getTimestamp("hora_salida_utc").toLocalDateTime().toString();
             VuelosUsadosResponse.VueloUsado u = new VuelosUsadosResponse.VueloUsado();
@@ -308,7 +308,7 @@ public class SolucionBdReader {
         });
     }
 
-    public List<CargaVueloRow> reconstruirCargasVuelos(int desde, int limit) {
+    public List<CargaVueloFila> reconstruirCargasVuelos(int desde, int limit) {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
         final int offset = Math.max(0, desde);
         final int lim = Math.max(1, limit);
@@ -320,10 +320,10 @@ public class SolucionBdReader {
                 + "GROUP BY t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc "
                 + "ORDER BY t.hora_salida_utc, t.id_vuelo "
                 + "LIMIT ? OFFSET ?";
-        org.springframework.jdbc.core.RowMapper<CargaVueloRow> mapper = (rs, rowNum) -> {
+        org.springframework.jdbc.core.RowMapper<CargaVueloFila> mapper = (rs, rowNum) -> {
             String idBD = rs.getString("id_vuelo");
             Vuelo v = idx.get(idBD);
-            String vueloFront = v != null ? SimulacionFormat.vueloFrontId(v) : idBD;
+            String vueloFront = v != null ? FormatoSimulacion.vueloFrontId(v) : idBD;
             String[] partes = vueloFront.split("-");
             String salida = rs.getTimestamp("hora_salida_utc").toLocalDateTime().toString();
             CargaVuelo c = new CargaVuelo();
@@ -334,8 +334,8 @@ public class SolucionBdReader {
             c.setFechaLlegada(rs.getTimestamp("hora_llegada_utc").toLocalDateTime().toString());
             c.setCapacidadMaxima(v != null && v.getCapacidad() != null ? v.getCapacidad() : 0);
             c.setCargaAsignada(rs.getInt("carga"));
-            SimulacionFormat.completarCargaVuelo(c);   // porcentajeCarga + semáforo
-            CargaVueloRow row = new CargaVueloRow();
+            FormatoSimulacion.completarCargaVuelo(c);   // porcentajeCarga + semáforo
+            CargaVueloFila row = new CargaVueloFila();
             row.setVueloId(c.getVueloId());
             row.setOrigen(c.getOrigen());
             row.setDestino(c.getDestino());
@@ -370,7 +370,7 @@ public class SolucionBdReader {
         }
     }
 
-    public Optional<LuggageBatch> buscarPorEnvio(String idEnvio, Map<String, Edge> indiceVuelo) {
+    public Optional<LoteEnvio> buscarPorEnvio(String idEnvio, Map<String, Arista> indiceVuelo) {
         if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
         String sql =
                 "SELECT r.id_ruta, r.id_envio, r.cumple_sla, "
@@ -395,7 +395,7 @@ public class SolucionBdReader {
         return Optional.ofNullable(reconstruir(acc, indiceVuelo));
     }
 
-    public Optional<LuggageBatch> buscarPorEnvioInyectado(String idEnvio, Map<String, Edge> indiceVuelo) {
+    public Optional<LoteEnvio> buscarPorEnvioInyectado(String idEnvio, Map<String, Arista> indiceVuelo) {
         if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
         String sql =
                 "SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, "
@@ -423,24 +423,24 @@ public class SolucionBdReader {
 
     // ── Reconstrucción ──────────────────────────────────────────────────────
 
-    private void emitir(Acumulador acc, Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer) {
+    private void emitir(Acumulador acc, Map<String, Arista> indiceVuelo, Consumer<LoteEnvio> consumer) {
         emitir(acc, indiceVuelo, consumer, false);
     }
 
-    private void emitir(Acumulador acc, Map<String, Edge> indiceVuelo, Consumer<LuggageBatch> consumer,
+    private void emitir(Acumulador acc, Map<String, Arista> indiceVuelo, Consumer<LoteEnvio> consumer,
                         boolean readyYaEsUtc) {
         if (acc.idEnvio == null || acc.tramos.isEmpty()) return;
-        LuggageBatch b = reconstruir(acc, indiceVuelo, readyYaEsUtc);
+        LoteEnvio b = reconstruir(acc, indiceVuelo, readyYaEsUtc);
         if (b != null) consumer.accept(b);
         acc.idEnvio = null;
         acc.tramos.clear();
     }
 
-    private LuggageBatch reconstruir(Acumulador acc, Map<String, Edge> indiceVuelo) {
+    private LoteEnvio reconstruir(Acumulador acc, Map<String, Arista> indiceVuelo) {
         return reconstruir(acc, indiceVuelo, false);
     }
 
-    private LuggageBatch reconstruir(Acumulador acc, Map<String, Edge> indiceVuelo, boolean readyYaEsUtc) {
+    private LoteEnvio reconstruir(Acumulador acc, Map<String, Arista> indiceVuelo, boolean readyYaEsUtc) {
         Aeropuerto origen = dataLoader.getAeropuerto(acc.origen);
         Aeropuerto destino = dataLoader.getAeropuerto(acc.destino);
         if (origen == null || destino == null || origen.getOffsetHorario() == null) {
@@ -452,16 +452,16 @@ public class SolucionBdReader {
                 : acc.registroLocal.minusHours(origen.getOffsetHorario());
         int sla = TipoEnvio.derivar(origen, destino) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
 
-        LuggageBatch b = new LuggageBatch(acc.idEnvio, acc.cantidad, sla,
+        LoteEnvio b = new LoteEnvio(acc.idEnvio, acc.cantidad, sla,
                 origen.getCodigo(), destino.getCodigo(), readyUtc);
 
         acc.tramos.sort((x, y) -> Integer.compare(x.numeroOrden, y.numeroOrden));
-        List<Edge> ruta = new ArrayList<>(acc.tramos.size());
+        List<Arista> ruta = new ArrayList<>(acc.tramos.size());
         List<Long> deps = new ArrayList<>(acc.tramos.size());
         for (Tramo t : acc.tramos) {
-            Edge e = indiceVuelo.get(t.idVuelo);
+            Arista e = indiceVuelo.get(t.idVuelo);
             if (e == null) {
-                log.warn("Tramo con id_vuelo {} sin Edge en el grafo (envío {}); ruta descartada",
+                log.warn("Tramo con id_vuelo {} sin Arista en el grafo (envío {}); ruta descartada",
                         t.idVuelo, acc.idEnvio);
                 return null;
             }

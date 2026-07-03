@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.services.jobs;
+package com.tasfb2b.planificador.servicios.trabajos;
 
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
+import com.tasfb2b.planificador.dto.trabajos.AlertaColapso;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.almacenes.*;
-import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.trabajos.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
@@ -27,10 +27,10 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
-import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
+import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.safe;
 
 @Data
-public class JobState {
+public class EstadoTrabajo {
     private final String jobId;
     private final String escenario;
     private final int k;
@@ -55,7 +55,7 @@ public class JobState {
     public volatile Path auditoriaCsvPath;
     public volatile Path auditoriaZipPath;
     public volatile int auditoriaFilas;
-    public volatile List<LuggageBatch> auditoriaSinRuta;
+    public volatile List<LoteEnvio> auditoriaSinRuta;
 
     public final LocalDateTime inicio = LocalDateTime.now();
     public volatile LocalDateTime fin;
@@ -98,7 +98,7 @@ public class JobState {
 
     public int getMaxBloquesConAsignaciones() { return maxBloquesConAsignaciones; }
 
-    public JobState(String jobId, String escenario, int k) {
+    public EstadoTrabajo(String jobId, String escenario, int k) {
         this.jobId     = jobId;
         this.escenario = escenario;
         this.k         = k;

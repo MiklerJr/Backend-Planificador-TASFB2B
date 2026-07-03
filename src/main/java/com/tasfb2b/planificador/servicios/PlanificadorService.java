@@ -1,34 +1,34 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.aco.*;
-import com.tasfb2b.planificador.algorithm.alns.*;
-import com.tasfb2b.planificador.algorithm.grafo.*;
-import com.tasfb2b.planificador.services.jobs.*;
-import com.tasfb2b.planificador.services.persistencia.*;
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
+import com.tasfb2b.planificador.algoritmo.aco.*;
+import com.tasfb2b.planificador.algoritmo.alns.*;
+import com.tasfb2b.planificador.algoritmo.grafo.*;
+import com.tasfb2b.planificador.servicios.trabajos.*;
+import com.tasfb2b.planificador.servicios.persistencia.*;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
+import com.tasfb2b.planificador.dto.trabajos.AlertaColapso;
 import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
-import com.tasfb2b.planificador.dto.simulacion.EjecucionParams;
+import com.tasfb2b.planificador.dto.simulacion.EjecucionParametros;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import com.tasfb2b.planificador.dto.auditoria.*;
-import com.tasfb2b.planificador.dto.dataset.*;
-import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.datos.*;
+import com.tasfb2b.planificador.dto.trabajos.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
-import com.tasfb2b.planificador.exception.ParametroInvalidoException;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Envio;
-import com.tasfb2b.planificador.model.dataset.TipoEnvio;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.validator.EnvioValidator;
+import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Envio;
+import com.tasfb2b.planificador.modelo.datos.TipoEnvio;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.validador.ValidadorEnvio;
 import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
-import com.tasfb2b.planificador.util.AlgorithmMapper;
-import com.tasfb2b.planificador.util.DataLoader;
-import com.tasfb2b.planificador.util.EnvioEstadoCalculator;
-import com.tasfb2b.planificador.util.parser.FlightParser;
-import com.tasfb2b.planificador.util.SimulacionFormat;
+import com.tasfb2b.planificador.utilidades.MapeadorAlgoritmo;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
+import com.tasfb2b.planificador.utilidades.CalculadorEstadoEnvio;
+import com.tasfb2b.planificador.utilidades.analizador.AnalizadorVuelos;
+import com.tasfb2b.planificador.utilidades.FormatoSimulacion;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -47,16 +47,16 @@ import java.nio.file.Path;
 public class PlanificadorService {
 
     // ── DEPENDENCIAS NUEVAS (ALNS Y ESCENARIOS) ─────────────────────────
-    private final DataLoader dataLoader;
-    private final AlgorithmMapper mapper;
+    private final CargadorDatos dataLoader;
+    private final MapeadorAlgoritmo mapper;
     private final PlanificadorProperties props;
-    private final JobsRegistry jobs;
+    private final RegistroTrabajos jobs;
     private final AuditoriaService auditoria;
     private final ColoniaACO acoEngine;
     private final PersistenciaSolucionService persistencia;
-    private final SolucionBdReader solucionBdReader;
+    private final LectorSolucionBd solucionBdReader;
     private final MotorGrafoCache motorCache;
-    private final SkeletonCacheStore skeletonStore;
+    private final AlmacenCacheEsqueletos skeletonStore;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -71,16 +71,16 @@ public class PlanificadorService {
 
     // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
     @org.springframework.beans.factory.annotation.Autowired
-    public PlanificadorService(DataLoader dataLoader,
-                               AlgorithmMapper mapper,
+    public PlanificadorService(CargadorDatos dataLoader,
+                               MapeadorAlgoritmo mapper,
                                PlanificadorProperties props,
-                               JobsRegistry jobs,
+                               RegistroTrabajos jobs,
                                AuditoriaService auditoria,
                                ColoniaACO acoEngine,
                                PersistenciaSolucionService persistencia,
-                               SolucionBdReader solucionBdReader,
+                               LectorSolucionBd solucionBdReader,
                                MotorGrafoCache motorCache,
-                               SkeletonCacheStore skeletonStore) {
+                               AlmacenCacheEsqueletos skeletonStore) {
         this.dataLoader = dataLoader;
         this.mapper = mapper;
         this.props = props;
@@ -93,21 +93,21 @@ public class PlanificadorService {
         this.skeletonStore = skeletonStore;
     }
 
-    PlanificadorService(DataLoader dataLoader, AlgorithmMapper mapper, PlanificadorProperties props,
-                        JobsRegistry jobs, AuditoriaService auditoria,
+    PlanificadorService(CargadorDatos dataLoader, MapeadorAlgoritmo mapper, PlanificadorProperties props,
+                        RegistroTrabajos jobs, AuditoriaService auditoria,
                         ColoniaACO acoEngine) {
         this(dataLoader, mapper, props, jobs, auditoria, acoEngine,
-                new PersistenciaSolucionService(null, null), new SolucionBdReader(null, null, null),
-                new MotorGrafoCache(), new SkeletonCacheStore(null, null, ""));
+                new PersistenciaSolucionService(null, null), new LectorSolucionBd(null, null, null),
+                new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""));
     }
 
-    public JobState iniciarEscenario2Async(EjecucionParams params) {
-        if (params == null) params = new EjecucionParams();
+    public EstadoTrabajo iniciarEscenario2Async(EjecucionParametros params) {
+        if (params == null) params = new EjecucionParametros();
         int k = props.getScenario().getKDefault2();   // K fijo del escenario, no negociable
         String motorRes = resolverMotor(params.getMotor());
         long seedRes = resolverSeed(params.getSeed());
 
-        JobState job = jobs.crear("2", k);
+        EstadoTrabajo job = jobs.crear("2", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
@@ -118,7 +118,7 @@ public class PlanificadorService {
         job.dias = params.getDias();
         job.procesamientoPrevio = params.isProcesamientoPrevio();
 
-        EjecucionParams pf = params;
+        EjecucionParametros pf = params;
         pf.setK(k);
         pf.setMotor(motorRes);
         pf.setSeed(seedRes);
@@ -135,16 +135,16 @@ public class PlanificadorService {
         return job;
     }
 
-    public JobState iniciarEscenario3Async(double umbralColapso, String motor, Long seed) {
+    public EstadoTrabajo iniciarEscenario3Async(double umbralColapso, String motor, Long seed) {
         return iniciarEscenario3Async(umbralColapso, motor, seed, null);
     }
 
-    public JobState iniciarEscenario3Async(double umbralColapso, String motor, Long seed,
+    public EstadoTrabajo iniciarEscenario3Async(double umbralColapso, String motor, Long seed,
                                            LocalDateTime fechaInicio) {
         int k = props.getScenario().getKDefault3();   // K fijo del escenario, no negociable
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
-        JobState job = jobs.crear("3", k);
+        EstadoTrabajo job = jobs.crear("3", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
@@ -161,20 +161,20 @@ public class PlanificadorService {
         return job;
     }
 
-    public JobState iniciarEscenario1Async(String motor, Long seed) {
+    public EstadoTrabajo iniciarEscenario1Async(String motor, Long seed) {
         return iniciarEscenario1Async(motor, seed, null);
     }
 
-    public JobState iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio) {
+    public EstadoTrabajo iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio) {
         return iniciarEscenario1Async(motor, seed, fechaInicio, false);
     }
 
-    public JobState iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio,
+    public EstadoTrabajo iniciarEscenario1Async(String motor, Long seed, LocalDateTime fechaInicio,
                                            boolean enVivo) {
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         int k = props.getScenario().getKDefault1();
-        JobState job = jobs.crear("1", k);
+        EstadoTrabajo job = jobs.crear("1", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
@@ -227,7 +227,7 @@ public class PlanificadorService {
         return m;
     }
 
-    public JobState getJob(String jobId) {
+    public EstadoTrabajo getJob(String jobId) {
         return jobs.get(jobId);
     }
 
@@ -235,16 +235,16 @@ public class PlanificadorService {
         return jobs.cancelar(jobId);
     }
 
-    public JobState reiniciarJob(String jobId) {
-        JobState viejo = getJob(jobId);
+    public EstadoTrabajo reiniciarJob(String jobId) {
+        EstadoTrabajo viejo = getJob(jobId);
         if (viejo == null) return null;
-        if (JobsRegistry.ESTADOS_ACTIVOS.contains(viejo.estado)) {
+        if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(viejo.estado)) {
             cancelarJob(jobId);
         }
         return switch (viejo.getEscenario()) {
             case "1" -> iniciarEscenario1Async(viejo.algoritmo, viejo.seed, viejo.fechaInicio, viejo.enVivo);
             case "2" -> {
-                EjecucionParams p = new EjecucionParams();
+                EjecucionParametros p = new EjecucionParametros();
                 p.setMotor(viejo.algoritmo);
                 p.setSeed(viejo.seed);
                 p.setFechaInicio(viejo.fechaInicio);
@@ -261,19 +261,19 @@ public class PlanificadorService {
         };
     }
 
-    public List<JobState> listarJobsActivos() {
+    public List<EstadoTrabajo> listarJobsActivos() {
         return jobs.listarActivos();
     }
 
-    public List<JobState> listarTodosLosJobs() {
+    public List<EstadoTrabajo> listarTodosLosJobs() {
         return jobs.listarTodos();
     }
 
-    public JobsListResponse listarJobsResponse(boolean activos) {
-        List<JobState> lista = activos ? listarJobsActivos() : listarTodosLosJobs();
-        List<JobsListResponse.JobResumen> items = new ArrayList<>(lista.size());
-        for (JobState j : lista) {
-            JobsListResponse.JobResumen item = new JobsListResponse.JobResumen();
+    public ListaTrabajosResponse listarJobsResponse(boolean activos) {
+        List<EstadoTrabajo> lista = activos ? listarJobsActivos() : listarTodosLosJobs();
+        List<ListaTrabajosResponse.ResumenTrabajo> items = new ArrayList<>(lista.size());
+        for (EstadoTrabajo j : lista) {
+            ListaTrabajosResponse.ResumenTrabajo item = new ListaTrabajosResponse.ResumenTrabajo();
             item.setJobId(j.getJobId());
             item.setEscenario(j.getEscenario());
             item.setAlgoritmo(j.algoritmo);
@@ -288,7 +288,7 @@ public class PlanificadorService {
             item.setProgresoWarmup(j.getProgresoWarmup());
             items.add(item);
         }
-        JobsListResponse body = new JobsListResponse();
+        ListaTrabajosResponse body = new ListaTrabajosResponse();
         body.setJobs(items);
         body.setTotal(items.size());
         return body;
@@ -300,9 +300,9 @@ public class PlanificadorService {
 
     public boolean solicitarCancelacionVuelo(String jobId, CancelacionVueloRequest orden) {
         if (orden == null) return false;
-        JobState job = jobs.get(jobId);
+        EstadoTrabajo job = jobs.get(jobId);
         if (job == null) return false;
-        if (!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) return false;
+        if (!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) return false;
         if (job.encolarCancelacionVuelo(orden)) {
             log.info("Cancelación de vuelo encolada (job {}): {}->{} salida {}", jobId,
                     orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
@@ -316,12 +316,12 @@ public class PlanificadorService {
     public int solicitarInyeccionEnvios(String jobId, InyeccionEnviosRequest req) {
         if (req == null || req.getEnvios() == null || req.getEnvios().isEmpty())
             throw new ParametroInvalidoException("inyección vacía: se requiere al menos un envío");
-        JobState job = jobs.get(jobId);
+        EstadoTrabajo job = jobs.get(jobId);
         if (job == null) return -1;
         for (InyeccionEnviosRequest.Item it : req.getEnvios()) {
-            if (!EnvioValidator.camposObligatoriosPresentes(it.getOrigen(), it.getDestino()))
+            if (!ValidadorEnvio.camposObligatoriosPresentes(it.getOrigen(), it.getDestino()))
                 throw new ParametroInvalidoException("origen y destino son obligatorios (RF03)");
-            if (EnvioValidator.esMismoAeropuerto(it.getOrigen(), it.getDestino()))
+            if (ValidadorEnvio.esMismoAeropuerto(it.getOrigen(), it.getDestino()))
                 throw new ParametroInvalidoException("origen y destino no pueden ser iguales (RF02)");
             if (it.getCantidad() <= 0)
                 throw new ParametroInvalidoException("la cantidad debe ser > 0");
@@ -330,19 +330,19 @@ public class PlanificadorService {
             if (dataLoader.getAeropuerto(it.getDestino()) == null)
                 throw new ParametroInvalidoException("ICAO destino desconocido: " + it.getDestino());
         }
-        if (!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) return -1;
+        if (!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) return -1;
         for (InyeccionEnviosRequest.Item it : req.getEnvios()) job.encolarInyeccion(it);
         log.info("Inyección de {} envío(s) encolada (job {})", req.getEnvios().size(), jobId);
         return req.getEnvios().size();
     }
 
     private int aplicarCancelacionesVuelo(String jobId, java.util.Queue<CancelacionVueloRequest> cola,
-                                          Graph graph,
-                                          GreedyRepairOperator enrutador, BacklogManager backlog,
+                                          Grafo graph,
+                                          OperadorReparacionVoraz enrutador, GestorBacklog backlog,
                                           List<VueloCancelado> registro,
                                           List<CancelacionVueloRequest> noAplicadas) {
         if (cola == null || cola.isEmpty() || graph == null || enrutador == null) return 0;
-        Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+        Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         int cancelados = 0;
         List<PersistenciaSolucionService.CancelacionVueloDb> aPersistir = new ArrayList<>();
         CancelacionVueloRequest orden;
@@ -357,10 +357,10 @@ public class PlanificadorService {
             LocalDateTime dep = orden.getFechaHoraSalida();
             int depMinDia = dep.getHour() * 60 + dep.getMinute();
             long epochDay = dep.toLocalDate().toEpochDay();
-            long epochMin = epochDay * FlightKeyEncoder.DAY_MIN;
+            long epochMin = epochDay * CodificadorClaveVuelo.DAY_MIN;
 
-            List<Edge> matches = new ArrayList<>();
-            for (Edge e : graph.edges) {
+            List<Arista> matches = new ArrayList<>();
+            for (Arista e : graph.edges) {
                 if (e.from != null && e.to != null
                         && origen.equalsIgnoreCase(e.from.code)
                         && destino.equalsIgnoreCase(e.to.code)
@@ -375,9 +375,9 @@ public class PlanificadorService {
                 continue;
             }
 
-            List<Edge> edgesCancelados = new ArrayList<>();
-            for (Edge e : matches) {
-                if (enrutador.addCancelledFlight(FlightKeyEncoder.flightKey(e.idx, epochMin))) {
+            List<Arista> edgesCancelados = new ArrayList<>();
+            for (Arista e : matches) {
+                if (enrutador.addCancelledFlight(CodificadorClaveVuelo.flightKey(e.idx, epochMin))) {
                     cancelados++;
                     edgesCancelados.add(e);
                 }
@@ -391,7 +391,7 @@ public class PlanificadorService {
             if (registro != null) {
                 registro.add(new VueloCancelado(origen, destino, dep, afectados));
             }
-            for (Edge e : edgesCancelados) {
+            for (Arista e : edgesCancelados) {
                 aPersistir.add(new PersistenciaSolucionService.CancelacionVueloDb(
                         PersistenciaSolucionService.normalizarIdVuelo(e.id), dep.toLocalDate(), afectados));
             }
@@ -402,8 +402,8 @@ public class PlanificadorService {
         return cancelados;
     }
 
-    private int aplicarInyeccionesEnvio(JobState job, List<InyeccionEnviosRequest.Item> buffer,
-                                        TemporalContext ctx, BacklogManager backlog) {
+    private int aplicarInyeccionesEnvio(EstadoTrabajo job, List<InyeccionEnviosRequest.Item> buffer,
+                                        ContextoTemporal ctx, GestorBacklog backlog) {
         if (job == null || backlog == null) return 0;
         InyeccionEnviosRequest.Item it;
         while ((it = job.getInyeccionesPendientes().poll()) != null) buffer.add(it);
@@ -421,7 +421,7 @@ public class PlanificadorService {
             if (o == null || d == null) { itr.remove(); continue; }      // defensivo (ya validado al encolar)
             int sla = TipoEnvio.derivar(o, d) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
             String id = "INV-" + ctx.bloqueIdx + "-" + (n++);            // sintético; NO existe en ENVIO
-            LuggageBatch b = new LuggageBatch(id, x.getCantidad(), sla,
+            LoteEnvio b = new LoteEnvio(id, x.getCantidad(), sla,
                     o.getCodigo(), d.getCodigo(), readyEff);
             b.setSintetico(true);
             if (x.getClienteId() != null) b.setClienteId(x.getClienteId());
@@ -441,16 +441,16 @@ public class PlanificadorService {
         return liberados.size();
     }
 
-    private int reencolarAfectadosPorCancelacion(List<Edge> edgesCancelados, long epochDay,
-                                                 BacklogManager backlog,
-                                                 Map<String, Edge> indiceVuelo) {
+    private int reencolarAfectadosPorCancelacion(List<Arista> edgesCancelados, long epochDay,
+                                                 GestorBacklog backlog,
+                                                 Map<String, Arista> indiceVuelo) {
         if (backlog == null || edgesCancelados == null || edgesCancelados.isEmpty()) return 0;
         List<String> idsVuelo = new ArrayList<>(edgesCancelados.size());
-        for (Edge e : edgesCancelados) idsVuelo.add(PersistenciaSolucionService.normalizarIdVuelo(e.id));
+        for (Arista e : edgesCancelados) idsVuelo.add(PersistenciaSolucionService.normalizarIdVuelo(e.id));
 
-        List<LuggageBatch> afectados = solucionBdReader.afectadosPorVuelo(
+        List<LoteEnvio> afectados = solucionBdReader.afectadosPorVuelo(
                 idsVuelo, java.time.LocalDate.ofEpochDay(epochDay), indiceVuelo);
-        for (LuggageBatch b : afectados) backlog.addReplanificable(b);
+        for (LoteEnvio b : afectados) backlog.addReplanificable(b);
         return afectados.size();
     }
 
@@ -507,7 +507,7 @@ public class PlanificadorService {
     }
 
     public SerieAlmacenesResponse getSerieAlmacenes(String jobId, int desde) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
@@ -531,7 +531,7 @@ public class PlanificadorService {
         return body;
     }
 
-    public EstadoInicialResponse buildEstadoInicialResponse(JobState job) {
+    public EstadoInicialResponse buildEstadoInicialResponse(EstadoTrabajo job) {
         EstadoInicialResponse body = new EstadoInicialResponse();
         body.setJobId(job.getJobId());
         if (job.fechaInicio != null) body.setFechaInicio(job.fechaInicio.toString());
@@ -541,11 +541,11 @@ public class PlanificadorService {
         return body;
     }
 
-    public EstadoJobResponse getEstadoJob(String jobId) {
-        JobState job = getJob(jobId);
+    public EstadoTrabajoResponse getEstadoJob(String jobId) {
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
-        EstadoJobResponse body = new EstadoJobResponse();
+        EstadoTrabajoResponse body = new EstadoTrabajoResponse();
         body.setJobId(job.getJobId());
         body.setEscenario(job.getEscenario());
         body.setAlgoritmo(job.algoritmo);
@@ -576,21 +576,21 @@ public class PlanificadorService {
         return ejecutarALNS(k, null, MOTOR_ALNS, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, JobState job) {
+    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job) {
         return ejecutarALNS(k, job, MOTOR_ALNS, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, JobState job, String motor) {
+    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job, String motor) {
         return ejecutarALNS(k, job, motor, resolverSeed(null), null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, JobState job, String motor, long seed) {
+    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job, String motor, long seed) {
         return ejecutarALNS(k, job, motor, seed, null);
     }
 
-    public SimulacionResponse ejecutarALNS(int k, JobState job, String motor,
+    public SimulacionResponse ejecutarALNS(int k, EstadoTrabajo job, String motor,
                                             long seed, LocalDateTime fechaInicio) {
-        EjecucionParams p = new EjecucionParams();
+        EjecucionParametros p = new EjecucionParametros();
         p.setK(k);
         p.setMotor(motor);
         p.setSeed(seed);
@@ -598,8 +598,8 @@ public class PlanificadorService {
         return ejecutarALNS(p, job);
     }
 
-    public SimulacionResponse ejecutarALNS(EjecucionParams params, JobState job) {
-        if (params == null) params = new EjecucionParams();
+    public SimulacionResponse ejecutarALNS(EjecucionParametros params, EstadoTrabajo job) {
+        if (params == null) params = new EjecucionParametros();
         int k = params.getK() != null ? params.getK() : props.getScenario().getKDefault2();
         String motor = params.getMotor();
         long seed = resolverSeed(params.getSeed());
@@ -621,7 +621,7 @@ public class PlanificadorService {
                 motorRes, seed, fechaInicio, k, saMin, taFijoMs / 1000, diasOverride, scMin, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloques(k, fechaInicio, saOverride, diasOverride);
+        List<ContextoTemporal> plan = construirPlanBloques(k, fechaInicio, saOverride, diasOverride);
         if (plan.isEmpty()) {
             bloquesCacheados = new ArrayList<>();
             SimulacionResponse r = construirRespuestaFront(0, 0L, dataLoader.getVuelos(), 0, null);
@@ -630,16 +630,16 @@ public class PlanificadorService {
             return r;
         }
 
-        List<TemporalContext> warmupPlan = params.isProcesamientoPrevio()
+        List<ContextoTemporal> warmupPlan = params.isProcesamientoPrevio()
                 ? construirPlanWarmup(k, fechaInicio, saOverride)
                 : Collections.emptyList();
 
-        Graph graph = motorCache.obtenerGrafo(
+        Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph, motorCache.skeletonCache());
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.skeletonCache());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
-        AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
+        SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
 
         int totalBloques = plan.size();
         int intervaloReporte = Math.max(1, totalBloques / 10);
@@ -654,10 +654,10 @@ public class PlanificadorService {
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
         long totalMaletas = 0L;
-        TaStats taStats = new TaStats();
+        EstadisticasTa taStats = new EstadisticasTa();
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal2();
         long saMs = saMin * 60_000L;
-        BacklogManager backlog = crearBacklogConPurga(enrutador);
+        GestorBacklog backlog = crearBacklogConPurga(enrutador);
         AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
         AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
                 solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
@@ -695,7 +695,7 @@ public class PlanificadorService {
         String detalleColapsoE2 = null;            // detalle (qué/dónde) e instante UTC del colapso.
         LocalDateTime instanteColapsoE2 = null;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
-        for (TemporalContext ctx : plan) {
+        for (ContextoTemporal ctx : plan) {
             bloqueActual++;
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
@@ -816,17 +816,17 @@ public class PlanificadorService {
         return bloquesCacheados.get(index);
     }
 
-    public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed) {
+    public SimulacionResponse ejecutarEscenario1(EstadoTrabajo job, String motor, long seed) {
         return ejecutarEscenario1(job, motor, seed, null, false);
     }
 
-    public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed,
+    public SimulacionResponse ejecutarEscenario1(EstadoTrabajo job, String motor, long seed,
                                                  LocalDateTime fechaInicio) {
         return ejecutarEscenario1(job, motor, seed, fechaInicio, false);
     }
 
 
-    public SimulacionResponse ejecutarEscenario1(JobState job, String motor, long seed,
+    public SimulacionResponse ejecutarEscenario1(EstadoTrabajo job, String motor, long seed,
                                                  LocalDateTime fechaInicio, boolean enVivo) {
         String motorRes = resolverMotor(motor);
         int k = props.getScenario().getKDefault1();
@@ -837,10 +837,10 @@ public class PlanificadorService {
                 motorRes, seed, k, saMin, scMin, fechaInicio, enVivo, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = enVivo
+        List<ContextoTemporal> plan = enVivo
                 ? construirPlanOperacionE1(k)
                 : construirPlanBloques(k, fechaInicio);
-        List<TemporalContext> warmupPlan = (!enVivo && fechaInicio != null)
+        List<ContextoTemporal> warmupPlan = (!enVivo && fechaInicio != null)
                 ? construirPlanWarmup(k, fechaInicio, null)
                 : Collections.emptyList();
         if (plan.isEmpty()) {
@@ -851,12 +851,12 @@ public class PlanificadorService {
             return r;
         }
 
-        Graph graph = motorCache.obtenerGrafo(
+        Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph, motorCache.skeletonCache());
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.skeletonCache());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
-        AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
+        SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
 
 
         int totalVuelosCancelados = 0;
@@ -870,11 +870,11 @@ public class PlanificadorService {
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
         long totalMaletas = 0L;
-        TaStats taStats = new TaStats();
+        EstadisticasTa taStats = new EstadisticasTa();
         boolean simularTiempoReal = enVivo || props.getScenario().isSimularTiempoReal1();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
-        BacklogManager backlog = crearBacklogConPurga(enrutador);
+        GestorBacklog backlog = crearBacklogConPurga(enrutador);
         AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
         int intervaloReporte = Math.max(1, totalBloques / 10);
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
@@ -889,7 +889,7 @@ public class PlanificadorService {
                 solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
         if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
-        for (TemporalContext ctx : plan) {
+        for (ContextoTemporal ctx : plan) {
             bloqueActual++;
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
@@ -1008,21 +1008,21 @@ public class PlanificadorService {
         return ejecutarHastaColapso(k, umbralColapso, null, MOTOR_ALNS, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, JobState job) {
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, EstadoTrabajo job) {
         return ejecutarHastaColapso(k, umbralColapso, job, MOTOR_ALNS, resolverSeed(null));
     }
 
-    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, JobState job, String motor) {
+    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso, EstadoTrabajo job, String motor) {
         return ejecutarHastaColapso(k, umbralColapso, job, motor, resolverSeed(null));
     }
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
-                                                   JobState job, String motor, long seed) {
+                                                   EstadoTrabajo job, String motor, long seed) {
         return ejecutarHastaColapso(k, umbralColapso, job, motor, seed, null);
     }
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
-                                                   JobState job, String motor, long seed,
+                                                   EstadoTrabajo job, String motor, long seed,
                                                    LocalDateTime fechaInicio) {
         String motorRes = resolverMotor(motor);
         Random rngSim = new Random(seed);
@@ -1035,8 +1035,8 @@ public class PlanificadorService {
                 fechaInicio, job != null);
         long inicio = System.currentTimeMillis();
 
-        List<TemporalContext> plan = construirPlanBloquesHastaColapso(k, fechaInicio);
-        List<TemporalContext> warmupPlan = fechaInicio != null
+        List<ContextoTemporal> plan = construirPlanBloquesHastaColapso(k, fechaInicio);
+        List<ContextoTemporal> warmupPlan = fechaInicio != null
                 ? construirPlanWarmup(k, fechaInicio, null)
                 : Collections.emptyList();
         if (plan.isEmpty()) {
@@ -1047,12 +1047,12 @@ public class PlanificadorService {
             return r;
         }
 
-        Graph graph = motorCache.obtenerGrafo(
+        Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph, motorCache.skeletonCache());
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.skeletonCache());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
-        AlnsSolution solucionDummy = new AlnsSolution(Collections.emptyList());
+        SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
 
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
         List<CancelacionVueloRequest> cancelacionesNoAplicadas =
@@ -1069,11 +1069,11 @@ public class PlanificadorService {
         LocalDateTime instanteColapsoE3 = null;
         String motivoParada = "falta_datos";
         String nivelAlertaPrevio = AlertaColapso.VERDE;
-        TaStats taStats = new TaStats();
+        EstadisticasTa taStats = new EstadisticasTa();
         boolean simularTiempoReal = props.getScenario().isSimularTiempoReal3();
         long saMs = saMin * 60_000L;
         int totalBloques = plan.size();
-        BacklogManager backlog = crearBacklogConPurga(enrutador);
+        GestorBacklog backlog = crearBacklogConPurga(enrutador);
         AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
 
         AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
@@ -1083,7 +1083,7 @@ public class PlanificadorService {
 
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
 
-        for (TemporalContext ctx : plan) {
+        for (ContextoTemporal ctx : plan) {
             bloqueActual++;
             aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
@@ -1202,7 +1202,7 @@ public class PlanificadorService {
         return res;
     }
 
-    private void finalizarAuditoriaDiferida(JobState job, AcumuladorAuditoria auditAcc) {
+    private void finalizarAuditoriaDiferida(EstadoTrabajo job, AcumuladorAuditoria auditAcc) {
         String jobId = job != null ? job.getJobId() : null;
         try {
             if (job != null && auditAcc != null) {
@@ -1237,7 +1237,7 @@ public class PlanificadorService {
 
     public record RangoAuditoria(LocalDateTime desde, LocalDateTime hasta, boolean recortado) {}
 
-    private RangoAuditoria resolverRangoAuditoria(JobState job, LocalDateTime desde, LocalDateTime hasta) {
+    private RangoAuditoria resolverRangoAuditoria(EstadoTrabajo job, LocalDateTime desde, LocalDateTime hasta) {
         if (desde != null && hasta != null && !desde.isBefore(hasta)) {
             throw new ParametroInvalidoException(
                     "rango inválido: 'desde' (" + desde + ") debe ser anterior a 'hasta' (" + hasta + ")");
@@ -1259,10 +1259,10 @@ public class PlanificadorService {
     }
 
     public ResultadoAuditoria generarAuditoriaZip(String jobId, LocalDateTime desde, LocalDateTime hasta) {
-        JobState job = jobs.get(jobId);
+        EstadoTrabajo job = jobs.get(jobId);
         if (job == null) return ResultadoAuditoria.error("job inexistente");
         if (auditoria == null) return ResultadoAuditoria.error("auditoría no disponible (sin servicio de auditoría)");
-        if (JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) {
+        if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) {
             return ResultadoAuditoria.error("el job aún está activo; la auditoría estará disponible al terminar");
         }
         if (!persistencia.reflejaEnBd(jobId)) {
@@ -1274,13 +1274,13 @@ public class PlanificadorService {
             return ResultadoAuditoria.error("hay otra corrida tomando la persistencia; reintenta en unos segundos");
         }
         try {
-            Graph graph = motorCache.obtenerGrafo(
+            Grafo graph = motorCache.obtenerGrafo(
                     () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-            Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+            Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
             List<VueloCancelado> cancelaciones =
                     solucionBdReader.leerCancelaciones(indiceVuelo, rango.desde(), rango.hasta());
-            List<LuggageBatch> sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, rango.desde(), rango.hasta());
-            java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados =
+            List<LoteEnvio> sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, rango.desde(), rango.hasta());
+            java.util.function.Consumer<java.util.function.Consumer<LoteEnvio>> fuenteEnrutados =
                     sink -> solucionBdReader.forEachEnrutado(indiceVuelo, rango.desde(), rango.hasta(), sink);
 
             Thread.interrupted();   // defensivo: el hilo HTTP no debería traer el flag, pero el ZIP usa NIO
@@ -1307,9 +1307,9 @@ public class PlanificadorService {
     }
 
     public ResultadoEstimacion estimarAuditoria(String jobId, LocalDateTime desde, LocalDateTime hasta) {
-        JobState job = jobs.get(jobId);
+        EstadoTrabajo job = jobs.get(jobId);
         if (job == null) return ResultadoEstimacion.error("job inexistente");
-        if (JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado)) {
+        if (RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado)) {
             return ResultadoEstimacion.error("el job aún está activo; la auditoría estará disponible al terminar");
         }
         if (!persistencia.reflejaEnBd(jobId)) {
@@ -1333,12 +1333,12 @@ public class PlanificadorService {
         return ResultadoEstimacion.ok(est);
     }
 
-    private static List<LuggageBatch> filtrarSinRutaPorRango(List<LuggageBatch> sinRuta,
+    private static List<LoteEnvio> filtrarSinRutaPorRango(List<LoteEnvio> sinRuta,
                                                              LocalDateTime desde, LocalDateTime hasta) {
         if (sinRuta == null || sinRuta.isEmpty()) return List.of();
         if (desde == null && hasta == null) return new ArrayList<>(sinRuta);
-        List<LuggageBatch> out = new ArrayList<>();
-        for (LuggageBatch b : sinRuta) {
+        List<LoteEnvio> out = new ArrayList<>();
+        for (LoteEnvio b : sinRuta) {
             LocalDateTime ready = b.getReadyTime();
             if (ready == null) continue;
             if (desde != null && ready.isBefore(desde)) continue;
@@ -1348,54 +1348,54 @@ public class PlanificadorService {
         return out;
     }
 
-    private ResultadoVentana procesarBloque(TemporalContext ctx,
-                                            Graph graph,
-                                            GreedyRepairOperator enrutador,
-                                            AlnsSolution solucionDummy,
+    private ResultadoVentana procesarBloque(ContextoTemporal ctx,
+                                            Grafo graph,
+                                            OperadorReparacionVoraz enrutador,
+                                            SolucionAlns solucionDummy,
                                             Map<String, int[]> odStats,
-                                            BacklogManager backlog) {
+                                            GestorBacklog backlog) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, null, MOTOR_ALNS, null);
     }
 
-    private ResultadoVentana procesarBloque(TemporalContext ctx,
-                                            Graph graph,
-                                            GreedyRepairOperator enrutador,
-                                            AlnsSolution solucionDummy,
+    private ResultadoVentana procesarBloque(ContextoTemporal ctx,
+                                            Grafo graph,
+                                            OperadorReparacionVoraz enrutador,
+                                            SolucionAlns solucionDummy,
                                             Map<String, int[]> odStats,
-                                            BacklogManager backlog,
+                                            GestorBacklog backlog,
                                             AcumuladorAuditoria auditAcc) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, MOTOR_ALNS, null);
     }
 
-    private ResultadoVentana procesarBloque(TemporalContext ctx,
-                                            Graph graph,
-                                            GreedyRepairOperator enrutador,
-                                            AlnsSolution solucionDummy,
+    private ResultadoVentana procesarBloque(ContextoTemporal ctx,
+                                            Grafo graph,
+                                            OperadorReparacionVoraz enrutador,
+                                            SolucionAlns solucionDummy,
                                             Map<String, int[]> odStats,
-                                            BacklogManager backlog,
+                                            GestorBacklog backlog,
                                             AcumuladorAuditoria auditAcc,
                                             String motor) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, null, 0L);
     }
 
-    private ResultadoVentana procesarBloque(TemporalContext ctx,
-                                            Graph graph,
-                                            GreedyRepairOperator enrutador,
-                                            AlnsSolution solucionDummy,
+    private ResultadoVentana procesarBloque(ContextoTemporal ctx,
+                                            Grafo graph,
+                                            OperadorReparacionVoraz enrutador,
+                                            SolucionAlns solucionDummy,
                                             Map<String, int[]> odStats,
-                                            BacklogManager backlog,
+                                            GestorBacklog backlog,
                                             AcumuladorAuditoria auditAcc,
                                             String motor,
                                             Random rngSim) {
         return procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motor, rngSim, 0L);
     }
 
-    private ResultadoVentana procesarBloque(TemporalContext ctx,
-                                            Graph graph,
-                                            GreedyRepairOperator enrutador,
-                                            AlnsSolution solucionDummy,
+    private ResultadoVentana procesarBloque(ContextoTemporal ctx,
+                                            Grafo graph,
+                                            OperadorReparacionVoraz enrutador,
+                                            SolucionAlns solucionDummy,
                                             Map<String, int[]> odStats,
-                                            BacklogManager backlog,
+                                            GestorBacklog backlog,
                                             AcumuladorAuditoria auditAcc,
                                             String motor,
                                             Random rngSim,
@@ -1404,12 +1404,12 @@ public class PlanificadorService {
                 auditAcc, motor, rngSim, taFijoMsOverride, false, false);
     }
 
-    private ResultadoVentana procesarBloque(TemporalContext ctx,
-                                            Graph graph,
-                                            GreedyRepairOperator enrutador,
-                                            AlnsSolution solucionDummy,
+    private ResultadoVentana procesarBloque(ContextoTemporal ctx,
+                                            Grafo graph,
+                                            OperadorReparacionVoraz enrutador,
+                                            SolucionAlns solucionDummy,
                                             Map<String, int[]> odStats,
-                                            BacklogManager backlog,
+                                            GestorBacklog backlog,
                                             AcumuladorAuditoria auditAcc,
                                             String motor,
                                             Random rngSim,
@@ -1421,15 +1421,15 @@ public class PlanificadorService {
         List<Envio> maletasVentana = demandaEnVivo
                 ? Collections.emptyList()
                 : dataLoader.getMaletasEnRango(ctx.scStart, ctx.scEnd);
-        List<LuggageBatch> bloqueBatches = mapper.mapToBatches(maletasVentana);
+        List<LoteEnvio> bloqueBatches = mapper.mapToBatches(maletasVentana);
 
-        List<LuggageBatch> afectadosCrudos = new ArrayList<>();
+        List<LoteEnvio> afectadosCrudos = new ArrayList<>();
         if (backlog != null) {
-            List<LuggageBatch> pendientes = backlog.pollPendientesUrgentes(
+            List<LoteEnvio> pendientes = backlog.pollPendientesUrgentes(
                     props.getBacklog().getMaxReprocesoPorBloque());
 
-            List<LuggageBatch> normales = new ArrayList<>();
-            for (LuggageBatch b : pendientes) {
+            List<LoteEnvio> normales = new ArrayList<>();
+            for (LoteEnvio b : pendientes) {
                 enrutador.removerEsperaOrigenBacklog(b);
                 if (b.tienePrefijo() || enrutador.rutaUsaVueloCancelado(b)) {
                     afectadosCrudos.add(b);   // carril Fase 2 (NO entra al motor)
@@ -1451,14 +1451,14 @@ public class PlanificadorService {
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
 
-        List<LuggageBatch> afectadosResueltos = new ArrayList<>();
-        for (LuggageBatch b : afectadosCrudos) {
+        List<LoteEnvio> afectadosResueltos = new ArrayList<>();
+        for (LoteEnvio b : afectadosCrudos) {
             afectadosResueltos.add(
                     reenrutarAfectadoDesdePosicion(b, ctx, graph, enrutador, blockFlight, blockAirport));
         }
         Map<Long, Integer> telemetryFlight = blockFlight;
         Map<Long, Integer> telemetryAirport = blockAirport;
-        List<LuggageBatch> finalBatches;
+        List<LoteEnvio> finalBatches;
 
         long saMs = ctx.saMinutos * 60_000L;
         long taFijoMs = taFijoMsOverride > 0
@@ -1477,24 +1477,24 @@ public class PlanificadorService {
             finalBatches = bloqueBatches;
             enrutador.commitBlock(blockFlight, blockAirport);
         } else {
-            List<LuggageBatch> intra = new ArrayList<>();
-            List<LuggageBatch> inter = new ArrayList<>();
-            for (LuggageBatch b : bloqueBatches) {
+            List<LoteEnvio> intra = new ArrayList<>();
+            List<LoteEnvio> inter = new ArrayList<>();
+            for (LoteEnvio b : bloqueBatches) {
                 if (b.getSlaLimitHours() <= 24) intra.add(b);
                 else inter.add(b);
             }
-            for (LuggageBatch b : intra) {
+            for (LoteEnvio b : intra) {
                 if (System.nanoTime() >= deadlineMotorNs) break;
                 enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport);
             }
-            for (LuggageBatch b : inter) {
+            for (LoteEnvio b : inter) {
                 if (System.nanoTime() >= deadlineMotorNs) break;
                 enrutador.repair(solucionDummy, List.of(b), blockFlight, blockAirport);
             }
 
             long restanteAlnsMs = Math.max(0L, (deadlineMotorNs - System.nanoTime()) / 1_000_000L);
             if (restanteAlnsMs > 0 && bloqueBatches.stream().anyMatch(b -> !b.isCumpleSLA())) {
-                AlgorithmALNS alns = new AlgorithmALNS(
+                AlgoritmoALNS alns = new AlgoritmoALNS(
                         graph, enrutador, bloqueBatches, blockFlight, blockAirport, props);
                 if (rngSim != null) alns.setRandom(rngSim);
 
@@ -1557,7 +1557,7 @@ public class PlanificadorService {
 
         boolean colapsoAlmacen = false;
         String detalleColapso = null;
-        for (LuggageBatch b : finalBatches) {
+        for (LoteEnvio b : finalBatches) {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
             if (enrutada && b.isCumpleSLA()) continue;   // on-time: ningún almacén lo bloqueó
             if (enrutador.sinRutaPorAlmacenLleno(b)) {
@@ -1571,7 +1571,7 @@ public class PlanificadorService {
         if (backlog != null) {
             boolean motorAco = MOTOR_ACO.equalsIgnoreCase(motor);
             double umbralSlack = props.getBacklog().getUmbralReplanificacionSlack();
-            for (LuggageBatch b : finalBatches) {
+            for (LoteEnvio b : finalBatches) {
                 boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
                 if (!enrutada) {
                     backlog.addSinRuta(b);
@@ -1580,7 +1580,7 @@ public class PlanificadorService {
                     backlog.addReplanificable(b);
                 }
             }
-            LuggageBatch origenDesbordado = enrutador.reconstruirEsperaOrigenBacklog(
+            LoteEnvio origenDesbordado = enrutador.reconstruirEsperaOrigenBacklog(
                     backlog.peekPendientes(), bloqueBatches);
             if (origenDesbordado != null && !colapsoAlmacen) {
                 colapsoAlmacen = true;
@@ -1590,7 +1590,7 @@ public class PlanificadorService {
         }
 
         if (auditAcc != null) {
-            for (LuggageBatch b : finalBatches) auditAcc.registrar(b);
+            for (LoteEnvio b : finalBatches) auditAcc.registrar(b);
         }
 
         ctx.marcarFin(taFijoMs);
@@ -1613,7 +1613,7 @@ public class PlanificadorService {
 
         var pre = enrutador.evaluarPreColapso(
                 telemetryAirport, backlog != null ? backlog.peekPendientes() : java.util.List.of());
-        com.tasfb2b.planificador.dto.jobs.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
+        com.tasfb2b.planificador.dto.trabajos.AlertaColapso alerta = construirAlertaColapso(pre, ctx.bloqueIdx);
 
         if (!colapsoAlmacen && pre.utilAlmacenMax() > 1.0) {
             colapsoAlmacen = true;
@@ -1629,39 +1629,39 @@ public class PlanificadorService {
                 colapsoAlmacen, detalleColapso, alerta, serieAlmacenes, finalBatches);
     }
 
-    private com.tasfb2b.planificador.dto.jobs.AlertaColapso construirAlertaColapso(
-            GreedyRepairOperator.PreColapso pre, int bloque) {
+    private com.tasfb2b.planificador.dto.trabajos.AlertaColapso construirAlertaColapso(
+            OperadorReparacionVoraz.PreColapso pre, int bloque) {
         var cfg = props.getAlertaColapso();
-        String nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
-        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
-        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
-        String nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
+        String nivelAlmacen = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE;
+        if (pre.utilAlmacenMax() >= cfg.getAlmacenRojo()) nivelAlmacen = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO;
+        else if (pre.utilAlmacenMax() >= cfg.getAlmacenAmbar()) nivelAlmacen = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR;
+        String nivelBacklog = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE;
         if (pre.envioUrgente() != null) {
-            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
-            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
+            if (pre.holguraSlaMin() <= cfg.getSlaRestanteRojo()) nivelBacklog = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO;
+            else if (pre.holguraSlaMin() <= cfg.getSlaRestanteAmbar()) nivelBacklog = com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR;
         }
         String nivel = nivelMax(nivelAlmacen, nivelBacklog);
 
         StringBuilder msg = new StringBuilder();
-        if (!com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelAlmacen)) {
+        if (!com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelAlmacen)) {
             msg.append(String.format("almacén %s al %.0f%% de capacidad",
                     pre.almacenCritico(), pre.utilAlmacenMax() * 100));
         }
-        if (!com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelBacklog)) {
+        if (!com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelBacklog)) {
             if (msg.length() > 0) msg.append(" | ");
             msg.append(String.format("envío %s al %.0f%% de su SLA en backlog",
                     pre.envioUrgente(), Math.max(0, pre.holguraSlaMin()) * 100));
         }
         if (msg.length() == 0) msg.append("Sin riesgo de colapso");
 
-        boolean almacenActivo = !com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelAlmacen);
-        boolean backlogActivo = !com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE.equals(nivelBacklog);
+        boolean almacenActivo = !com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelAlmacen);
+        boolean backlogActivo = !com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE.equals(nivelBacklog);
         String causaDominante = almacenActivo && backlogActivo ? "ambos"
                 : almacenActivo ? "almacen"
                 : backlogActivo ? "sla"
                 : null;
 
-        return new com.tasfb2b.planificador.dto.jobs.AlertaColapso(
+        return new com.tasfb2b.planificador.dto.trabajos.AlertaColapso(
                 nivel, msg.toString(), bloque,
                 pre.utilAlmacenMax(), pre.almacenCritico(), pre.holguraSlaMin(), pre.envioUrgente(),
                 causaDominante);
@@ -1677,24 +1677,24 @@ public class PlanificadorService {
     }
 
     private static String nivelMax(String a, String b) {
-        if (com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO.equals(a)
-                || com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO.equals(b))
-            return com.tasfb2b.planificador.dto.jobs.AlertaColapso.ROJO;
-        if (com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR.equals(a)
-                || com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR.equals(b))
-            return com.tasfb2b.planificador.dto.jobs.AlertaColapso.AMBAR;
-        return com.tasfb2b.planificador.dto.jobs.AlertaColapso.VERDE;
+        if (com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO.equals(a)
+                || com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO.equals(b))
+            return com.tasfb2b.planificador.dto.trabajos.AlertaColapso.ROJO;
+        if (com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR.equals(a)
+                || com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR.equals(b))
+            return com.tasfb2b.planificador.dto.trabajos.AlertaColapso.AMBAR;
+        return com.tasfb2b.planificador.dto.trabajos.AlertaColapso.VERDE;
     }
 
-    private List<TemporalContext> construirPlanBloques(int k) {
+    private List<ContextoTemporal> construirPlanBloques(int k) {
         return construirPlanBloques(k, null, null, null);
     }
 
-    private List<TemporalContext> construirPlanBloques(int k, LocalDateTime fechaInicio) {
+    private List<ContextoTemporal> construirPlanBloques(int k, LocalDateTime fechaInicio) {
         return construirPlanBloques(k, fechaInicio, null, null);
     }
 
-    private List<TemporalContext> construirPlanOperacionE1(int k) {
+    private List<ContextoTemporal> construirPlanOperacionE1(int k) {
         int saMin = props.getScenario().getSaMinutos();
         int scMin = Math.max(saMin, k * saMin);
         int horas = Math.max(1, props.getScenario().getOperacionHoras());
@@ -1707,19 +1707,19 @@ public class PlanificadorService {
         log.info("Plan operación E1 (EN VIVO): inicio={} fin={} K={} Sa={}min Sc={}min horizonte={}h",
                 inicio, fin, k, saMin, scMin, horas);
 
-        List<TemporalContext> plan = new ArrayList<>();
+        List<ContextoTemporal> plan = new ArrayList<>();
         LocalDateTime scStart = inicio;
         int idx = 0;
         while (scStart.isBefore(fin)) {
             LocalDateTime scEnd = scStart.plusMinutes(scMin);
             if (scEnd.isAfter(fin)) scEnd = fin;
-            plan.add(new TemporalContext(scStart, scEnd, scMin, saMin, k, idx++));
+            plan.add(new ContextoTemporal(scStart, scEnd, scMin, saMin, k, idx++));
             scStart = scEnd;
         }
         return plan;
     }
 
-    private List<TemporalContext> construirPlanBloques(int k,
+    private List<ContextoTemporal> construirPlanBloques(int k,
                                                         LocalDateTime fechaInicio,
                                                         Integer saMinOverride,
                                                         Integer diasOverride) {
@@ -1727,12 +1727,12 @@ public class PlanificadorService {
                 props.getScenario().getMaxVentanas());
     }
 
-    private List<TemporalContext> construirPlanBloquesHastaColapso(int k, LocalDateTime fechaInicio) {
+    private List<ContextoTemporal> construirPlanBloquesHastaColapso(int k, LocalDateTime fechaInicio) {
         return construirPlanBloques(k, fechaInicio, null, null,
                 props.getScenario().getMaxVentanasColapso());
     }
 
-    private List<TemporalContext> construirPlanBloques(int k,
+    private List<ContextoTemporal> construirPlanBloques(int k,
                                                         LocalDateTime fechaInicio,
                                                         Integer saMinOverride,
                                                         Integer diasOverride,
@@ -1784,19 +1784,19 @@ public class PlanificadorService {
                 inicio, fin, k, saMin, scMin, ventanasTotales,
                 diasOverride != null ? " (dias=" + diasOverride + ")" : "");
 
-        List<TemporalContext> plan = new ArrayList<>();
+        List<ContextoTemporal> plan = new ArrayList<>();
         LocalDateTime scStart = inicio;
         int idx = 0;
         while (scStart.isBefore(fin)) {
             LocalDateTime scEnd = scStart.plusMinutes(scMin);
             if (scEnd.isAfter(fin)) scEnd = fin;
-            plan.add(new TemporalContext(scStart, scEnd, scMin, saMin, k, idx++));
+            plan.add(new ContextoTemporal(scStart, scEnd, scMin, saMin, k, idx++));
             scStart = scEnd;
         }
         return plan;
     }
 
-    private List<TemporalContext> construirPlanWarmup(int k,
+    private List<ContextoTemporal> construirPlanWarmup(int k,
                                                        LocalDateTime fechaInicio,
                                                        Integer saMinOverride) {
         if (fechaInicio == null) return Collections.emptyList();
@@ -1818,13 +1818,13 @@ public class PlanificadorService {
         log.info("Plan warm-up: inicio={} fin={} K={} Sa={}min Sc={}min",
                 primero, fin, k, saMin, scMin);
 
-        List<TemporalContext> plan = new ArrayList<>();
+        List<ContextoTemporal> plan = new ArrayList<>();
         LocalDateTime scStart = primero;
         int idx = 0;
         while (scStart.isBefore(fin)) {
             LocalDateTime scEnd = scStart.plusMinutes(scMin);
             if (scEnd.isAfter(fin)) scEnd = fin;
-            plan.add(new TemporalContext(scStart, scEnd, scMin, saMin, k, idx++));
+            plan.add(new ContextoTemporal(scStart, scEnd, scMin, saMin, k, idx++));
             scStart = scEnd;
         }
         return plan;
@@ -1841,22 +1841,22 @@ public class PlanificadorService {
         if (asig == null) asig = construirAsignacionSintetica(jobId, idEnvio);   // inyectados/registrados EN VIVO
         if (asig == null) return null;
         LocalDateTime ahora = (instante != null) ? instante : ahoraDelJob(jobId);
-        EnvioEstadoResponse resp = EnvioEstadoCalculator.calcular(asig, ahora);
+        EnvioEstadoResponse resp = CalculadorEstadoEnvio.calcular(asig, ahora);
         resp.setInstanteDerivadoDelJob(instante == null && ahora != null);
         return resp;
     }
 
     private AsignacionMaleta construirAsignacionSintetica(String jobId, String idEnvio) {
         if (idEnvio == null || !idEnvio.startsWith("INV-")) return null;
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job != null) {
             AsignacionMaleta enRam = job.getRutaSintetica(idEnvio);
             if (enRam != null) return enRam;
         }
         if (!persistencia.reflejaEnBd(jobId)) return null;
-        Graph graph = motorCache.obtenerGrafo(
+        Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+        Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         return solucionBdReader.buscarPorEnvioInyectado(idEnvio, indiceVuelo)
                 .map(b -> buildAsignaciones(List.of(b)).get(0))
                 .orElse(null);
@@ -1864,16 +1864,16 @@ public class PlanificadorService {
 
     private AsignacionMaleta construirAsignacionDesdeBd(String jobId, String idEnvio) {
         if (!persistencia.reflejaEnBd(jobId)) return null;
-        Graph graph = motorCache.obtenerGrafo(
+        Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapToGraph(dataLoader.getAeropuertos(), dataLoader.getVuelos()));
-        Map<String, Edge> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
+        Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
         return solucionBdReader.buscarPorEnvio(idEnvio, indiceVuelo)
                 .map(b -> buildAsignaciones(List.of(b)).get(0))
                 .orElse(null);
     }
 
     private LocalDateTime ahoraDelJob(String jobId) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
         BloqueSimulacion ultimo = job.ultimoBloque();
         if (ultimo == null || ultimo.getHoraFin() == null) return null;
@@ -1884,18 +1884,18 @@ public class PlanificadorService {
         }
     }
 
-    private LuggageBatch reenrutarAfectadoDesdePosicion(LuggageBatch b, TemporalContext ctx,
-            Graph graph, GreedyRepairOperator enrutador,
+    private LoteEnvio reenrutarAfectadoDesdePosicion(LoteEnvio b, ContextoTemporal ctx,
+            Grafo graph, OperadorReparacionVoraz enrutador,
             Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
         if (!b.tienePrefijo()) {
-            List<Edge> route = b.getAssignedRoute();
+            List<Arista> route = b.getAssignedRoute();
             List<Long> deps  = b.getAssignedDepartures();
             if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
                 enrutador.releaseFromGlobal(b);
                 b.clearRoute();
                 return enrutarSufijo(b, enrutador, blockFlight, blockAirport);   // desde el origen
             }
-            long ahoraMin = GreedyRepairOperator.toEpochMinPublic(ctx.scEnd);
+            long ahoraMin = OperadorReparacionVoraz.toEpochMinPublic(ctx.scEnd);
             int n = route.size();
             int k = n;
             for (int i = 0; i < n; i++) {
@@ -1909,7 +1909,7 @@ public class PlanificadorService {
                 b.clearRoute();
                 return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
             }
-            Edge cortEdge = route.get(k - 1);
+            Arista cortEdge = route.get(k - 1);
             long arrCorte = deps.get(k - 1) + cortEdge.durationMinutes;
             enrutador.releaseSuffixFromGlobal(b, k);
             b.setPrefijoFijo(new ArrayList<>(route.subList(0, k)));
@@ -1922,13 +1922,13 @@ public class PlanificadorService {
         return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
     }
 
-    private LuggageBatch enrutarSufijo(LuggageBatch b, GreedyRepairOperator enrutador,
+    private LoteEnvio enrutarSufijo(LoteEnvio b, OperadorReparacionVoraz enrutador,
             Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
-        LuggageBatch sintetico = new LuggageBatch(b.getId(), b.getQuantity(), b.getSlaLimitHours(),
+        LoteEnvio sintetico = new LoteEnvio(b.getId(), b.getQuantity(), b.getSlaLimitHours(),
                 b.origenEfectivo(), b.getDestCode(), b.readyEfectivo());
-        List<GreedyRepairOperator.RouteCandidate> candidatos = enrutador.generarCandidatosRuta(
+        List<OperadorReparacionVoraz.RutaCandidata> candidatos = enrutador.generarCandidatosRuta(
                 sintetico, blockFlight, blockAirport, SUFIJO_ROUTE_CANDIDATES);
-        GreedyRepairOperator.RouteCandidate elegido = elegirSufijo(candidatos, b, enrutador);
+        OperadorReparacionVoraz.RutaCandidata elegido = elegirSufijo(candidatos, b, enrutador);
         if (elegido == null) {
             b.setAssignedRoute(new ArrayList<>());
             b.setAssignedDepartures(null);
@@ -1942,12 +1942,12 @@ public class PlanificadorService {
         return b;
     }
 
-    private GreedyRepairOperator.RouteCandidate elegirSufijo(
-            List<GreedyRepairOperator.RouteCandidate> candidatos, LuggageBatch original,
-            GreedyRepairOperator enrutador) {
+    private OperadorReparacionVoraz.RutaCandidata elegirSufijo(
+            List<OperadorReparacionVoraz.RutaCandidata> candidatos, LoteEnvio original,
+            OperadorReparacionVoraz enrutador) {
         if (candidatos == null) return null;
-        GreedyRepairOperator.RouteCandidate mejorOnTime = null, mejorTardio = null;
-        for (GreedyRepairOperator.RouteCandidate c : candidatos) {
+        OperadorReparacionVoraz.RutaCandidata mejorOnTime = null, mejorTardio = null;
+        for (OperadorReparacionVoraz.RutaCandidata c : candidatos) {
             if (enrutador.cumpleSlaDesdeOrigen(c, original)) {
                 if (mejorOnTime == null || c.getArrivalMin() < mejorOnTime.getArrivalMin()) mejorOnTime = c;
             } else {
@@ -1963,9 +1963,9 @@ public class PlanificadorService {
         return LocalDate.ofEpochDay(day).atTime(minOfDay / 60, minOfDay % 60);
     }
 
-    List<AsignacionMaleta> buildAsignaciones(List<LuggageBatch> batches) {
+    List<AsignacionMaleta> buildAsignaciones(List<LoteEnvio> batches) {
         return batches.stream().map(b -> {
-            List<Edge> rutaCompleta = b.getRutaCompleta();
+            List<Arista> rutaCompleta = b.getRutaCompleta();
             List<Long> depsCompletas = b.getDeparturesCompletas();
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
             boolean tieneTramos = rutaCompleta != null && !rutaCompleta.isEmpty()
@@ -2016,7 +2016,7 @@ public class PlanificadorService {
         }).collect(Collectors.toList());
     }
 
-    private void logDiagnosticos(Map<String, int[]> odStats, Graph graph, GreedyRepairOperator enrutador) {
+    private void logDiagnosticos(Map<String, int[]> odStats, Grafo graph, OperadorReparacionVoraz enrutador) {
         log.info("===== DIAGNÓSTICO =====");
         log.info("Top 25 pares O→D sin ruta:");
         odStats.entrySet().stream()
@@ -2043,12 +2043,12 @@ public class PlanificadorService {
         log.info("=======================");
     }
 
-    List<CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Graph graph,
-                                                          GreedyRepairOperator enrutador) {
+    List<CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Grafo graph,
+                                                          OperadorReparacionVoraz enrutador) {
         if (blockFlight == null || blockFlight.isEmpty() || graph == null) return List.of();
 
-        Map<Integer, Edge> edgesByIdx = new HashMap<>();
-        for (Edge edge : graph.edges) edgesByIdx.put(edge.idx, edge);
+        Map<Integer, Arista> edgesByIdx = new HashMap<>();
+        for (Arista edge : graph.edges) edgesByIdx.put(edge.idx, edge);
 
         List<CargaVuelo> out = new ArrayList<>();
         for (Map.Entry<Long, Integer> entry : blockFlight.entrySet()) {
@@ -2056,7 +2056,7 @@ public class PlanificadorService {
                     ? enrutador.ocupacionGlobalVuelo(entry.getKey())
                     : entry.getValue();
             if (carga <= 0) continue;
-            Edge edge = edgesByIdx.get(resourceIdx(entry.getKey()));
+            Arista edge = edgesByIdx.get(resourceIdx(entry.getKey()));
             if (edge == null) continue;
 
             LocalDateTime salida = LocalDate.ofEpochDay(epochDay(entry.getKey()))
@@ -2072,7 +2072,7 @@ public class PlanificadorService {
             dto.setFechaLlegada(llegada.toString());
             dto.setCapacidadMaxima(edge.capacity);
             dto.setCargaAsignada(carga);
-            SimulacionFormat.completarCargaVuelo(dto);
+            FormatoSimulacion.completarCargaVuelo(dto);
             out.add(dto);
         }
         out.sort(Comparator.comparing(CargaVuelo::getFechaSalida)
@@ -2081,12 +2081,12 @@ public class PlanificadorService {
     }
 
     List<OcupacionAlmacen> buildOcupacionAlmacenes(Map<Long, Integer> blockAirport,
-                                                                       Graph graph,
-                                                                       GreedyRepairOperator enrutador) {
+                                                                       Grafo graph,
+                                                                       OperadorReparacionVoraz enrutador) {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
 
-        Map<Integer, Node> nodesByIdx = new HashMap<>();
-        for (Node node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
+        Map<Integer, Nodo> nodesByIdx = new HashMap<>();
+        for (Nodo node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
 
         Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();   // clave (nodeIdx, epochDay) → pico
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
@@ -2095,15 +2095,15 @@ public class PlanificadorService {
                     : entry.getValue();
             if (ocupacion <= 0) continue;
             int nodeIdx = resourceIdx(entry.getKey());
-            long slot = entry.getKey() & FlightKeyEncoder.DAY_MASK;   // índice de slot (epochMin/60)
-            long epochDia = (slot * GreedyRepairOperator.STORAGE_SLOT_MIN) / FlightKeyEncoder.DAY_MIN;
-            long claveAeroDia = (((long) nodeIdx) << FlightKeyEncoder.DAY_BITS) | (epochDia & FlightKeyEncoder.DAY_MASK);
+            long slot = entry.getKey() & CodificadorClaveVuelo.DAY_MASK;   // índice de slot (epochMin/60)
+            long epochDia = (slot * OperadorReparacionVoraz.STORAGE_SLOT_MIN) / CodificadorClaveVuelo.DAY_MIN;
+            long claveAeroDia = (((long) nodeIdx) << CodificadorClaveVuelo.DAY_BITS) | (epochDia & CodificadorClaveVuelo.DAY_MASK);
             picoPorAeroDia.merge(claveAeroDia, ocupacion, Integer::max);
         }
 
         List<OcupacionAlmacen> out = new ArrayList<>();
         for (Map.Entry<Long, Integer> entry : picoPorAeroDia.entrySet()) {
-            Node node = nodesByIdx.get(resourceIdx(entry.getKey()));
+            Nodo node = nodesByIdx.get(resourceIdx(entry.getKey()));
             if (node == null) continue;
 
             OcupacionAlmacen dto = new OcupacionAlmacen();
@@ -2111,7 +2111,7 @@ public class PlanificadorService {
             dto.setFecha(LocalDate.ofEpochDay(epochDay(entry.getKey())).toString());
             dto.setCapacidadMaxima(node.capacity);
             dto.setOcupacionAsignada(entry.getValue());   // pico concurrente del día
-            SimulacionFormat.completarOcupacionAlmacen(dto);
+            FormatoSimulacion.completarOcupacionAlmacen(dto);
             out.add(dto);
         }
         out.sort(Comparator.comparing(OcupacionAlmacen::getFecha)
@@ -2120,12 +2120,12 @@ public class PlanificadorService {
     }
 
     List<OcupacionAlmacenSlot> buildSerieAlmacenes(Map<Long, Integer> blockAirport,
-                                                                      Graph graph,
-                                                                      GreedyRepairOperator enrutador) {
+                                                                      Grafo graph,
+                                                                      OperadorReparacionVoraz enrutador) {
         if (blockAirport == null || blockAirport.isEmpty() || graph == null) return List.of();
 
-        Map<Integer, Node> nodesByIdx = new HashMap<>();
-        for (Node node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
+        Map<Integer, Nodo> nodesByIdx = new HashMap<>();
+        for (Nodo node : graph.nodes.values()) nodesByIdx.put(node.idx, node);
 
         List<OcupacionAlmacenSlot> out = new ArrayList<>(blockAirport.size());
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
@@ -2133,20 +2133,20 @@ public class PlanificadorService {
                     ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
                     : entry.getValue();
             if (ocupacion <= 0) continue;
-            Node node = nodesByIdx.get(resourceIdx(entry.getKey()));
+            Nodo node = nodesByIdx.get(resourceIdx(entry.getKey()));
             if (node == null) continue;
 
-            long slot = entry.getKey() & FlightKeyEncoder.DAY_MASK;   // índice de slot (epochMin/60)
-            long epochMin = slot * GreedyRepairOperator.STORAGE_SLOT_MIN;
+            long slot = entry.getKey() & CodificadorClaveVuelo.DAY_MASK;   // índice de slot (epochMin/60)
+            long epochMin = slot * OperadorReparacionVoraz.STORAGE_SLOT_MIN;
 
             OcupacionAlmacenSlot dto = new OcupacionAlmacenSlot();
             dto.setAeropuerto(node.code);
             dto.setHora(epochMinToIso(epochMin));
             dto.setCapacidadMaxima(node.capacity);
             dto.setOcupacion(ocupacion);
-            double porcentaje = SimulacionFormat.porcentaje(ocupacion, node.capacity);
+            double porcentaje = FormatoSimulacion.porcentaje(ocupacion, node.capacity);
             dto.setPorcentajeOcupacion(porcentaje);
-            dto.setSemaforo(SimulacionFormat.semaforoPorPorcentaje(porcentaje));
+            dto.setSemaforo(FormatoSimulacion.semaforoPorPorcentaje(porcentaje));
             out.add(dto);
         }
         out.sort(Comparator.comparing(OcupacionAlmacenSlot::getHora)
@@ -2180,11 +2180,11 @@ public class PlanificadorService {
     }
 
     private static int resourceIdx(long key) {
-        return (int) (key >> FlightKeyEncoder.DAY_BITS);
+        return (int) (key >> CodificadorClaveVuelo.DAY_BITS);
     }
 
     private static long epochDay(long key) {
-        return key & FlightKeyEncoder.DAY_MASK;
+        return key & CodificadorClaveVuelo.DAY_MASK;
     }
 
 
@@ -2200,13 +2200,13 @@ public class PlanificadorService {
         res.setTotalBloques(totalBloques);
 
         long dayShift = simulationDate != null
-                ? ChronoUnit.DAYS.between(FlightParser.FLIGHT_BASE_DATE, simulationDate) : 0L;
+                ? ChronoUnit.DAYS.between(AnalizadorVuelos.FLIGHT_BASE_DATE, simulationDate) : 0L;
 
         List<VueloBackend> vuelosFront = new ArrayList<>();
         Map<String, AeropuertoDTO> infoAero = new HashMap<>();
         for (Vuelo v : vuelosReales) {
             VueloBackend vb = new VueloBackend();
-            vb.setId(SimulacionFormat.vueloFrontId(v));
+            vb.setId(FormatoSimulacion.vueloFrontId(v));
             vb.setOrigen(v.getOrigen());
             vb.setDestino(v.getDestino());
             vb.setFechaSalida(v.getFechaHoraSalida().plusDays(dayShift).toString());
@@ -2244,7 +2244,7 @@ public class PlanificadorService {
         m.setInstanteColapsoUtc(instanteColapso != null ? instanteColapso.toString() : null);
     }
 
-    private static void llenarMetricasTa(Metricas m, TaStats stats, long saMs) {
+    private static void llenarMetricasTa(Metricas m, EstadisticasTa stats, long saMs) {
         m.setTaMinMs(stats.min());
         m.setTaMaxMs(stats.max());
         m.setTaPromedioMs(stats.promedio());
@@ -2252,10 +2252,10 @@ public class PlanificadorService {
         m.setAdvertenciaCalibracion(stats.max() > saMs * 0.9);
     }
 
-    private AcumuladorAuditoria ejecutarWarmup(List<TemporalContext> warmupPlan, JobState job,
-                                                     Graph graph, GreedyRepairOperator enrutador,
-                                                     AlnsSolution solucionDummy, Map<String, int[]> odStats,
-                                                     BacklogManager backlog, String motorRes, long seed,
+    private AcumuladorAuditoria ejecutarWarmup(List<ContextoTemporal> warmupPlan, EstadoTrabajo job,
+                                                     Grafo graph, OperadorReparacionVoraz enrutador,
+                                                     SolucionAlns solucionDummy, Map<String, int[]> odStats,
+                                                     GestorBacklog backlog, String motorRes, long seed,
                                                      long taFijoMs, LocalDateTime fechaInicio) {
         AcumuladorAuditoria auditWarmup = new AcumuladorAuditoria(true);
         if (warmupPlan == null || warmupPlan.isEmpty()) return auditWarmup;
@@ -2269,7 +2269,7 @@ public class PlanificadorService {
         long inicioWarmupMs = System.currentTimeMillis();
         log.info("Warm-up iniciado: {} bloques hasta fechaInicio={}", warmupPlan.size(), fechaInicio);
         int wIdx = 0;
-        for (TemporalContext ctx : warmupPlan) {
+        for (ContextoTemporal ctx : warmupPlan) {
             wIdx++;
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
@@ -2293,25 +2293,25 @@ public class PlanificadorService {
         return auditWarmup;
     }
 
-    List<AsignacionMaleta> construirEstadoInicial(Collection<LuggageBatch> batchesWarmup) {
+    List<AsignacionMaleta> construirEstadoInicial(Collection<LoteEnvio> batchesWarmup) {
         if (batchesWarmup == null || batchesWarmup.isEmpty()) return List.of();
 
         long relojMin = Long.MIN_VALUE;
-        for (LuggageBatch b : batchesWarmup) {
+        for (LoteEnvio b : batchesWarmup) {
             long readyMin = toEpochMin(b.getReadyTime());
             if (readyMin > relojMin) relojMin = readyMin;
         }
 
-        List<LuggageBatch> activos = new ArrayList<>();
-        for (LuggageBatch b : batchesWarmup) {
+        List<LoteEnvio> activos = new ArrayList<>();
+        for (LoteEnvio b : batchesWarmup) {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
             if (enrutada && ultimoArriboMin(b) > relojMin) activos.add(b);
         }
         return buildAsignaciones(activos);
     }
 
-    private static BacklogManager crearBacklogConPurga(GreedyRepairOperator enrutador) {
-        return new BacklogManager(0, true, b -> {
+    private static GestorBacklog crearBacklogConPurga(OperadorReparacionVoraz enrutador) {
+        return new GestorBacklog(0, true, b -> {
             if (enrutador.rutaUsaVueloCancelado(b)) {
                 enrutador.releaseFromGlobal(b);
                 b.clearRoute();
@@ -2319,7 +2319,7 @@ public class PlanificadorService {
         });
     }
 
-    private static boolean cancelacionPedida(JobState job) {
+    private static boolean cancelacionPedida(EstadoTrabajo job) {
         return job != null && ("cancelado".equals(job.estado) || job.canceladoPorUsuario);
     }
 
@@ -2332,7 +2332,7 @@ public class PlanificadorService {
 
     private record ResumenEnvio(long quantity, boolean enrutada, boolean cumpleSLA,
                                 long readyMin, long ultimoArriboMin) {
-        static ResumenEnvio de(LuggageBatch b) {
+        static ResumenEnvio de(LoteEnvio b) {
             boolean enrutada = b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty();
             return new ResumenEnvio(b.getQuantity(), enrutada, b.isCumpleSLA(),
                     PlanificadorService.toEpochMin(b.getReadyTime()),
@@ -2343,14 +2343,14 @@ public class PlanificadorService {
 
     static final class AcumuladorAuditoria {
         private final Map<String, ResumenEnvio> resumen = new LinkedHashMap<>();
-        private final Map<String, LuggageBatch> sinRuta = new LinkedHashMap<>();
-        private final Map<String, LuggageBatch> completos;
+        private final Map<String, LoteEnvio> sinRuta = new LinkedHashMap<>();
+        private final Map<String, LoteEnvio> completos;
 
         AcumuladorAuditoria(boolean retenerBatches) {
             this.completos = retenerBatches ? new LinkedHashMap<>() : null;
         }
 
-        void registrar(LuggageBatch b) {
+        void registrar(LoteEnvio b) {
             String key = batchAuditKey(b);
             if (completos != null) { completos.put(key, b); return; }   // warm-up: solo completos
             resumen.put(key, ResumenEnvio.de(b));
@@ -2360,9 +2360,9 @@ public class PlanificadorService {
         }
 
         boolean isEmpty()                    { return resumen.isEmpty(); }
-        Collection<LuggageBatch> sinRuta()   { return sinRuta.values(); }
+        Collection<LoteEnvio> sinRuta()   { return sinRuta.values(); }
         int sinRutaSize()                    { return sinRuta.size(); }   // Fase 0/E3: medición de huella
-        Collection<LuggageBatch> completos() { return completos != null ? completos.values() : List.of(); }
+        Collection<LoteEnvio> completos() { return completos != null ? completos.values() : List.of(); }
 
         TotalesUnicos totalesUnicos() {
             if (resumen.isEmpty()) return new TotalesUnicos(0, 0, 0, 0, 0, 0L);
@@ -2408,7 +2408,7 @@ public class PlanificadorService {
         return m;
     }
 
-    private static long ultimoArriboMin(LuggageBatch b) {
+    private static long ultimoArriboMin(LoteEnvio b) {
         if (b.getAssignedRoute() == null || b.getAssignedDepartures() == null) {
             return Long.MAX_VALUE;
         }
@@ -2423,17 +2423,17 @@ public class PlanificadorService {
         return dt.toLocalDate().toEpochDay() * 1440L + dt.getHour() * 60L + dt.getMinute();
     }
 
-    private static String batchAuditKey(LuggageBatch b) {
+    private static String batchAuditKey(LoteEnvio b) {
         if (b == null) return "";
         return String.join("|",
-                SimulacionFormat.safe(b.getId()),
-                SimulacionFormat.safe(b.getOriginCode()),
-                SimulacionFormat.safe(b.getDestCode()),
+                FormatoSimulacion.safe(b.getId()),
+                FormatoSimulacion.safe(b.getOriginCode()),
+                FormatoSimulacion.safe(b.getDestCode()),
                 b.getReadyTime() != null ? b.getReadyTime().toString() : "",
                 String.valueOf(b.getQuantity()));
     }
 
-    private static void llenarMetricasBacklog(Metricas m, BacklogManager backlog) {
+    private static void llenarMetricasBacklog(Metricas m, GestorBacklog backlog) {
         m.setBacklogActual(backlog.size());
         m.setBacklogPico(backlog.picoHistorico());
         m.setSinRutaDefinitivo(backlog.sinRutaDefinitivo());
@@ -2480,7 +2480,7 @@ public class PlanificadorService {
 
     private void logBloque(String motor, int bloque, int total, int envios, int onTime,
                            int tardadas, int sinRuta, long taMs, int backlog, boolean colapso,
-                           JobState job, int sinRutaRam) {
+                           EstadoTrabajo job, int sinRutaRam) {
         log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
                 bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
                 colapso ? " | COLAPSO" : "");
@@ -2489,7 +2489,7 @@ public class PlanificadorService {
     }
 
 
-    private void logHuellaMemoria(JobState job, int sinRutaRam) {
+    private void logHuellaMemoria(EstadoTrabajo job, int sinRutaRam) {
         Runtime rt = Runtime.getRuntime();
         long usadoMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
         long comprometidoMb = rt.totalMemory() / (1024 * 1024);
@@ -2505,16 +2505,16 @@ public class PlanificadorService {
             BloqueSimulacion bloque,
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas,
             boolean colapsoAlmacen, String detalleColapso,
-            com.tasfb2b.planificador.dto.jobs.AlertaColapso alerta,
+            com.tasfb2b.planificador.dto.trabajos.AlertaColapso alerta,
             List<OcupacionAlmacenSlot> serieAlmacenes,
-            List<LuggageBatch> finalBatches) {
+            List<LoteEnvio> finalBatches) {
     }
 
     private record TotalesUnicos(
             int envios, int enrutadas, int sinRuta, int cumpleSLA, int tardadas, long maletas) {
     }
 
-    private static final class TaStats {
+    private static final class EstadisticasTa {
         private long min = Long.MAX_VALUE;
         private long max = 0L;
         private long suma = 0L;

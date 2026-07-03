@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.services.persistencia;
+package com.tasfb2b.planificador.servicios.persistencia;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.dto.jobs.EnvioInyectadoInfo;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
+import com.tasfb2b.planificador.dto.trabajos.EnvioInyectadoInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -77,14 +77,14 @@ public class PersistenciaSolucionService {
         return jobId != null && jobId.equals(corridaPersistidaEnBd);
     }
 
-    public void persistirBloque(String jobId, List<LuggageBatch> batches) {
+    public void persistirBloque(String jobId, List<LoteEnvio> batches) {
         if (batches == null || batches.isEmpty() || !persiste(jobId)) return;
 
-        List<LuggageBatch> enrutados = new ArrayList<>();
-        List<LuggageBatch> inyectados = new ArrayList<>();
-        for (LuggageBatch b : batches) {
+        List<LoteEnvio> enrutados = new ArrayList<>();
+        List<LoteEnvio> inyectados = new ArrayList<>();
+        for (LoteEnvio b : batches) {
             if (b == null || b.getId() == null) continue;
-            List<Edge> ruta = b.getRutaCompleta();
+            List<Arista> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();
             if (ruta == null || ruta.isEmpty() || deps == null || deps.size() != ruta.size()) continue;
             (b.isSintetico() ? inyectados : enrutados).add(b);
@@ -146,10 +146,10 @@ public class PersistenciaSolucionService {
 
     public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
-    private void escribirBloque(List<LuggageBatch> enrutados, TablasSolucion t) {
+    private void escribirBloque(List<LoteEnvio> enrutados, TablasSolucion t) {
         // 1. Desactivar la ruta activa previa de estos envíos (no-op para los nuevos).
         List<Object[]> desactivar = new ArrayList<>(enrutados.size());
-        for (LuggageBatch b : enrutados) desactivar.add(new Object[]{ b.getId() });
+        for (LoteEnvio b : enrutados) desactivar.add(new Object[]{ b.getId() });
         jdbc.batchUpdate("UPDATE " + t.rutaTabla() + " SET activa = FALSE WHERE id_envio = ? AND activa", desactivar);
 
         // 2. Insertar las rutas nuevas (activa=true) por lotes, recuperando id_ruta por id_envio.
@@ -160,13 +160,13 @@ public class PersistenciaSolucionService {
 
         // 3. Insertar todos los tramos del bloque en un único batch.
         List<Object[]> tramos = new ArrayList<>();
-        for (LuggageBatch b : enrutados) {
+        for (LoteEnvio b : enrutados) {
             Long idRuta = idRutaPorEnvio.get(b.getId());
             if (idRuta == null) continue;
-            List<Edge> ruta = b.getRutaCompleta();
+            List<Arista> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();
             for (int ti = 0; ti < ruta.size(); ti++) {
-                Edge e = ruta.get(ti);
+                Arista e = ruta.get(ti);
                 long depMin = deps.get(ti);
                 long arrMin = depMin + e.durationMinutes;
                 tramos.add(new Object[]{
@@ -180,18 +180,18 @@ public class PersistenciaSolucionService {
                 + "VALUES (?, ?, ?, ?, ?)", tramos);
     }
 
-    private void insertarRutasLote(List<LuggageBatch> lote, Map<String, Long> idRutaPorEnvio, TablasSolucion t) {
+    private void insertarRutasLote(List<LoteEnvio> lote, Map<String, Long> idRutaPorEnvio, TablasSolucion t) {
         StringBuilder sql = new StringBuilder(
                 "INSERT INTO " + t.rutaTabla() + " (id_envio, activa, costo_total, duracion_horas, cumple_sla, slack_sla_min, llegada_utc) VALUES ");
         List<Object> args = new ArrayList<>(lote.size() * 6);
         for (int i = 0; i < lote.size(); i++) {
-            LuggageBatch b = lote.get(i);
+            LoteEnvio b = lote.get(i);
             if (i > 0) sql.append(',');
             sql.append("(?, TRUE, ?, ?, ?, ?, ?)");
 
-            List<Edge> ruta = b.getRutaCompleta();
+            List<Arista> ruta = b.getRutaCompleta();
             List<Long> deps = b.getDeparturesCompletas();
-            long readyMin = GreedyRepairOperator.toEpochMinPublic(b.getReadyTime());
+            long readyMin = OperadorReparacionVoraz.toEpochMinPublic(b.getReadyTime());
             long llegadaMin = deps.get(deps.size() - 1) + ruta.get(ruta.size() - 1).durationMinutes;
             double transitMin = llegadaMin - readyMin;
             double slackMin = b.getSlaLimitHours() * 60.0 - transitMin;

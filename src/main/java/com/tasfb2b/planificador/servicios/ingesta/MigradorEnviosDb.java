@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.services.ingesta;
+package com.tasfb2b.planificador.servicios.ingesta;
 
-import com.tasfb2b.planificador.dto.jobs.InyeccionEnviosRequest;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.util.validator.EnvioValidator;
+import com.tasfb2b.planificador.dto.trabajos.InyeccionEnviosRequest;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.utilidades.validador.ValidadorEnvio;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -130,7 +130,7 @@ public class MigradorEnviosDb {
             String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
                    destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
             // RF03: id opcional; el resto de campos obligatorios deben estar presentes.
-            if (!EnvioValidator.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
+            if (!ValidadorEnvio.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
                 descartados++;
                 continue;
             }
@@ -169,7 +169,7 @@ public class MigradorEnviosDb {
             if (parts.length < 7) continue;
             String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
                    destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
-            if (!EnvioValidator.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr))
+            if (!ValidadorEnvio.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr))
                 continue;
             try {
                 int hh = Integer.parseInt(horaStr), mm = Integer.parseInt(minStr);

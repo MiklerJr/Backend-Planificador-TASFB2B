@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.services.ingesta;
+package com.tasfb2b.planificador.servicios.ingesta;
 
-import com.tasfb2b.planificador.dto.dataset.IngestaEstado;
-import com.tasfb2b.planificador.services.MotorGrafoCache;
-import com.tasfb2b.planificador.services.SkeletonCacheStore;
-import com.tasfb2b.planificador.services.jobs.JobsRegistry;
-import com.tasfb2b.planificador.util.parser.AeropuertoParser;
-import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.dto.datos.IngestaEstado;
+import com.tasfb2b.planificador.servicios.MotorGrafoCache;
+import com.tasfb2b.planificador.servicios.AlmacenCacheEsqueletos;
+import com.tasfb2b.planificador.servicios.trabajos.RegistroTrabajos;
+import com.tasfb2b.planificador.utilidades.analizador.AnalizadorAeropuertos;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -28,18 +28,18 @@ public class IngestaService {
 
     private final JdbcTemplate jdbc;
     private final MigradorEnviosDb migrador;
-    private final AeropuertoParser aeropuertoParser;
-    private final DataLoader dataLoader;
-    private final JobsRegistry jobs;
+    private final AnalizadorAeropuertos aeropuertoParser;
+    private final CargadorDatos dataLoader;
+    private final RegistroTrabajos jobs;
     private final MotorGrafoCache motorCache;
-    private final SkeletonCacheStore skeletonStore;
+    private final AlmacenCacheEsqueletos skeletonStore;
 
     private final AtomicReference<IngestaEstado> estado = new AtomicReference<>();
     private final AtomicBoolean enCurso = new AtomicBoolean(false);
 
-    public IngestaService(JdbcTemplate jdbc, MigradorEnviosDb migrador, AeropuertoParser aeropuertoParser,
-                          DataLoader dataLoader, JobsRegistry jobs, MotorGrafoCache motorCache,
-                          SkeletonCacheStore skeletonStore) {
+    public IngestaService(JdbcTemplate jdbc, MigradorEnviosDb migrador, AnalizadorAeropuertos aeropuertoParser,
+                          CargadorDatos dataLoader, RegistroTrabajos jobs, MotorGrafoCache motorCache,
+                          AlmacenCacheEsqueletos skeletonStore) {
         this.jdbc = jdbc;
         this.migrador = migrador;
         this.aeropuertoParser = aeropuertoParser;
@@ -108,7 +108,7 @@ public class IngestaService {
             e.setFase("limpiando");
             jdbc.execute("TRUNCATE aeropuerto, vuelo, envio RESTART IDENTITY CASCADE");
 
-            // 2. Aeropuertos (parse robusto BOM-safe vía AeropuertoParser).
+            // 2. Aeropuertos (parse robusto BOM-safe vía AnalizadorAeropuertos).
             e.setFase("aeropuertos");
             e.setAeropuertos(migrador.insertarAeropuertos(aeropuertoParser.parse(aero)));
 
@@ -140,7 +140,7 @@ public class IngestaService {
             dataLoader.load();
             motorCache.invalidar();
             // Los esqueletos persistidos también son del dataset viejo: borrar el archivo (la
-            // huella de SkeletonCacheStore lo descartaría igual, pero así no quedan huérfanos).
+            // huella de AlmacenCacheEsqueletos lo descartaría igual, pero así no quedan huérfanos).
             skeletonStore.borrar();
 
             e.setFase("completada");

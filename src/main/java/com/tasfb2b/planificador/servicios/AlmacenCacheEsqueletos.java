@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.DataLoader;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,26 +31,26 @@ import java.util.Map;
 
 @Slf4j
 @Component
-public class SkeletonCacheStore {
+public class AlmacenCacheEsqueletos {
 
     static final int MAGIC = 0x54534B31;   // "TSK1"
     static final int VERSION = 1;
     private static final int MAX_SKELETONS_LEIDOS = 64;
     private static final int MAX_TRAMOS_LEIDOS = 4096;
 
-    private final DataLoader dataLoader;
+    private final CargadorDatos dataLoader;
     private final MotorGrafoCache motorCache;
     private final String archivo;   // vacío ⇒ persistencia desactivada (no-op)
 
     private int clavesUltimoGuardado = 0;
 
     @Autowired
-    public SkeletonCacheStore(DataLoader dataLoader, MotorGrafoCache motorCache,
+    public AlmacenCacheEsqueletos(CargadorDatos dataLoader, MotorGrafoCache motorCache,
                               PlanificadorProperties props) {
         this(dataLoader, motorCache, props.getCache().getSkeletonFile());
     }
 
-    SkeletonCacheStore(DataLoader dataLoader, MotorGrafoCache motorCache, String archivo) {
+    AlmacenCacheEsqueletos(CargadorDatos dataLoader, MotorGrafoCache motorCache, String archivo) {
         this.dataLoader = dataLoader;
         this.motorCache = motorCache;
         this.archivo = archivo == null ? "" : archivo.trim();

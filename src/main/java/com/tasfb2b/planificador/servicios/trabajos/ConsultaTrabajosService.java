@@ -1,42 +1,42 @@
-package com.tasfb2b.planificador.services.jobs;
+package com.tasfb2b.planificador.servicios.trabajos;
 
-import com.tasfb2b.planificador.algorithm.aco.ConstantesOperativas;
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.algoritmo.aco.ConstantesOperativas;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.almacenes.*;
-import com.tasfb2b.planificador.dto.jobs.*;
+import com.tasfb2b.planificador.dto.trabajos.*;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.services.persistencia.PersistenciaSolucionService;
-import com.tasfb2b.planificador.services.persistencia.SolucionBdReader;
-import com.tasfb2b.planificador.util.DataLoader;
-import com.tasfb2b.planificador.util.SimulacionFormat;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.servicios.persistencia.PersistenciaSolucionService;
+import com.tasfb2b.planificador.servicios.persistencia.LectorSolucionBd;
+import com.tasfb2b.planificador.utilidades.CargadorDatos;
+import com.tasfb2b.planificador.utilidades.FormatoSimulacion;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
-import static com.tasfb2b.planificador.util.SimulacionFormat.porcentaje;
-import static com.tasfb2b.planificador.util.SimulacionFormat.safe;
-import static com.tasfb2b.planificador.util.SimulacionFormat.vueloFrontId;
+import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.porcentaje;
+import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.safe;
+import static com.tasfb2b.planificador.utilidades.FormatoSimulacion.vueloFrontId;
 
 
 @Service
-public class JobQueryService {
+public class ConsultaTrabajosService {
 
     static final int DEFAULT_MAX_FILAS_PAGINA = 5000;
 
-    private final JobsRegistry jobs;
-    private final DataLoader dataLoader;
-    private final SolucionBdReader solucionBdReader;
+    private final RegistroTrabajos jobs;
+    private final CargadorDatos dataLoader;
+    private final LectorSolucionBd solucionBdReader;
     private final PersistenciaSolucionService persistencia;
     private final int maxFilasPagina;
 
     @Autowired
-    public JobQueryService(JobsRegistry jobs, DataLoader dataLoader,
-                           SolucionBdReader solucionBdReader, PersistenciaSolucionService persistencia,
+    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos dataLoader,
+                           LectorSolucionBd solucionBdReader, PersistenciaSolucionService persistencia,
                            PlanificadorProperties props) {
         this.jobs = jobs;
         this.dataLoader = dataLoader;
@@ -48,7 +48,7 @@ public class JobQueryService {
                 : DEFAULT_MAX_FILAS_PAGINA;
     }
 
-    public JobQueryService(JobsRegistry jobs, DataLoader dataLoader) {
+    public ConsultaTrabajosService(RegistroTrabajos jobs, CargadorDatos dataLoader) {
         this(jobs, dataLoader, null, null, null);
     }
 
@@ -57,18 +57,18 @@ public class JobQueryService {
         return Math.min(limit, maxFilasPagina);
     }
 
-    private boolean usarHistoricoBd(JobState job) {
+    private boolean usarHistoricoBd(EstadoTrabajo job) {
         return job.bloquesPublicados() > job.getMaxBloquesConAsignaciones()
                 && solucionBdReader != null && persistencia != null
                 && persistencia.reflejaEnBd(job.getJobId());
     }
 
-    private JobState getJob(String jobId) {
+    private EstadoTrabajo getJob(String jobId) {
         return jobs.get(jobId);
     }
 
-    public DashboardResponse getDashboardJob(String jobId) {
-        JobState job = getJob(jobId);
+    public TableroResponse getDashboardJob(String jobId) {
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         Metricas metricas = job.resultado != null
@@ -76,7 +76,7 @@ public class JobQueryService {
                 : (job.metricasSnapshot != null ? job.metricasSnapshot
                                                 : metricasDesdeBloques(job.bloquesDesde(0)));
 
-        DashboardResponse body = new DashboardResponse();
+        TableroResponse body = new TableroResponse();
         body.setJobId(job.getJobId());
         body.setEscenario(job.getEscenario());
         body.setAlgoritmo(job.algoritmo);
@@ -101,7 +101,7 @@ public class JobQueryService {
     }
 
     public IndicadoresResponse getIndicadoresJob(String jobId) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         IndicadoresResponse body = new IndicadoresResponse();
@@ -113,26 +113,26 @@ public class JobQueryService {
         return body;
     }
 
-    private List<CargaVueloRow> cargaVuelosRecientes(JobState job, int limit) {
+    private List<CargaVueloFila> cargaVuelosRecientes(EstadoTrabajo job, int limit) {
         List<BloqueSimulacion> ventana = job.bloquesDesde(0);
-        List<CargaVueloRow> acc = new ArrayList<>();
+        List<CargaVueloFila> acc = new ArrayList<>();
         for (int i = ventana.size() - 1; i >= 0; i--) {
             if (!acc.isEmpty() && acc.size() >= limit) break;
             BloqueSimulacion bloque = ventana.get(i);
-            List<CargaVueloRow> filas = new ArrayList<>();
+            List<CargaVueloFila> filas = new ArrayList<>();
             for (CargaVuelo carga : cargasDelBloque(bloque)) filas.add(cargaVueloRow(carga, bloque));
             acc.addAll(0, filas);   // prepende para mantener el orden cronológico
         }
         return acc;
     }
 
-    private List<OcupacionAlmacenRow> ocupacionRecientes(JobState job, int limit) {
+    private List<OcupacionAlmacenFila> ocupacionRecientes(EstadoTrabajo job, int limit) {
         List<BloqueSimulacion> ventana = job.bloquesDesde(0);
-        List<OcupacionAlmacenRow> acc = new ArrayList<>();
+        List<OcupacionAlmacenFila> acc = new ArrayList<>();
         for (int i = ventana.size() - 1; i >= 0; i--) {
             if (!acc.isEmpty() && acc.size() >= limit) break;
             BloqueSimulacion bloque = ventana.get(i);
-            List<OcupacionAlmacenRow> filas = new ArrayList<>();
+            List<OcupacionAlmacenFila> filas = new ArrayList<>();
             for (OcupacionAlmacen oc : ocupacionesDelBloque(bloque)) filas.add(ocupacionAlmacenRow(oc, bloque));
             acc.addAll(0, filas);
         }
@@ -140,17 +140,17 @@ public class JobQueryService {
     }
 
     public CargaVuelosResponse getCargaVuelosJob(String jobId, int desde, int limit) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
         int limitEf = limitEfectivo(limit);
 
-        List<CargaVueloRow> vuelos;
+        List<CargaVueloFila> vuelos;
         int proximoDesde;
         boolean hayMas;
         if (usarHistoricoBd(job)) {
-            List<CargaVueloRow> pagina = solucionBdReader.reconstruirCargasVuelos(desdeNorm, limitEf + 1);
+            List<CargaVueloFila> pagina = solucionBdReader.reconstruirCargasVuelos(desdeNorm, limitEf + 1);
             hayMas = pagina.size() > limitEf;
             vuelos = hayMas ? new ArrayList<>(pagina.subList(0, limitEf)) : pagina;
             proximoDesde = desdeNorm + vuelos.size();
@@ -173,14 +173,14 @@ public class JobQueryService {
         body.setProximoDesde(proximoDesde);
         body.setHayMas(hayMas);
         body.setBloquesPublicados(job.bloquesPublicados());
-        body.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
+        body.setTerminado(!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado));
         body.setTotal(vuelos.size());
         body.setVuelos(vuelos);
         return body;
     }
 
     public VuelosUsadosResponse getVuelosUsadosJob(String jobId, int desde) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNormalizado = Math.max(0, desde);
@@ -197,20 +197,20 @@ public class JobQueryService {
         response.setJobId(jobId);
         response.setDesde(desdeNormalizado);
         response.setBloquesPublicados(job.bloquesPublicados());
-        response.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
+        response.setTerminado(!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado));
         response.setTotal(vuelos.size());
         response.setVuelos(vuelos);
         return response;
     }
 
     public OcupacionAlmacenesResponse getOcupacionAlmacenesJob(String jobId, int desde, int limit) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         int desdeNorm = Math.max(0, desde);
         int limitEf = limitEfectivo(limit);
 
-        List<OcupacionAlmacenRow> almacenes = new ArrayList<>();
+        List<OcupacionAlmacenFila> almacenes = new ArrayList<>();
         int proximoDesde = desdeNorm;
         boolean hayMas = false;
         for (BloqueSimulacion bloque : job.bloquesDesde(desdeNorm)) {
@@ -227,7 +227,7 @@ public class JobQueryService {
         body.setProximoDesde(proximoDesde);
         body.setHayMas(hayMas);
         body.setBloquesPublicados(job.bloquesPublicados());
-        body.setTerminado(!JobsRegistry.ESTADOS_ACTIVOS.contains(job.estado));
+        body.setTerminado(!RegistroTrabajos.ESTADOS_ACTIVOS.contains(job.estado));
         body.setTotal(almacenes.size());
         body.setAlmacenes(almacenes);
         return body;
@@ -237,7 +237,7 @@ public class JobQueryService {
                                                   String aeropuerto,
                                                   String vueloId,
                                                   boolean soloEnrutadas) {
-        JobState job = getJob(jobId);
+        EstadoTrabajo job = getJob(jobId);
         if (job == null) return null;
 
         String aeropuertoNorm = normalizarCodigo(aeropuerto);
@@ -318,8 +318,8 @@ public class JobQueryService {
         return m;
     }
 
-    private static DashboardResponse.Tasas tasas(Metricas m) {
-        DashboardResponse.Tasas tasas = new DashboardResponse.Tasas();
+    private static TableroResponse.Tasas tasas(Metricas m) {
+        TableroResponse.Tasas tasas = new TableroResponse.Tasas();
         int procesadas = m != null ? m.getProcesadas() : 0;
         tasas.setEnrutamientoPct(porcentaje(m != null ? m.getEnrutadas() : 0, procesadas));
         tasas.setSinRutaPct(porcentaje(m != null ? m.getSinRuta() : 0, procesadas));
@@ -328,13 +328,13 @@ public class JobQueryService {
         return tasas;
     }
 
-    private static DashboardResponse.UltimoBloque ultimoBloqueResumen(JobState job) {
+    private static TableroResponse.UltimoBloque ultimoBloqueResumen(EstadoTrabajo job) {
         if (job == null || job.bloquesPublicados() == 0) return null;
         List<BloqueSimulacion> ultimos =
                 job.bloquesDesde(job.bloquesPublicados() - 1);
         if (ultimos.isEmpty()) return null;
         BloqueSimulacion b = ultimos.get(0);
-        DashboardResponse.UltimoBloque out = new DashboardResponse.UltimoBloque();
+        TableroResponse.UltimoBloque out = new TableroResponse.UltimoBloque();
         out.setBloqueIdx(b.getBloqueIdx());
         out.setHoraInicio(b.getHoraInicio());
         out.setHoraFin(b.getHoraFin());
@@ -390,7 +390,7 @@ public class JobQueryService {
             }
         }
 
-        acc.values().forEach(SimulacionFormat::completarCargaVuelo);
+        acc.values().forEach(FormatoSimulacion::completarCargaVuelo);
         return new ArrayList<>(acc.values());
     }
 
@@ -420,7 +420,7 @@ public class JobQueryService {
             dto.setOcupacionAsignada(dto.getOcupacionAsignada() + asignacion.getCantidad());
         }
 
-        acc.values().forEach(SimulacionFormat::completarOcupacionAlmacen);
+        acc.values().forEach(FormatoSimulacion::completarOcupacionAlmacen);
         return new ArrayList<>(acc.values());
     }
 
@@ -440,8 +440,8 @@ public class JobQueryService {
         return out;
     }
 
-    private static CargaVueloRow cargaVueloRow(CargaVuelo c, BloqueSimulacion bloque) {
-        CargaVueloRow row = new CargaVueloRow();
+    private static CargaVueloFila cargaVueloRow(CargaVuelo c, BloqueSimulacion bloque) {
+        CargaVueloFila row = new CargaVueloFila();
         row.setVueloId(c.getVueloId());
         row.setOrigen(c.getOrigen());
         row.setDestino(c.getDestino());
@@ -457,8 +457,8 @@ public class JobQueryService {
         return row;
     }
 
-    private static OcupacionAlmacenRow ocupacionAlmacenRow(OcupacionAlmacen o, BloqueSimulacion bloque) {
-        OcupacionAlmacenRow row = new OcupacionAlmacenRow();
+    private static OcupacionAlmacenFila ocupacionAlmacenRow(OcupacionAlmacen o, BloqueSimulacion bloque) {
+        OcupacionAlmacenFila row = new OcupacionAlmacenFila();
         row.setAeropuerto(o.getAeropuerto());
         row.setFecha(o.getFecha());
         row.setCapacidadMaxima(o.getCapacidadMaxima());

@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.aco.ConstantesOperativas;
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
+import com.tasfb2b.planificador.algoritmo.aco.ConstantesOperativas;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 import org.springframework.stereotype.Service;
@@ -46,7 +46,7 @@ public class AuditoriaService {
     private static final DateTimeFormatter FMT_NOMBRE =
             DateTimeFormatter.ofPattern("yyyyMMddHHmm");
 
-    public AuditoriaEnvio construir(LuggageBatch batch) {
+    public AuditoriaEnvio construir(LoteEnvio batch) {
         AuditoriaEnvio audit = new AuditoriaEnvio();
         audit.setIdEnvio(batch.getId());
         audit.setOrigen(batch.getOriginCode());
@@ -62,7 +62,7 @@ public class AuditoriaService {
         int slaMin = batch.getSlaLimitHours() * 60;
         audit.setDeadlineMin(slaMin);
 
-        List<Edge> ruta = batch.getRutaCompleta();   // ruta real = prefijo volado + sufijo
+        List<Arista> ruta = batch.getRutaCompleta();   // ruta real = prefijo volado + sufijo
         boolean enrutada = ruta != null && !ruta.isEmpty();
 
         if (!enrutada) {
@@ -75,7 +75,7 @@ public class AuditoriaService {
         }
 
         StringBuilder rutaStr = new StringBuilder(ruta.get(0).from.code);
-        for (Edge e : ruta) rutaStr.append("->").append(e.to.code);
+        for (Arista e : ruta) rutaStr.append("->").append(e.to.code);
         audit.setRuta(rutaStr.toString());
 
         int numTramos = ruta.size();
@@ -84,7 +84,7 @@ public class AuditoriaService {
         audit.setNumEscalas(numEscalas);
 
         int tiempoVueloMin = 0;
-        for (Edge e : ruta) tiempoVueloMin += e.durationMinutes;
+        for (Arista e : ruta) tiempoVueloMin += e.durationMinutes;
 
         int tiempoEsperaMin = 0;
         List<Long> deps = batch.getDeparturesCompletas();
@@ -137,17 +137,17 @@ public class AuditoriaService {
         return sb.toString();
     }
 
-    public int escribirCsv(Collection<LuggageBatch> batches, Path path) throws IOException {
+    public int escribirCsv(Collection<LoteEnvio> batches, Path path) throws IOException {
         try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
             return escribirCsv(batches, writer);
         }
     }
 
-    public int escribirCsv(Collection<LuggageBatch> batches, Writer writer) throws IOException {
+    public int escribirCsv(Collection<LoteEnvio> batches, Writer writer) throws IOException {
         writer.write(CSV_HEADER);
         int filas = 0;
         if (batches == null) return filas;
-        for (LuggageBatch b : batches) {
+        for (LoteEnvio b : batches) {
             if (b == null) continue;
             writer.write(lineaCsv(construir(b)));
             filas++;
@@ -155,24 +155,24 @@ public class AuditoriaService {
         return filas;
     }
 
-    public List<AuditoriaEnvio> construirLote(List<LuggageBatch> batches) {
+    public List<AuditoriaEnvio> construirLote(List<LoteEnvio> batches) {
         List<AuditoriaEnvio> out = new ArrayList<>(batches.size());
-        for (LuggageBatch b : batches) out.add(construir(b));
+        for (LoteEnvio b : batches) out.add(construir(b));
         return out;
     }
 
-    public int escribirZip(Collection<LuggageBatch> batches, Path zipPath,
+    public int escribirZip(Collection<LoteEnvio> batches, Path zipPath,
                            int maxFilas, String jobId,
                            Collection<VueloCancelado> vuelosCancelados) throws IOException {
         int limite = maxFilas > 0 ? maxFilas : FILAS_POR_ARCHIVO;
 
-        List<LuggageBatch> ordenados = new ArrayList<>(batches == null ? 0 : batches.size());
+        List<LoteEnvio> ordenados = new ArrayList<>(batches == null ? 0 : batches.size());
         if (batches != null) {
-            for (LuggageBatch b : batches) {
+            for (LoteEnvio b : batches) {
                 if (b != null) ordenados.add(b);
             }
         }
-        ordenados.sort(Comparator.comparing(LuggageBatch::getReadyTime));
+        ordenados.sort(Comparator.comparing(LoteEnvio::getReadyTime));
 
         int totalFilas = 0;
         Set<String> nombresUsados = new LinkedHashSet<>();
@@ -213,8 +213,8 @@ public class AuditoriaService {
     }
 
     public int escribirZipStreaming(Path zipPath, int maxFilas, String jobId,
-                                    java.util.function.Consumer<java.util.function.Consumer<LuggageBatch>> fuenteEnrutados,
-                                    Collection<LuggageBatch> sinRuta,
+                                    java.util.function.Consumer<java.util.function.Consumer<LoteEnvio>> fuenteEnrutados,
+                                    Collection<LoteEnvio> sinRuta,
                                     Collection<VueloCancelado> vuelosCancelados) throws IOException {
         int limite = maxFilas > 0 ? maxFilas : FILAS_POR_ARCHIVO;
         Set<String> nombresUsados = new LinkedHashSet<>();
@@ -223,7 +223,7 @@ public class AuditoriaService {
                 new BufferedOutputStream(Files.newOutputStream(zipPath)), StandardCharsets.UTF_8)) {
 
             EscritorParticionado esc = new EscritorParticionado(zos, limite, jobId, nombresUsados);
-            java.util.function.Consumer<LuggageBatch> sink = b -> {
+            java.util.function.Consumer<LoteEnvio> sink = b -> {
                 if (b == null) return;
                 esc.escribir(construir(b));
                 total[0]++;
@@ -231,9 +231,9 @@ public class AuditoriaService {
 
             if (fuenteEnrutados != null) fuenteEnrutados.accept(sink);
             if (sinRuta != null && !sinRuta.isEmpty()) {
-                List<LuggageBatch> orden = new ArrayList<>(sinRuta);
-                orden.sort(Comparator.comparing(LuggageBatch::getReadyTime));
-                for (LuggageBatch b : orden) sink.accept(b);
+                List<LoteEnvio> orden = new ArrayList<>(sinRuta);
+                orden.sort(Comparator.comparing(LoteEnvio::getReadyTime));
+                for (LoteEnvio b : orden) sink.accept(b);
             }
             esc.cerrar();   // vuelca lo pendiente; si no hubo filas, deja un CSV solo-cabecera
 
@@ -343,16 +343,16 @@ public class AuditoriaService {
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
-    private static boolean sinCiclos(List<Edge> ruta) {
+    private static boolean sinCiclos(List<Arista> ruta) {
         Set<String> visitados = new HashSet<>();
         visitados.add(ruta.get(0).from.code);
-        for (Edge e : ruta) {
+        for (Arista e : ruta) {
             if (!visitados.add(e.to.code)) return false;
         }
         return true;
     }
 
-    private static boolean cumpleEscalaMinima(List<Edge> ruta, List<Long> deps) {
+    private static boolean cumpleEscalaMinima(List<Arista> ruta, List<Long> deps) {
         if (deps == null || deps.size() != ruta.size()) {
             // Sin info de departures reales, validamos contra los tiempos estáticos.
             for (int i = 0; i < ruta.size() - 1; i++) {

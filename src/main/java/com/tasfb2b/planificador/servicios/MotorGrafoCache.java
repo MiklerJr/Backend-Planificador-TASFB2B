@@ -1,6 +1,6 @@
-package com.tasfb2b.planificador.services;
+package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -14,11 +14,11 @@ import java.util.function.Supplier;
 @Component
 public class MotorGrafoCache {
 
-    private volatile Graph grafo;
+    private volatile Grafo grafo;
     private final Map<Long, List<int[]>> skeletonCache = new ConcurrentHashMap<>();
 
-    public Graph obtenerGrafo(Supplier<Graph> constructor) {
-        Graph g = grafo;
+    public Grafo obtenerGrafo(Supplier<Grafo> constructor) {
+        Grafo g = grafo;
         if (g == null) {
             synchronized (this) {
                 g = grafo;
