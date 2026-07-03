@@ -11,7 +11,7 @@ import lombok.Data;
  * <p>El JSON expone los mismos nombres, tipos y orden de campo del contrato del front.
  */
 @Data
-public class CargaVueloRow {
+public class CargaVueloFila {
     private String vueloId;
     private String origen;
     private String destino;

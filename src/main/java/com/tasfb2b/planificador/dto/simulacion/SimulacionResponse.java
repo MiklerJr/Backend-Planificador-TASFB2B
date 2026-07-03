@@ -4,7 +4,7 @@ import lombok.Data;
 import java.util.List;
 import java.util.Map;
 
-import com.tasfb2b.planificador.dto.dataset.AeropuertoDTO;
+import com.tasfb2b.planificador.dto.datos.AeropuertoDTO;
 import com.tasfb2b.planificador.dto.vuelos.VueloBackend;
 
 

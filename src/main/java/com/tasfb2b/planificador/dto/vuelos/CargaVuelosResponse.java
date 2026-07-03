@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * Read model de carga de vuelos por bloque, expuesto por
  * {@code GET /jobs/{id}/vuelos/carga}. Cada fila es la carga ACUMULADA del vuelo-día al cierre de su
- * bloque (ver {@link CargaVueloRow}); el front NO debe sumar filas entre bloques.
+ * bloque (ver {@link CargaVueloFila}); el front NO debe sumar filas entre bloques.
  *
  * <p>Anti-OOM: la respuesta es PAGINADA. {@code total} = filas EN ESTA PÁGINA (no el global). El
  * front itera empezando en {@code desde=0} y, mientras {@code hayMas=true}, vuelve a pedir con
@@ -29,5 +29,5 @@ public class CargaVuelosResponse {
     private boolean terminado;
     /** Filas EN ESTA PÁGINA (no el total global). */
     private int total;
-    private List<CargaVueloRow> vuelos;
+    private List<CargaVueloFila> vuelos;
 }

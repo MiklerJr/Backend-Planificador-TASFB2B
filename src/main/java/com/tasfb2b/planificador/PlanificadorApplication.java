@@ -8,7 +8,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
-import com.tasfb2b.planificador.services.ingesta.MigradorEnviosDb;
+import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
 
 import java.util.Arrays;
 

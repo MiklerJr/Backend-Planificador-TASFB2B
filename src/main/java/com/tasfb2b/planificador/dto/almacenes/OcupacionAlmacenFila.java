@@ -3,7 +3,7 @@ package com.tasfb2b.planificador.dto.almacenes;
 import lombok.Data;
 
 @Data
-public class OcupacionAlmacenRow {
+public class OcupacionAlmacenFila {
     private String aeropuerto;
     private String fecha;
     private int capacidadMaxima;

@@ -7,7 +7,7 @@ import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-public class EjecucionParams {
+public class EjecucionParametros {
     private Integer k;
     private String motor;
     private Long seed;

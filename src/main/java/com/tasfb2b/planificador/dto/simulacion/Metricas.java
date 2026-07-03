@@ -5,7 +5,7 @@ import lombok.Data;
 
 @Data
 public class Metricas {
-    private int  procesadas;           // número de envíos (LuggageBatch)
+    private int  procesadas;           // número de envíos (LoteEnvio)
     private int  enrutadas;            // envíos con ruta asignada
     private int  sinRuta;              // envíos sin ruta
     private int  cumpleSLA;            // envíos enrutados dentro del plazo

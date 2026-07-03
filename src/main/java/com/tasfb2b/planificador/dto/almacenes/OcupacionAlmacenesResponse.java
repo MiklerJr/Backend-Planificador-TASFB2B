@@ -13,5 +13,5 @@ public class OcupacionAlmacenesResponse {
     private int bloquesPublicados;
     private boolean terminado;
     private int total;
-    private List<OcupacionAlmacenRow> almacenes;
+    private List<OcupacionAlmacenFila> almacenes;
 }
