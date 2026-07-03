@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Fase 2 — re-enrutamiento desde la posición física tras una cancelación. Verifica las piezas de
- * contabilidad de capacidad del {@link GreedyRepairOperator} (lo más delicado) y el estado de
- * {@link LuggageBatch} con prefijo. El flujo completo (corte por el "ahora", recomposición, varado)
+ * contabilidad de capacidad del {@link OperadorReparacionVoraz} (lo más delicado) y el estado de
+ * {@link LoteEnvio} con prefijo. El flujo completo (corte por el "ahora", recomposición, varado)
  * se valida e2e contra la BD.
  */
 class ReenrutadoDesdePosicionTest {
@@ -35,11 +35,11 @@ class ReenrutadoDesdePosicionTest {
      *  el prefijo (vuelo ya volado) sigue ocupado. */
     @Test
     void releaseSuffixLiberaSoloElSufijoYConservaElPrefijo() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        Edge f1 = graph.edges.get(0);   // AAA→BBB (prefijo)
-        Edge f2 = graph.edges.get(1);   // BBB→CCC (sufijo)
-        LuggageBatch b1 = enrutarYCommitear(op);   // ruta AAA→BBB→CCC, 20 maletas
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        Arista f1 = graph.edges.get(0);   // AAA→BBB (prefijo)
+        Arista f2 = graph.edges.get(1);   // BBB→CCC (sufijo)
+        LoteEnvio b1 = enrutarYCommitear(op);   // ruta AAA→BBB→CCC, 20 maletas
 
         long depF1 = epoch(8, 30);
         long depF2 = epoch(18, 0);
@@ -66,33 +66,33 @@ class ReenrutadoDesdePosicionTest {
     /** T4 — el SLA del sufijo se mide contra el deadline ABSOLUTO del envío original, no desde la escala. */
     @Test
     void cumpleSlaDesdeOrigenMideElDeadlineAbsoluto() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         // Candidato de sufijo BBB→CCC (sale 18:00, llega 19:00 del DIA).
-        LuggageBatch desdeEscala = new LuggageBatch("S", 10, 24, "BBB", "CCC",
+        LoteEnvio desdeEscala = new LoteEnvio("S", 10, 24, "BBB", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(10, 0)));
-        RouteCandidate sufijo = op.generarCandidatosRuta(desdeEscala, new HashMap<>(), new HashMap<>(), 3)
+        RutaCandidata sufijo = op.generarCandidatosRuta(desdeEscala, new HashMap<>(), new HashMap<>(), 3)
                 .stream().findFirst().orElseThrow();
 
         // Envío original registrado a las 07:00 con SLA 48h → deadline holgado → on-time.
-        LuggageBatch holgado = new LuggageBatch("B", 10, 48, "AAA", "CCC",
+        LoteEnvio holgado = new LoteEnvio("B", 10, 48, "AAA", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
         assertTrue(op.cumpleSlaDesdeOrigen(sufijo, holgado),
                 "llega 19:00, deadline +48h: cumple SLA real");
 
         // Mismo registro pero SLA 1h → deadline 08:00, muy anterior a la llegada (19:00): tardío.
-        LuggageBatch apretado = new LuggageBatch("B2", 10, 1, "AAA", "CCC",
+        LoteEnvio apretado = new LoteEnvio("B2", 10, 1, "AAA", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
         assertFalse(op.cumpleSlaDesdeOrigen(sufijo, apretado),
                 "llega 19:00, deadline 08:00: NO cumple (el sufijo 'parece' on-time desde la escala)");
     }
 
-    /** Estado de LuggageBatch con prefijo: ruta completa, posición efectiva y clonado. */
+    /** Estado de LoteEnvio con prefijo: ruta completa, posición efectiva y clonado. */
     @Test
     void prefijoComponeRutaCompletaYPosicionEfectiva() {
-        Graph graph = grafoEscalaLarga();
-        Edge f1 = graph.edges.get(0), f2 = graph.edges.get(1);
-        LuggageBatch b = new LuggageBatch("B", 10, 24, "AAA", "CCC",
+        Grafo graph = grafoEscalaLarga();
+        Arista f1 = graph.edges.get(0), f2 = graph.edges.get(1);
+        LoteEnvio b = new LoteEnvio("B", 10, 24, "AAA", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
 
         assertFalse(b.tienePrefijo());
@@ -112,7 +112,7 @@ class ReenrutadoDesdePosicionTest {
         assertEquals(List.of(f1, f2), b.getRutaCompleta());
         assertEquals(List.of(100L, 200L), b.getDeparturesCompletas());
 
-        LuggageBatch clon = b.cloneBatch();
+        LoteEnvio clon = b.cloneBatch();
         assertTrue(clon.tienePrefijo(), "cloneBatch preserva el prefijo");
         assertEquals("BBB", clon.origenEfectivo());
         assertEquals(List.of(f1, f2), clon.getRutaCompleta());
@@ -121,16 +121,16 @@ class ReenrutadoDesdePosicionTest {
     // ----------------------------------------------------------------------- helpers
 
     private static long epoch(int h, int m) {
-        return GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(h, m)));
+        return OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(h, m)));
     }
 
-    private static LuggageBatch enrutarYCommitear(GreedyRepairOperator op) {
-        LuggageBatch b1 = new LuggageBatch("B1", 20, 24, "AAA", "CCC",
+    private static LoteEnvio enrutarYCommitear(OperadorReparacionVoraz op) {
+        LoteEnvio b1 = new LoteEnvio("B1", 20, 24, "AAA", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
-        RouteCandidate ruta = op.generarCandidatosRuta(b1, blockFlight, blockAirport, 3).stream()
-                .filter(RouteCandidate::isCumpleSLA)
+        RutaCandidata ruta = op.generarCandidatosRuta(b1, blockFlight, blockAirport, 3).stream()
+                .filter(RutaCandidata::isCumpleSLA)
                 .findFirst().orElseThrow();
         op.aplicarCandidatoRuta(b1, ruta);
         op.aplicarCandidatoBloque(b1, ruta, blockFlight, blockAirport);
@@ -138,9 +138,9 @@ class ReenrutadoDesdePosicionTest {
         return b1;
     }
 
-    private static Graph grafoEscalaLarga() {
-        Graph g = new Graph();
-        Node aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
+    private static Grafo grafoEscalaLarga() {
+        Grafo g = new Grafo();
+        Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
         g.nodes.put("CCC", ccc);
@@ -149,14 +149,14 @@ class ReenrutadoDesdePosicionTest {
         return g;
     }
 
-    private static Node node(String code) {
-        Node n = new Node(code);
+    private static Nodo node(String code) {
+        Nodo n = new Nodo(code);
         n.capacity = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Graph g, int idx, Node from, Node to, String id, String dep, String arr) {
-        Edge e = new Edge();
+    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
+        Arista e = new Arista();
         e.idx = idx;
         e.id = id;
         e.from = from;

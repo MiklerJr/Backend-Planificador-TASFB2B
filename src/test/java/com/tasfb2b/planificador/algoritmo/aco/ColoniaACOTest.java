@@ -1,13 +1,13 @@
-package com.tasfb2b.planificador.algorithm.aco;
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
+package com.tasfb2b.planificador.algoritmo.aco;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
-import com.tasfb2b.planificador.algorithm.alns.FlightKeyEncoder;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.algoritmo.alns.CodificadorClaveVuelo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.simulacion.*;
 import org.junit.jupiter.api.Test;
 
@@ -32,14 +32,14 @@ class ColoniaACOTest {
 
     @Test
     void dijkstraHijoGeneraCandidatosSinAplicarCapacidad() {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        LuggageBatch batch = batch("B1", 10, "AAA", "CCC", 24);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
+        LoteEnvio batch = batch("B1", 10, "AAA", "CCC", 24);
 
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
 
-        List<RouteCandidate> candidatos = enrutador.generarCandidatosRuta(batch, blockFlight, blockAirport, 3);
+        List<RutaCandidata> candidatos = enrutador.generarCandidatosRuta(batch, blockFlight, blockAirport, 3);
 
         assertTrue(candidatos.size() >= 2);
         assertTrue(candidatos.get(0).isCumpleSLA());
@@ -49,22 +49,22 @@ class ColoniaACOTest {
 
     @Test
     void rutaCacheadaSeRevalidaYSeRechazaSiQuedoSaturada() {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
-        LuggageBatch blocker = batch("B0", 25, "AAA", "CCC", 24);
-        LuggageBatch batch = batch("B1", 20, "AAA", "CCC", 24);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
+        LoteEnvio blocker = batch("B0", 25, "AAA", "CCC", 24);
+        LoteEnvio batch = batch("B1", 20, "AAA", "CCC", 24);
 
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
 
-        RouteCandidate direct = enrutador.generarCandidatosRuta(blocker, blockFlight, blockAirport, 3).stream()
+        RutaCandidata direct = enrutador.generarCandidatosRuta(blocker, blockFlight, blockAirport, 3).stream()
                 .filter(c -> c.getEdges().size() == 1)
                 .findFirst()
                 .orElseThrow();
         enrutador.aplicarCandidatoBloque(blocker, direct, blockFlight, blockAirport);
         for (int day = 2; day <= 3; day++) {
-            LuggageBatch nextBlocker = batchAt("B0D" + day, 25, "AAA", "CCC", 24, day);
-            RouteCandidate nextDirect = enrutador.materializarRutaCandidata(
+            LoteEnvio nextBlocker = batchAt("B0D" + day, 25, "AAA", "CCC", 24, day);
+            RutaCandidata nextDirect = enrutador.materializarRutaCandidata(
                     nextBlocker, direct.getEdges(), blockFlight, blockAirport);
             assertNotNull(nextDirect);
             enrutador.aplicarCandidatoBloque(nextBlocker, nextDirect, blockFlight, blockAirport);
@@ -73,18 +73,18 @@ class ColoniaACOTest {
         assertNull(enrutador.materializarRutaCandidata(batch, direct.getEdges(), blockFlight, blockAirport),
                 "La cache solo guarda esqueletos; la capacidad vigente debe revalidarse");
 
-        List<RouteCandidate> alternativas = enrutador.generarCandidatosRuta(batch, blockFlight, blockAirport, 3);
+        List<RutaCandidata> alternativas = enrutador.generarCandidatosRuta(batch, blockFlight, blockAirport, 3);
         assertFalse(alternativas.isEmpty(), "Dijkstra hijo debe buscar alternativa cuando la cache ya no sirve");
         assertTrue(alternativas.stream().anyMatch(c -> c.getEdges().size() > 1));
     }
 
     @Test
     void acoPadreAsignaElBloqueUsandoCandidatosDijkstra() {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
-        List<LuggageBatch> batches = List.of(
+        List<LoteEnvio> batches = List.of(
                 batch("B1", 20, "AAA", "CCC", 24),
                 batch("B2", 20, "AAA", "CCC", 24)
         );
@@ -96,19 +96,19 @@ class ColoniaACOTest {
         assertEquals(2, enrutados);
         assertFalse(blockFlight.isEmpty(), "ACO padre confirma la asignacion sobre el bloque");
         assertTrue(batches.stream().allMatch(b -> b.getAssignedRoute() != null && !b.getAssignedRoute().isEmpty()));
-        assertTrue(batches.stream().allMatch(LuggageBatch::isCumpleSLA));
+        assertTrue(batches.stream().allMatch(LoteEnvio::isCumpleSLA));
     }
 
     @Test
     void acoNoSobrepasaCapacidadAunConMemoizacionDeFrontier() {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         // Varios batches del mismo OD (AAA->CCC) ejercitan el camino de
         // memoizacion del frontier (Fase B) y saturan el vuelo directo F1
         // (cap 25), obligando a repartir por las rutas alternativas de 2 tramos.
-        List<LuggageBatch> batches = List.of(
+        List<LoteEnvio> batches = List.of(
                 batch("B1", 20, "AAA", "CCC", 24),
                 batch("B2", 20, "AAA", "CCC", 24),
                 batch("B3", 20, "AAA", "CCC", 24),
@@ -123,11 +123,11 @@ class ColoniaACOTest {
         assertEquals(4, enrutados, "Las rutas alternativas permiten enrutar los 4 batches");
         // Invariante de correctitud de la Fase B: la invalidacion por interseccion
         // de claves garantiza que ninguna asignacion reusada sobrepase capacidad.
-        Map<Integer, Edge> porIdx = new HashMap<>();
-        for (Edge e : graph.edges) porIdx.put(e.idx, e);
+        Map<Integer, Arista> porIdx = new HashMap<>();
+        for (Arista e : graph.edges) porIdx.put(e.idx, e);
         for (Map.Entry<Long, Integer> entry : blockFlight.entrySet()) {
-            int edgeIdx = (int) (entry.getKey() >> FlightKeyEncoder.DAY_BITS);
-            Edge edge = porIdx.get(edgeIdx);
+            int edgeIdx = (int) (entry.getKey() >> CodificadorClaveVuelo.DAY_BITS);
+            Arista edge = porIdx.get(edgeIdx);
             assertNotNull(edge, "flightKey decodifica a una arista valida");
             assertTrue(entry.getValue() <= edge.capacity,
                     "vuelo " + edge.id + " sobre capacidad: " + entry.getValue() + "/" + edge.capacity);
@@ -142,10 +142,10 @@ class ColoniaACOTest {
         // "nuevo": readyTime reciente (día 3) con SLA corto (24h) → deadline día 4 07:00.
         // Por horas de SLA, "nuevo" (24h) iría primero; por DEADLINE absoluto debe ir
         // primero "viejo", porque su vencimiento está más cerca (anti-inanición, G1).
-        LuggageBatch viejo = batchAt("VIEJO", 10, "AAA", "CCC", 48, 1);
-        LuggageBatch nuevo = batchAt("NUEVO", 10, "AAA", "CCC", 24, 3);
+        LoteEnvio viejo = batchAt("VIEJO", 10, "AAA", "CCC", 48, 1);
+        LoteEnvio nuevo = batchAt("NUEVO", 10, "AAA", "CCC", 24, 3);
 
-        List<LuggageBatch> ordenado = engine.ordenarPorUrgencia(Arrays.asList(nuevo, viejo));
+        List<LoteEnvio> ordenado = engine.ordenarPorUrgencia(Arrays.asList(nuevo, viejo));
 
         assertEquals("VIEJO", ordenado.get(0).getId(),
                 "el envío con deadline absoluto más cercano va primero");
@@ -158,12 +158,12 @@ class ColoniaACOTest {
         // (no caben ambos en F1), el URGENTE (SLA 4h: solo el directo llega on-time) debe
         // quedarse con F1 y el FLEXIBLE (SLA 24h) debe ceder y desviarse por una ruta de
         // 2 tramos. Demuestra que la capacidad escasa se reserva para quien la necesita.
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
-        LuggageBatch urgente = batch("U", 20, "AAA", "CCC", 4);
-        LuggageBatch flexible = batch("F", 20, "AAA", "CCC", 24);
+        LoteEnvio urgente = batch("U", 20, "AAA", "CCC", 4);
+        LoteEnvio flexible = batch("F", 20, "AAA", "CCC", 24);
 
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
@@ -184,16 +184,16 @@ class ColoniaACOTest {
         // FLEXIBLE (48h, mucha holgura) debe ser rechazado por la reserva de colchón
         // (1.ª pasada reservaAlmacen>0), pero la 2.ª pasada (reservaAlmacen=0) le DEBE
         // devolver la misma ruta: la reserva nunca causa un sinRuta evitable (anti-J3/K1).
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         // Los nodos de tránsito del grafo de prueba (BBB, DDD) se designan hub:
         // así cualquier candidato multi-tramo transita un hub de almacén.
         enrutador.setHubs(Set.of("BBB", "DDD", "CCC"));
 
-        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+        LoteEnvio flexible = batch("F48", 20, "AAA", "CCC", 48);
 
         // Candidato de 2 tramos (transita un hub). El Dijkstra hijo no aplica reserva.
-        RouteCandidate viaHub = enrutador
+        RutaCandidata viaHub = enrutador
                 .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
                 .filter(c -> c.getEdges().size() == 2)
                 .findFirst()
@@ -201,9 +201,9 @@ class ColoniaACOTest {
 
         // Saturar el almacén-día de la escala (nodo de tránsito) dejando un remanente
         // > qty (pasa el chequeo base) pero menor que qty + colchón (falla la reserva).
-        Edge escala = viaHub.getEdges().get(0);
+        Arista escala = viaHub.getEdges().get(0);
         long llegadaEscala = viaHub.getActualDepartures().get(0) + escala.durationMinutes;
-        long claveEscala = GreedyRepairOperator.claveAlmacenDeSlot(escala.to.idx, llegadaEscala);
+        long claveEscala = OperadorReparacionVoraz.claveAlmacenDeSlot(escala.to.idx, llegadaEscala);
         int remanente = 22;   // qty=20 < 22 ; colchón (≈10% de 500 escalado por holgura) ≫ 2
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveEscala, escala.to.capacity - remanente);
@@ -221,21 +221,21 @@ class ColoniaACOTest {
         // Fase L2 (alcance): la reserva de almacén-hub protege el TRÁNSITO overnight,
         // no a quien TERMINA en el hub. Un envío cuyo destino final es hub no sufre la
         // reserva aunque ese almacén-día esté casi lleno (la entrega no es desviable).
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         enrutador.setHubs(Set.of("CCC"));   // el destino final CCC es hub
 
-        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
+        LoteEnvio flexible = batch("F48", 20, "AAA", "CCC", 48);
 
-        RouteCandidate directo = enrutador
+        RutaCandidata directo = enrutador
                 .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
                 .filter(c -> c.getEdges().size() == 1)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("se esperaba la ruta directa AAA->CCC"));
 
-        Edge ultimo = directo.getEdges().get(0);
+        Arista ultimo = directo.getEdges().get(0);
         long llegadaDestino = directo.getActualDepartures().get(0) + ultimo.durationMinutes;
-        long claveDestino = GreedyRepairOperator.claveAlmacenDeSlot(ultimo.to.idx, llegadaDestino);
+        long claveDestino = OperadorReparacionVoraz.claveAlmacenDeSlot(ultimo.to.idx, llegadaDestino);
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveDestino, ultimo.to.capacity - 22);   // casi lleno, remanente 22 >= qty
 
@@ -249,30 +249,30 @@ class ColoniaACOTest {
         // Fase R: el almacén modela OCUPACIÓN CONCURRENTE (maletas presentes a la vez ≤ capacidad),
         // NO un tope de throughput por día. Una franja horaria distinta a la de llegada, aunque esté
         // llena, NO afecta a la maleta (no coinciden en el tiempo); solo el SLOT de su estadía importa.
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
 
-        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
-        RouteCandidate directo = enrutador
+        LoteEnvio flexible = batch("F48", 20, "AAA", "CCC", 48);
+        RutaCandidata directo = enrutador
                 .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
                 .filter(c -> c.getEdges().size() == 1)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("se esperaba la ruta directa AAA->CCC"));
 
-        Edge ultimo = directo.getEdges().get(0);
+        Arista ultimo = directo.getEdges().get(0);
         long llegada = directo.getActualDepartures().get(0) + ultimo.durationMinutes;
         int cap = ultimo.to.capacity;
 
         // (a) OTRA franja (5 h después) saturada → NO bloquea: el almacén es concurrente por slot.
         Map<Long, Integer> otraFranjaLlena = new HashMap<>();
-        otraFranjaLlena.put(GreedyRepairOperator.claveAlmacenDeSlot(ultimo.to.idx, llegada + 5 * 60), cap);
+        otraFranjaLlena.put(OperadorReparacionVoraz.claveAlmacenDeSlot(ultimo.to.idx, llegada + 5 * 60), cap);
         assertTrue(
                 enrutador.rutaSirveParaBatch(directo, flexible, new HashMap<>(), otraFranjaLlena, 0.0, 0.0),
                 "una franja horaria distinta llena no afecta: NO es un cupo diario");
 
         // (b) El SLOT de llegada saturado → SÍ bloquea: no cabe la maleta concurrentemente.
         Map<Long, Integer> slotLlegadaLleno = new HashMap<>();
-        slotLlegadaLleno.put(GreedyRepairOperator.claveAlmacenDeSlot(ultimo.to.idx, llegada), cap);
+        slotLlegadaLleno.put(OperadorReparacionVoraz.claveAlmacenDeSlot(ultimo.to.idx, llegada), cap);
         assertFalse(
                 enrutador.rutaSirveParaBatch(directo, flexible, new HashMap<>(), slotLlegadaLleno, 0.0, 0.0),
                 "el slot de la estadía lleno sí bloquea (ocupación concurrente > capacidad)");
@@ -283,21 +283,21 @@ class ColoniaACOTest {
         // Fase O: un aeropuerto que NO está en la lista estática de hubs pero cuya ocupación-pico
         // de almacén supera el umbral debe pasar a tratarse como hub (la reserva L2 empieza a
         // protegerlo). Verifica el descubrimiento dinámico vía el comportamiento de rutaSirveParaBatch.
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         // NO llamamos setHubs: el operador arranca SIN hubs (no hay lista hardcodeada); los hubs
         // solo se descubren por utilización real vía reclasificarHubsPorUtilizacion().
 
-        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
-        RouteCandidate viaTransito = enrutador
+        LoteEnvio flexible = batch("F48", 20, "AAA", "CCC", 48);
+        RutaCandidata viaTransito = enrutador
                 .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
                 .filter(c -> c.getEdges().size() == 2)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("se esperaba una ruta multi-tramo"));
 
-        Edge escala = viaTransito.getEdges().get(0);
+        Arista escala = viaTransito.getEdges().get(0);
         long llegadaEscala = viaTransito.getActualDepartures().get(0) + escala.durationMinutes;
-        long claveEscala = GreedyRepairOperator.claveAlmacenDeSlot(escala.to.idx, llegadaEscala);
+        long claveEscala = OperadorReparacionVoraz.claveAlmacenDeSlot(escala.to.idx, llegadaEscala);
 
         // Antes de reclasificar: el nodo de tránsito NO es hub → la reserva NO aplica aunque el
         // almacén-día esté casi lleno; la ruta pasa (remanente 22 >= qty 20).
@@ -338,20 +338,20 @@ class ColoniaACOTest {
      * via-escala sirve para un 48h flexible con reserva de almacén 0.10.
      */
     private static boolean rutaSirveTrasSembrarHub(double umbralHubPico) {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         enrutador.configurarStorageAware(umbralHubPico, 1.7);
 
-        LuggageBatch flexible = batch("F48", 20, "AAA", "CCC", 48);
-        RouteCandidate viaTransito = enrutador
+        LoteEnvio flexible = batch("F48", 20, "AAA", "CCC", 48);
+        RutaCandidata viaTransito = enrutador
                 .generarCandidatosRuta(flexible, new HashMap<>(), new HashMap<>(), 4).stream()
                 .filter(c -> c.getEdges().size() == 2)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("se esperaba una ruta multi-tramo"));
 
-        Edge escala = viaTransito.getEdges().get(0);
+        Arista escala = viaTransito.getEdges().get(0);
         long llegada = viaTransito.getActualDepartures().get(0) + escala.durationMinutes;
-        long clave = GreedyRepairOperator.claveAlmacenDeSlot(escala.to.idx, llegada);
+        long clave = OperadorReparacionVoraz.claveAlmacenDeSlot(escala.to.idx, llegada);
 
         // Pico ~0.96 (remanente 22) en el almacén-slot de la escala, commiteado a la ocupación global.
         Map<Long, Integer> seed = new HashMap<>();
@@ -365,14 +365,14 @@ class ColoniaACOTest {
 
     @Test
     void acoNoConfirmaRutasTardiasLasDifiere() {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
         // SLA de 1h es imposible: la ruta directa AAA->CCC ya llega ~3h despues
         // del readyTime. Por la Politica 1 (F1) el motor NO confirma rutas tardias:
         // el batch queda sinRuta para diferirse al backlog, no como tardada.
-        LuggageBatch batch = batch("B1", 10, "AAA", "CCC", 1);
+        LoteEnvio batch = batch("B1", 10, "AAA", "CCC", 1);
 
         int enrutados = engine.procesar(graph, enrutador, List.of(batch),
                 new HashMap<>(), new HashMap<>(), new Random(3L), 1_000L);
@@ -385,11 +385,11 @@ class ColoniaACOTest {
 
     @Test
     void acoPadreConTaAgotadoNoRompeYDejaRestantesSinRuta() {
-        Graph graph = graphConRutasAlternativas();
-        GreedyRepairOperator enrutador = new GreedyRepairOperator(graph);
+        Grafo graph = graphConRutasAlternativas();
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph);
         ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
 
-        List<LuggageBatch> batches = List.of(
+        List<LoteEnvio> batches = List.of(
                 batch("B1", 20, "AAA", "CCC", 24),
                 batch("B2", 20, "AAA", "CCC", 24),
                 batch("B3", 20, "AAA", "CCC", 24)
@@ -400,7 +400,7 @@ class ColoniaACOTest {
         assertTrue(enrutados >= 0 && enrutados <= batches.size());
         assertTrue(batches.stream()
                 .filter(b -> b.getAssignedRoute() == null || b.getAssignedRoute().isEmpty())
-                .noneMatch(LuggageBatch::isCumpleSLA));
+                .noneMatch(LoteEnvio::isCumpleSLA));
     }
 
     @Test
@@ -415,21 +415,21 @@ class ColoniaACOTest {
                 "batchId", "origen", "destino", "cantidad", "enrutada", "cumpleSLA", "rutaVuelos", "tramos");
     }
 
-    private static LuggageBatch batch(String id, int qty, String origen, String destino, int slaHours) {
+    private static LoteEnvio batch(String id, int qty, String origen, String destino, int slaHours) {
         return batchAt(id, qty, origen, destino, slaHours, 1);
     }
 
-    private static LuggageBatch batchAt(String id, int qty, String origen, String destino, int slaHours, int day) {
-        return new LuggageBatch(id, qty, slaHours, origen, destino,
+    private static LoteEnvio batchAt(String id, int qty, String origen, String destino, int slaHours, int day) {
+        return new LoteEnvio(id, qty, slaHours, origen, destino,
                 LocalDateTime.of(LocalDate.of(2026, 1, day), LocalTime.of(7, 0)));
     }
 
-    private static Graph graphConRutasAlternativas() {
-        Graph graph = new Graph();
-        Node aaa = node("AAA");
-        Node bbb = node("BBB");
-        Node ddd = node("DDD");
-        Node ccc = node("CCC");
+    private static Grafo graphConRutasAlternativas() {
+        Grafo graph = new Grafo();
+        Nodo aaa = node("AAA");
+        Nodo bbb = node("BBB");
+        Nodo ddd = node("DDD");
+        Nodo ccc = node("CCC");
         graph.nodes.put(aaa.code, aaa);
         graph.nodes.put(bbb.code, bbb);
         graph.nodes.put(ddd.code, ddd);
@@ -444,15 +444,15 @@ class ColoniaACOTest {
         return graph;
     }
 
-    private static Node node(String code) {
-        Node node = new Node(code);
+    private static Nodo node(String code) {
+        Nodo node = new Nodo(code);
         node.capacity = 500;
         return node;
     }
 
-    private static void addEdge(Graph graph, int idx, Node from, Node to, String id,
+    private static void addEdge(Grafo graph, int idx, Nodo from, Nodo to, String id,
                                 String dep, String arr, int cap) {
-        Edge edge = new Edge();
+        Arista edge = new Arista();
         edge.idx = idx;
         edge.id = id;
         edge.from = from;

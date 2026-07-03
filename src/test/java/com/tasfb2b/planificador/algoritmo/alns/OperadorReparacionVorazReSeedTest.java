@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -24,17 +24,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code skeletonKey} (package-private). Grafo: AAA→BBB→CCC (vía hub) y AAA→DDD→CCC (vía no-hub),
  * sin ruta directa, así que la única alternativa sin-hub es el detour por DDD.
  */
-class GreedyRepairOperatorReSeedTest {
+class OperadorReparacionVorazReSeedTest {
 
     @Test
     void reSeedInyectaEsqueletoSinHubCuandoLaCacheSoloTieneRutaPorHub() {
-        Graph graph = grafoSinDirecto();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoSinDirecto();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         op.setHubs(Set.of("BBB"));               // BBB es hub; DDD no
 
         int aaa = graph.nodes.get("AAA").idx;
         int ccc = graph.nodes.get("CCC").idx;
-        long key = GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24);
+        long key = OperadorReparacionVoraz.skeletonKey(aaa, ccc, 7 * 60, 24);
 
         // La caché solo conoce la ruta POR el hub (F2=idx0, F3=idx1).
         op.rutaSkeletonCache.put(key, new ArrayList<>(List.of(new int[]{0, 1})));
@@ -55,13 +55,13 @@ class GreedyRepairOperatorReSeedTest {
 
     @Test
     void reSeedNoInyectaNadaSiTodasLasRutasPasanPorHub() {
-        Graph graph = grafoSinDirecto();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoSinDirecto();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         op.setHubs(Set.of("BBB", "DDD"));        // ambos tránsitos son hub → no hay ruta sin-hub
 
         int aaa = graph.nodes.get("AAA").idx;
         int ccc = graph.nodes.get("CCC").idx;
-        long key = GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24);
+        long key = OperadorReparacionVoraz.skeletonKey(aaa, ccc, 7 * 60, 24);
         op.rutaSkeletonCache.put(key, new ArrayList<>(List.of(new int[]{0, 1})));
 
         op.reSeedHubAvoiding(10, Long.MAX_VALUE);
@@ -72,11 +72,11 @@ class GreedyRepairOperatorReSeedTest {
 
     @Test
     void reSeedDesactivadoConSliceCeroEsNoOp() {
-        Graph graph = grafoSinDirecto();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoSinDirecto();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         op.setHubs(Set.of("BBB"));
         int aaa = graph.nodes.get("AAA").idx, ccc = graph.nodes.get("CCC").idx;
-        long key = GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24);
+        long key = OperadorReparacionVoraz.skeletonKey(aaa, ccc, 7 * 60, 24);
         op.rutaSkeletonCache.put(key, new ArrayList<>(List.of(new int[]{0, 1})));
 
         op.reSeedHubAvoiding(0, Long.MAX_VALUE);   // slice=0 → off
@@ -89,19 +89,19 @@ class GreedyRepairOperatorReSeedTest {
         // Fase T (N3): pre-calentar puebla rutaSkeletonCache desde la demanda, una sola vez por clave
         // única (origen, destino, hora-del-día, SLA). Dos envíos del mismo (O,D,bucket-hora,SLA) →
         // una sola clave calentada; luego generarCandidatosRuta usa el fast-path (caché caliente).
-        Graph graph = grafoSinDirecto();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoSinDirecto();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
 
         int aaa = graph.nodes.get("AAA").idx;
         int ccc = graph.nodes.get("CCC").idx;
-        long key = GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24);   // 07:00 → bucket 7, SLA 24h
+        long key = OperadorReparacionVoraz.skeletonKey(aaa, ccc, 7 * 60, 24);   // 07:00 → bucket 7, SLA 24h
 
         assertTrue(op.rutaSkeletonCache.isEmpty(), "la caché arranca vacía (arranque limpio)");
 
         // 07:00 y 07:30 caen en el MISMO bucket de hora (7) → misma clave de esqueleto.
-        List<LuggageBatch> demanda = List.of(
-                new LuggageBatch("E1", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 0)),
-                new LuggageBatch("E2", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 30)));
+        List<LoteEnvio> demanda = List.of(
+                new LoteEnvio("E1", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 0)),
+                new LoteEnvio("E2", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 30)));
 
         int claves = op.precalentarEsqueletos(demanda, 5);
 
@@ -110,8 +110,8 @@ class GreedyRepairOperatorReSeedTest {
         assertTrue(!op.rutaSkeletonCache.get(key).isEmpty(), "hay al menos un esqueleto cacheado");
 
         // El fast-path ya dispone de candidatos sin recomputar Dijkstra.
-        List<GreedyRepairOperator.RouteCandidate> cand = op.generarCandidatosRuta(
-                new LuggageBatch("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 15)),
+        List<OperadorReparacionVoraz.RutaCandidata> cand = op.generarCandidatosRuta(
+                new LoteEnvio("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 15)),
                 new java.util.HashMap<>(), new java.util.HashMap<>(), 5);
         assertTrue(!cand.isEmpty(), "tras el pre-warm, generarCandidatosRuta devuelve candidatos");
     }
@@ -121,14 +121,14 @@ class GreedyRepairOperatorReSeedTest {
         // Pre-warm cancelable: con caché fría cada clave cuesta un Dijkstra, así que el check de
         // cancelación corta el bucle entre claves en vez de esperar a calentar toda la ventana.
         // Lo ya calentado se conserva (la corrida siguiente continúa desde ahí).
-        Graph graph = grafoSinDirecto();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoSinDirecto();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
 
         // Tres claves distintas (buckets de hora 7, 8 y 9 del mismo O→D).
-        List<LuggageBatch> demanda = List.of(
-                new LuggageBatch("E1", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 0)),
-                new LuggageBatch("E2", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 8, 0)),
-                new LuggageBatch("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 9, 0)));
+        List<LoteEnvio> demanda = List.of(
+                new LoteEnvio("E1", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 0)),
+                new LoteEnvio("E2", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 8, 0)),
+                new LoteEnvio("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 9, 0)));
 
         // La cancelación llega tras calentar la primera clave (el check corre antes de cada una).
         AtomicInteger checks = new AtomicInteger();
@@ -136,16 +136,16 @@ class GreedyRepairOperatorReSeedTest {
 
         assertEquals(1, claves, "cancelado tras la primera clave: el resto no se calienta");
         int aaa = graph.nodes.get("AAA").idx, ccc = graph.nodes.get("CCC").idx;
-        assertTrue(op.rutaSkeletonCache.containsKey(GreedyRepairOperator.skeletonKey(aaa, ccc, 7 * 60, 24)),
+        assertTrue(op.rutaSkeletonCache.containsKey(OperadorReparacionVoraz.skeletonKey(aaa, ccc, 7 * 60, 24)),
                 "lo calentado antes de cancelar se conserva en la caché");
-        assertTrue(!op.rutaSkeletonCache.containsKey(GreedyRepairOperator.skeletonKey(aaa, ccc, 9 * 60, 24)),
+        assertTrue(!op.rutaSkeletonCache.containsKey(OperadorReparacionVoraz.skeletonKey(aaa, ccc, 9 * 60, 24)),
                 "las claves posteriores a la cancelación no se calientan");
 
         // Sin supplier (null) se comporta como la variante de dos argumentos: intenta las 3 claves
         // (la 1.ª resuelve por fast-path de caché; el contador es de claves intentadas por llamada).
         assertEquals(3, op.precalentarEsqueletos(demanda, 5, null),
                 "sin cancelación se intentan todas las claves de la demanda");
-        assertTrue(op.rutaSkeletonCache.containsKey(GreedyRepairOperator.skeletonKey(aaa, ccc, 9 * 60, 24)),
+        assertTrue(op.rutaSkeletonCache.containsKey(OperadorReparacionVoraz.skeletonKey(aaa, ccc, 9 * 60, 24)),
                 "tras el pre-warm completo la clave que faltaba queda calentada");
     }
 
@@ -155,9 +155,9 @@ class GreedyRepairOperatorReSeedTest {
         return false;
     }
 
-    private static Graph grafoSinDirecto() {
-        Graph g = new Graph();
-        Node aaa = node("AAA"), bbb = node("BBB"), ddd = node("DDD"), ccc = node("CCC");
+    private static Grafo grafoSinDirecto() {
+        Grafo g = new Grafo();
+        Nodo aaa = node("AAA"), bbb = node("BBB"), ddd = node("DDD"), ccc = node("CCC");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
         g.nodes.put("DDD", ddd);
@@ -169,15 +169,15 @@ class GreedyRepairOperatorReSeedTest {
         return g;
     }
 
-    private static Node node(String code) {
-        Node n = new Node(code);
+    private static Nodo node(String code) {
+        Nodo n = new Nodo(code);
         n.capacity = 500;
         return n;
     }
 
-    private static void addEdge(Graph g, int idx, Node from, Node to, String id,
+    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id,
                                 String dep, String arr, int cap) {
-        Edge e = new Edge();
+        Arista e = new Arista();
         e.idx = idx;
         e.id = id;
         e.from = from;

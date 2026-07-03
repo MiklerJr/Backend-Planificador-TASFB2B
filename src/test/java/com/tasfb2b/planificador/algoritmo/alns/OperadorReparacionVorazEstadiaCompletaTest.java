@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.aco.ColoniaACO;
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.algoritmo.aco.ColoniaACO;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -32,36 +32,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * rechazar la ruta — antes solo se validaba el slot de llegada y los intermedios se cobraban
  * sin chequear (overflow del almacén).
  */
-class GreedyRepairOperatorEstadiaCompletaTest {
+class OperadorReparacionVorazEstadiaCompletaTest {
 
     private static final int CAPACIDAD_ALMACEN = 500;
 
     @Test
     void dijkstraHijoRechazaRutaSiUnSlotIntermedioDeLaEscalaEstaLleno() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        LuggageBatch batch = batch("B1", 20, 24);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        LoteEnvio batch = batch("B1", 20, 24);
 
         // Sanidad: sin ocupación, la ruta del día 1 existe y es on-time.
-        List<RouteCandidate> libres = op.generarCandidatosRuta(batch, new HashMap<>(), new HashMap<>(), 3);
-        assertTrue(libres.stream().anyMatch(RouteCandidate::isCumpleSLA),
+        List<RutaCandidata> libres = op.generarCandidatosRuta(batch, new HashMap<>(), new HashMap<>(), 3);
+        assertTrue(libres.stream().anyMatch(RutaCandidata::isCumpleSLA),
                 "sin ocupación la ruta vía BBB del día 1 es on-time");
 
         // Slot intermedio (13:00) de la estadía en BBB lleno; el de llegada (09:30) queda libre.
         Map<Long, Integer> blockAirport = slotIntermedioLleno(graph);
-        List<RouteCandidate> candidatos = op.generarCandidatosRuta(batch, new HashMap<>(), blockAirport, 3);
+        List<RutaCandidata> candidatos = op.generarCandidatosRuta(batch, new HashMap<>(), blockAirport, 3);
 
-        assertTrue(candidatos.stream().noneMatch(RouteCandidate::isCumpleSLA),
+        assertTrue(candidatos.stream().noneMatch(RutaCandidata::isCumpleSLA),
                 "con un slot intermedio de la estadía lleno, la ruta del día 1 no debe ofrecerse");
     }
 
     @Test
     void materializarRutaCandidataRechazaSiUnSlotIntermedioDeLaEscalaEstaLleno() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        LuggageBatch batch = batch("B1", 20, 24);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        LoteEnvio batch = batch("B1", 20, 24);
 
-        List<Edge> rutaViaBbb = List.of(graph.edges.get(0), graph.edges.get(1));
+        List<Arista> rutaViaBbb = List.of(graph.edges.get(0), graph.edges.get(1));
         assertTrue(op.materializarRutaCandidata(batch, rutaViaBbb, new HashMap<>(), new HashMap<>())
                         .isCumpleSLA(),
                 "sin ocupación, el esqueleto cacheado materializa on-time");
@@ -72,18 +72,18 @@ class GreedyRepairOperatorEstadiaCompletaTest {
 
     @Test
     void repairNoCobraSlotsDeEstadiaNuncaValidados() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        LuggageBatch batch = batch("B1", 20, 24);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        LoteEnvio batch = batch("B1", 20, 24);
 
         // El slot intermedio queda a 10 maletas del tope: el batch (20) NO cabe en él.
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveSlotIntermedio(graph), CAPACIDAD_ALMACEN - 10);
         Map<Long, Integer> blockFlight = new HashMap<>();
 
-        op.repair(new AlnsSolution(List.of(batch)), List.of(batch), blockFlight, blockAirport);
+        op.repair(new SolucionAlns(List.of(batch)), List.of(batch), blockFlight, blockAirport);
 
-        Node bbb = graph.nodes.get("BBB");
+        Nodo bbb = graph.nodes.get("BBB");
         for (Map.Entry<Long, Integer> e : blockAirport.entrySet()) {
             assertTrue(e.getValue() <= bbb.capacity,
                     "ningún slot de almacén queda sobre capacidad tras repair: "
@@ -91,7 +91,7 @@ class GreedyRepairOperatorEstadiaCompletaTest {
         }
         if (batch.getAssignedRoute() != null && !batch.getAssignedRoute().isEmpty()) {
             long primeraSalida = batch.getAssignedDepartures().get(0);
-            long readyMin = GreedyRepairOperator.toEpochMinPublic(batch.getReadyTime());
+            long readyMin = OperadorReparacionVoraz.toEpochMinPublic(batch.getReadyTime());
             assertTrue(primeraSalida - readyMin > 24 * 60,
                     "si enruta, debe ser en un día posterior (la estadía del día 1 no cabe)");
         }
@@ -99,10 +99,10 @@ class GreedyRepairOperatorEstadiaCompletaTest {
 
     @Test
     void acoPadreNoSobrepasaCapacidadDeAlmacenEnSlotsIntermedios() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
         ColoniaACO engine = new ColoniaACO(new PlanificadorProperties());
-        LuggageBatch batch = batch("B1", 20, 24);
+        LoteEnvio batch = batch("B1", 20, 24);
 
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
@@ -110,7 +110,7 @@ class GreedyRepairOperatorEstadiaCompletaTest {
 
         engine.procesar(graph, op, List.of(batch), blockFlight, blockAirport, new Random(7L), 1_000L);
 
-        Node bbb = graph.nodes.get("BBB");
+        Nodo bbb = graph.nodes.get("BBB");
         for (Map.Entry<Long, Integer> e : blockAirport.entrySet()) {
             assertTrue(e.getValue() <= bbb.capacity,
                     "ningún slot de almacén queda sobre capacidad tras el ACO: "
@@ -128,9 +128,9 @@ class GreedyRepairOperatorEstadiaCompletaTest {
         // logra ruta on-time respetando almacenes pero SÍ la tendría ignorándolos = le llegaron
         // maletas a un almacén que quedaría en sobrecapacidad. Debe dispararse también cuando lo
         // que bloquea es un slot INTERMEDIO de la estadía, no solo el de llegada.
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        LuggageBatch batch = batch("B1", 20, 24);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        LoteEnvio batch = batch("B1", 20, 24);
 
         assertFalse(op.sinRutaPorAlmacenLleno(batch),
                 "con almacenes libres no hay colapso: la ruta on-time existe");
@@ -147,14 +147,14 @@ class GreedyRepairOperatorEstadiaCompletaTest {
     void evaluarPreColapsoReportaDesbordeDuroSobreElCienPorCiento() {
         // Señal del freno DURO (PlanificadorService): utilización > 1.0 en un slot tocado por el
         // bloque ⇒ ocupación real sobre capacidad ⇒ la simulación se detiene de inmediato.
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
 
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveSlotIntermedio(graph), CAPACIDAD_ALMACEN + 50);
         op.commitBlock(new HashMap<>(), blockAirport);
 
-        GreedyRepairOperator.PreColapso pre = op.evaluarPreColapso(blockAirport, List.of());
+        OperadorReparacionVoraz.PreColapso pre = op.evaluarPreColapso(blockAirport, List.of());
 
         assertTrue(pre.utilAlmacenMax() > 1.0,
                 "una ocupación sobre capacidad debe reportar utilización > 100%");
@@ -164,27 +164,27 @@ class GreedyRepairOperatorEstadiaCompletaTest {
     // ----------------------------------------------------------------------- helpers
 
     /** Slot de las 13:00 del día 1 en BBB: dentro de la estadía [09:30, 18:00) pero NO el de llegada. */
-    private static long claveSlotIntermedio(Graph graph) {
-        long epochMin = GreedyRepairOperator.toEpochMinPublic(
+    private static long claveSlotIntermedio(Grafo graph) {
+        long epochMin = OperadorReparacionVoraz.toEpochMinPublic(
                 LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(13, 0)));
-        return GreedyRepairOperator.claveAlmacenDeSlot(graph.nodes.get("BBB").idx, epochMin);
+        return OperadorReparacionVoraz.claveAlmacenDeSlot(graph.nodes.get("BBB").idx, epochMin);
     }
 
-    private static Map<Long, Integer> slotIntermedioLleno(Graph graph) {
+    private static Map<Long, Integer> slotIntermedioLleno(Grafo graph) {
         Map<Long, Integer> blockAirport = new HashMap<>();
         blockAirport.put(claveSlotIntermedio(graph), CAPACIDAD_ALMACEN);
         return blockAirport;
     }
 
-    private static LuggageBatch batch(String id, int qty, int slaHours) {
-        return new LuggageBatch(id, qty, slaHours, "AAA", "CCC",
+    private static LoteEnvio batch(String id, int qty, int slaHours) {
+        return new LoteEnvio(id, qty, slaHours, "AAA", "CCC",
                 LocalDateTime.of(LocalDate.of(2026, 1, 1), LocalTime.of(7, 0)));
     }
 
     /** AAA→BBB (08:30-09:30) y BBB→CCC (18:00-19:00): escala de 8h30 en BBB, sin ruta directa. */
-    private static Graph grafoEscalaLarga() {
-        Graph g = new Graph();
-        Node aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
+    private static Grafo grafoEscalaLarga() {
+        Grafo g = new Grafo();
+        Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
         g.nodes.put("CCC", ccc);
@@ -193,15 +193,15 @@ class GreedyRepairOperatorEstadiaCompletaTest {
         return g;
     }
 
-    private static Node node(String code) {
-        Node n = new Node(code);
+    private static Nodo node(String code) {
+        Nodo n = new Nodo(code);
         n.capacity = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Graph g, int idx, Node from, Node to, String id,
+    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id,
                                 String dep, String arr, int cap) {
-        Edge e = new Edge();
+        Arista e = new Arista();
         e.idx = idx;
         e.id = id;
         e.from = from;

@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.algorithm.alns;
+package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.GreedyRepairOperator.RouteCandidate;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * vivo, los envíos afectados se reencolan como replanificables con su ruta rota aún COMMITEADA a
  * la ocupación global; la liberación ({@code releaseFromGlobal} + {@code clearRoute}) es diferida
  * al momento en que salen del backlog en un bloque posterior. Si el envío VENCÍA antes de salir
- * (p. ej. por el tope {@code max-reproceso-por-bloque}), {@code BacklogManager.purgarVencidas} lo
+ * (p. ej. por el tope {@code max-reproceso-por-bloque}), {@code GestorBacklog.purgarVencidas} lo
  * descartaba SIN liberar: la capacidad de los vuelos posteriores y la estadía de almacén de una
  * ruta físicamente imposible quedaban cobradas para siempre, y el envío seguía contando como
  * "enrutado".
@@ -41,29 +41,29 @@ class CancelacionOcupacionFantasmaTest {
 
     @Test
     void purgarVencidasLiberaLaOcupacionGlobalDeUnaRutaRotaPorCancelacion() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        Edge f1 = graph.edges.get(0);   // AAA→BBB 08:30-09:30
-        Edge f2 = graph.edges.get(1);   // BBB→CCC 18:00-19:00
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        Arista f1 = graph.edges.get(0);   // AAA→BBB 08:30-09:30
+        Arista f2 = graph.edges.get(1);   // BBB→CCC 18:00-19:00
 
         // 1. Enrutar y commitear B1 por AAA→BBB→CCC (estadía 09:30-18:00 en BBB).
-        LuggageBatch b1 = enrutarYCommitear(op);
+        LoteEnvio b1 = enrutarYCommitear(op);
 
-        long depF2 = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
-        long estadiaBbb = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
+        long depF2 = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
+        long estadiaBbb = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(12, 0)));
         assertEquals(CAPACIDAD_VUELO - 20, op.capacidadRestante(f2, depF2, new HashMap<>()),
                 "sanidad: B1 ocupa 20 plazas del tramo BBB→CCC");
         assertEquals(CAPACIDAD_ALMACEN - 20, op.capacidadAlmacen(graph.nodes.get("BBB"), estadiaBbb, new HashMap<>()),
                 "sanidad: la estadía de B1 ocupa el almacén de BBB");
 
         // 2. Cancelación en vivo del primer tramo (F1 del día): B1 ya no puede volar esa ruta.
-        long keyF1 = FlightKeyEncoder.flightKey(f1.idx,
-                GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(8, 30))));
+        long keyF1 = CodificadorClaveVuelo.flightKey(f1.idx,
+                OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(8, 30))));
         assertTrue(op.addCancelledFlight(keyF1));
 
         // 3. Reencolado como replanificable (igual que reencolarAfectadosPorCancelacion) y
         //    purga por vencimiento ANTES de que un bloque lo reprocese (deadline 02/01 07:00).
-        BacklogManager backlog = backlogConHookDeProduccion(op);
+        GestorBacklog backlog = backlogConHookDeProduccion(op);
         backlog.addReplanificable(b1);
         int purgados = backlog.purgarVencidas(LocalDateTime.of(2026, 1, 2, 8, 0));
         assertEquals(1, purgados, "B1 vence en el backlog sin haber sido reprocesado");
@@ -78,22 +78,22 @@ class CancelacionOcupacionFantasmaTest {
                 "la estadía fantasma en BBB se libera al purgar");
         assertTrue(b1.getAssignedRoute() == null || b1.getAssignedRoute().isEmpty(),
                 "B1 queda sin ruta: deja de contar como 'enrutado' en métricas/auditoría");
-        assertEquals(0, op.capacidadRestante(f1, GreedyRepairOperator.toEpochMinPublic(
+        assertEquals(0, op.capacidadRestante(f1, OperadorReparacionVoraz.toEpochMinPublic(
                         LocalDateTime.of(DIA, LocalTime.of(8, 30))), new HashMap<>()),
                 "sanidad: el vuelo cancelado no ofrece capacidad");
     }
 
     @Test
     void purgarReplanificablePreventivoConRutaValidaNoLiberaNiCuentaComoDefinitivo() {
-        Graph graph = grafoEscalaLarga();
-        GreedyRepairOperator op = new GreedyRepairOperator(graph);
-        Edge f2 = graph.edges.get(1);   // BBB→CCC 18:00-19:00
+        Grafo graph = grafoEscalaLarga();
+        OperadorReparacionVoraz op = new OperadorReparacionVoraz(graph);
+        Arista f2 = graph.edges.get(1);   // BBB→CCC 18:00-19:00
 
         // B1 enrutado y commiteado SIN cancelación: replanificable preventivo (poca holgura SLA).
-        LuggageBatch b1 = enrutarYCommitear(op);
-        long depF2 = GreedyRepairOperator.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
+        LoteEnvio b1 = enrutarYCommitear(op);
+        long depF2 = OperadorReparacionVoraz.toEpochMinPublic(LocalDateTime.of(DIA, LocalTime.of(18, 0)));
 
-        BacklogManager backlog = backlogConHookDeProduccion(op);
+        GestorBacklog backlog = backlogConHookDeProduccion(op);
         backlog.addReplanificable(b1);
         int purgados = backlog.purgarVencidas(LocalDateTime.of(2026, 1, 2, 8, 0));
 
@@ -110,13 +110,13 @@ class CancelacionOcupacionFantasmaTest {
     // ----------------------------------------------------------------------- helpers
 
     /** Enruta B1 (AAA→CCC, 20 maletas, deadline 02/01 07:00) y commitea su ruta a la ocupación global. */
-    private static LuggageBatch enrutarYCommitear(GreedyRepairOperator op) {
-        LuggageBatch b1 = new LuggageBatch("B1", 20, 24, "AAA", "CCC",
+    private static LoteEnvio enrutarYCommitear(OperadorReparacionVoraz op) {
+        LoteEnvio b1 = new LoteEnvio("B1", 20, 24, "AAA", "CCC",
                 LocalDateTime.of(DIA, LocalTime.of(7, 0)));
         Map<Long, Integer> blockFlight = new HashMap<>();
         Map<Long, Integer> blockAirport = new HashMap<>();
-        RouteCandidate ruta = op.generarCandidatosRuta(b1, blockFlight, blockAirport, 3).stream()
-                .filter(RouteCandidate::isCumpleSLA)
+        RutaCandidata ruta = op.generarCandidatosRuta(b1, blockFlight, blockAirport, 3).stream()
+                .filter(RutaCandidata::isCumpleSLA)
                 .findFirst().orElseThrow();
         op.aplicarCandidatoRuta(b1, ruta);
         op.aplicarCandidatoBloque(b1, ruta, blockFlight, blockAirport);
@@ -125,8 +125,8 @@ class CancelacionOcupacionFantasmaTest {
     }
 
     /** Backlog con el mismo hook de descarte que {@code PlanificadorService.crearBacklogConPurga}. */
-    private static BacklogManager backlogConHookDeProduccion(GreedyRepairOperator op) {
-        return new BacklogManager(1000, true, b -> {
+    private static GestorBacklog backlogConHookDeProduccion(OperadorReparacionVoraz op) {
+        return new GestorBacklog(1000, true, b -> {
             if (op.rutaUsaVueloCancelado(b)) {
                 op.releaseFromGlobal(b);
                 b.clearRoute();
@@ -135,9 +135,9 @@ class CancelacionOcupacionFantasmaTest {
     }
 
     /** AAA→BBB (08:30-09:30) y BBB→CCC (18:00-19:00): escala de 8h30 en BBB, sin ruta directa. */
-    private static Graph grafoEscalaLarga() {
-        Graph g = new Graph();
-        Node aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
+    private static Grafo grafoEscalaLarga() {
+        Grafo g = new Grafo();
+        Nodo aaa = node("AAA"), bbb = node("BBB"), ccc = node("CCC");
         g.nodes.put("AAA", aaa);
         g.nodes.put("BBB", bbb);
         g.nodes.put("CCC", ccc);
@@ -146,14 +146,14 @@ class CancelacionOcupacionFantasmaTest {
         return g;
     }
 
-    private static Node node(String code) {
-        Node n = new Node(code);
+    private static Nodo node(String code) {
+        Nodo n = new Nodo(code);
         n.capacity = CAPACIDAD_ALMACEN;
         return n;
     }
 
-    private static void addEdge(Graph g, int idx, Node from, Node to, String id, String dep, String arr) {
-        Edge e = new Edge();
+    private static void addEdge(Grafo g, int idx, Nodo from, Nodo to, String id, String dep, String arr) {
+        Arista e = new Arista();
         e.idx = idx;
         e.id = id;
         e.from = from;

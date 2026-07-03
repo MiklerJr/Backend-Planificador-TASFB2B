@@ -1,10 +1,10 @@
-package com.tasfb2b.planificador.controller;
+package com.tasfb2b.planificador.controlador;
 
-import com.tasfb2b.planificador.config.PlanificadorProperties;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.comun.ErrorResponse;
-import com.tasfb2b.planificador.exception.GlobalExceptionHandler;
-import com.tasfb2b.planificador.exception.ParametroInvalidoException;
-import com.tasfb2b.planificador.services.ingesta.IngestaService;
+import com.tasfb2b.planificador.excepcion.ManejadorExcepcionesGlobal;
+import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
+import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
@@ -19,7 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato del {@code GlobalExceptionHandler} (manejo centralizado de errores, Tanda 1C):
+ * Contrato del {@code ManejadorExcepcionesGlobal} (manejo centralizado de errores, Tanda 1C):
  * <ul>
  *   <li>una excepción de dominio ({@link ParametroInvalidoException}) produce 400 con el cuerpo
  *       uniforme {@link ErrorResponse}, conservando la clave {@code error} que el front consume;</li>
@@ -29,9 +29,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *       traduce al status y al JSON esperados.</li>
  * </ul>
  */
-class GlobalExceptionHandlerTest {
+class ManejadorExcepcionesGlobalTest {
 
-    private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+    private final ManejadorExcepcionesGlobal handler = new ManejadorExcepcionesGlobal();
 
     @Test
     void excepcionDeDominioProduce400ConClaveError() {
@@ -81,7 +81,7 @@ class GlobalExceptionHandlerTest {
         EscenarioController controller = new EscenarioController(null, new PlanificadorProperties(),
                 new IngestaService(null, null, null, null, null, null, null));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new ManejadorExcepcionesGlobal())
                 .build();
 
         mvc.perform(post("/api/planificador/escenario2/iniciar").param("k", "0"))
