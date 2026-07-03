@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.util;
+package com.tasfb2b.planificador.utilidades;
 
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Envio;
-import com.tasfb2b.planificador.model.dataset.TipoEnvio;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.parser.FlightParser;
-import com.tasfb2b.planificador.util.validator.VueloValidator;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Envio;
+import com.tasfb2b.planificador.modelo.datos.TipoEnvio;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.analizador.AnalizadorVuelos;
+import com.tasfb2b.planificador.utilidades.validador.ValidadorVuelo;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
-public class DataLoader {
+public class CargadorDatos {
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -37,7 +37,7 @@ public class DataLoader {
     private LocalDateTime primeraVentanaUtc;
     private LocalDateTime ultimaVentanaUtc;
 
-    public DataLoader(JdbcTemplate jdbcTemplate) {
+    public CargadorDatos(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -81,7 +81,7 @@ public class DataLoader {
 
             LocalTime horaSalida = leerHora(rs.getObject("hora_salida"), "hora_salida");
             LocalTime horaLlegada = leerHora(rs.getObject("hora_llegada"), "hora_llegada");
-            LocalDateTime fechaSalida = LocalDateTime.of(FlightParser.FLIGHT_BASE_DATE, horaSalida);
+            LocalDateTime fechaSalida = LocalDateTime.of(AnalizadorVuelos.FLIGHT_BASE_DATE, horaSalida);
             LocalDateTime fechaLlegada = fechaLlegadaLocal(fechaSalida, horaLlegada, origen, destino);
 
             v.setCapacidad(rs.getInt("capacidad_maxima"));
@@ -97,11 +97,11 @@ public class DataLoader {
                 .filter(v -> v != null)
                 .collect(Collectors.toList());
         vuelos = noNulos.stream()
-                .filter(VueloValidator::esCoherente)
+                .filter(ValidadorVuelo::esCoherente)
                 .collect(Collectors.toList());
         int descartadosIncoherentes = noNulos.size() - vuelos.size();
         if (descartadosIncoherentes > 0) {
-            log.warn("VueloValidator: {} vuelos descartados (capacidad<=0 u origen=destino)",
+            log.warn("ValidadorVuelo: {} vuelos descartados (capacidad<=0 u origen=destino)",
                     descartadosIncoherentes);
         }
 

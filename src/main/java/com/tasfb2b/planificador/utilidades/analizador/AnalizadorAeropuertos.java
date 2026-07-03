@@ -1,7 +1,7 @@
-package com.tasfb2b.planificador.util.parser;
+package com.tasfb2b.planificador.utilidades.analizador;
 
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.util.FileUtils;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.utilidades.UtilidadesArchivo;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -12,7 +12,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Component
-public class AeropuertoParser {
+public class AnalizadorAeropuertos {
 
     private static final Pattern LINE = Pattern.compile(
             "^\\s*(\\d{2})\\s+" +           // 1: número
@@ -27,7 +27,7 @@ public class AeropuertoParser {
     );
 
     public List<Aeropuerto> parse(Path file) throws IOException {
-        List<String> lineas = FileUtils.leerLineasSeguro(file);
+        List<String> lineas = UtilidadesArchivo.leerLineasSeguro(file);
 
         List<Aeropuerto> result = new ArrayList<>();
 

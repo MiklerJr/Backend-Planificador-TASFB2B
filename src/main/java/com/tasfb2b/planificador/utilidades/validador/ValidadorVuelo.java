@@ -1,11 +1,11 @@
-package com.tasfb2b.planificador.util.validator;
+package com.tasfb2b.planificador.utilidades.validador;
 
-import com.tasfb2b.planificador.model.dataset.Vuelo;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
 
 
-public final class VueloValidator {
+public final class ValidadorVuelo {
 
-    private VueloValidator() {}
+    private ValidadorVuelo() {}
 
     public static boolean esCoherente(Vuelo v) {
         return v != null

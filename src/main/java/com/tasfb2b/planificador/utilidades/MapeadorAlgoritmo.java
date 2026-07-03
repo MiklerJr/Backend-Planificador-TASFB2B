@@ -1,14 +1,14 @@
-package com.tasfb2b.planificador.util;
+package com.tasfb2b.planificador.utilidades;
 
-import com.tasfb2b.planificador.algorithm.grafo.Edge;
+import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import com.tasfb2b.planificador.algorithm.grafo.Graph;
-import com.tasfb2b.planificador.algorithm.grafo.Node;
-import com.tasfb2b.planificador.algorithm.alns.LuggageBatch;
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Envio;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
+import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
+import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
+import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Envio;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -16,16 +16,16 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Component
-public class AlgorithmMapper {
+public class MapeadorAlgoritmo {
 
 
-    public Graph mapToGraph(List<Aeropuerto> aeropuertos, List<Vuelo> vuelos) {
-        Graph graph = new Graph();
+    public Grafo mapToGraph(List<Aeropuerto> aeropuertos, List<Vuelo> vuelos) {
+        Grafo graph = new Grafo();
 
         // 1. Mapear Nodos (Aeropuertos)
         for (Aeropuerto a : aeropuertos) {
             graph.addNode(a.getCodigo());
-            Node nodo = graph.nodes.get(a.getCodigo());
+            Nodo nodo = graph.nodes.get(a.getCodigo());
             int capacidadAlmacen = a.getCapacidad() != null ? a.getCapacidad() : 0;
             nodo.capacity = capacidadAlmacen;
             nodo.storageCapacity = capacidadAlmacen;
@@ -34,7 +34,7 @@ public class AlgorithmMapper {
         // 2. Mapear Aristas (Vuelos)
         int edgeIdx = 0;
         for (Vuelo v : vuelos) {
-            Edge edge = new Edge();
+            Arista edge = new Arista();
 
             if (v.getId() != null) {
                 edge.id = v.getId().toString();
@@ -76,12 +76,12 @@ public class AlgorithmMapper {
         return graph;
     }
 
-    public List<LuggageBatch> mapToBatches(List<Envio> maletas) {
+    public List<LoteEnvio> mapToBatches(List<Envio> maletas) {
         return maletas.stream().map(m -> {
 
             int offset = m.getAeropuertoOrigen().getOffsetHorario();
             LocalDateTime readyTimeUtc = m.getFechaHoraRegistro().minusHours(offset);
-            LuggageBatch b = new LuggageBatch(
+            LoteEnvio b = new LoteEnvio(
                     m.getIdEnvio(),
                     m.getCantidad(),
                     m.getPlazo(),

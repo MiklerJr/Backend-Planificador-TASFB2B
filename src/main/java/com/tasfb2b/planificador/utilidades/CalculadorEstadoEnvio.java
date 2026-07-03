@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.util;
+package com.tasfb2b.planificador.utilidades;
 
 import com.tasfb2b.planificador.dto.simulacion.AsignacionMaleta;
 import com.tasfb2b.planificador.dto.simulacion.EnvioEstadoResponse;
@@ -7,7 +7,7 @@ import com.tasfb2b.planificador.dto.simulacion.TramoRuta;
 import java.time.LocalDateTime;
 import java.util.List;
 
-public final class EnvioEstadoCalculator {
+public final class CalculadorEstadoEnvio {
 
     public static final String COMPLETADO = "COMPLETADO";
     public static final String EN_CURSO   = "EN_CURSO";
@@ -19,7 +19,7 @@ public final class EnvioEstadoCalculator {
     public static final String E_ENTREGADO   = "ENTREGADO";
     public static final String E_DESCONOCIDO = "DESCONOCIDO";
 
-    private EnvioEstadoCalculator() {}
+    private CalculadorEstadoEnvio() {}
 
     public static EnvioEstadoResponse calcular(AsignacionMaleta asig, LocalDateTime ahoraUtc) {
         EnvioEstadoResponse r = new EnvioEstadoResponse();

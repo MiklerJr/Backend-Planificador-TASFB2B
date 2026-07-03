@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.util;
+package com.tasfb2b.planificador.utilidades;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
@@ -8,9 +8,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
 
-public final class FileUtils {
+public final class UtilidadesArchivo {
 
-    private FileUtils() {
+    private UtilidadesArchivo() {
         throw new UnsupportedOperationException("Clase utilitaria");
     }
 

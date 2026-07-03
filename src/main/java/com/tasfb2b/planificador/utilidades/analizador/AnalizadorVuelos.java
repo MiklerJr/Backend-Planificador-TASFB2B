@@ -1,8 +1,8 @@
-package com.tasfb2b.planificador.util.parser;
+package com.tasfb2b.planificador.utilidades.analizador;
 
-import com.tasfb2b.planificador.model.dataset.Aeropuerto;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
-import com.tasfb2b.planificador.util.FileUtils;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
+import com.tasfb2b.planificador.utilidades.UtilidadesArchivo;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 @Component
-public class FlightParser {
+public class AnalizadorVuelos {
 
     public static final LocalDate FLIGHT_BASE_DATE = LocalDate.of(2026, 1, 1);
 
@@ -23,7 +23,7 @@ public class FlightParser {
         List<Vuelo> result = new ArrayList<>();
         final LocalDate BASE = FLIGHT_BASE_DATE;
 
-        for (String line : FileUtils.leerLineasSeguro(file)) {
+        for (String line : UtilidadesArchivo.leerLineasSeguro(file)) {
             line = line.trim();
             if (line.isEmpty() || line.startsWith("//")) continue;
 

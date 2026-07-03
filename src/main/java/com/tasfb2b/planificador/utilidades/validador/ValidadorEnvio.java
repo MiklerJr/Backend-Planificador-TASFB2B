@@ -1,9 +1,9 @@
-package com.tasfb2b.planificador.util.validator;
+package com.tasfb2b.planificador.utilidades.validador;
 
 
-public final class EnvioValidator {
+public final class ValidadorEnvio {
 
-    private EnvioValidator() {
+    private ValidadorEnvio() {
     }
 
     public static boolean esMismoAeropuerto(String origenIcao, String destinoIcao) {

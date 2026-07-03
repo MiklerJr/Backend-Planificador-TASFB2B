@@ -1,13 +1,13 @@
-package com.tasfb2b.planificador.util;
+package com.tasfb2b.planificador.utilidades;
 
-import com.tasfb2b.planificador.algorithm.aco.ConstantesOperativas;
+import com.tasfb2b.planificador.algoritmo.aco.ConstantesOperativas;
 import com.tasfb2b.planificador.dto.vuelos.CargaVuelo;
 import com.tasfb2b.planificador.dto.almacenes.OcupacionAlmacen;
-import com.tasfb2b.planificador.model.dataset.Vuelo;
+import com.tasfb2b.planificador.modelo.datos.Vuelo;
 
-public final class SimulacionFormat {
+public final class FormatoSimulacion {
 
-    private SimulacionFormat() {}
+    private FormatoSimulacion() {}
 
     public static String safe(String value) {
         return value != null ? value : "";
