@@ -1,4 +1,4 @@
-package com.tasfb2b.planificador.model.dataset;
+package com.tasfb2b.planificador.modelo.datos;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
