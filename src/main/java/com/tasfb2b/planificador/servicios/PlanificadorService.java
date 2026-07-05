@@ -665,7 +665,7 @@ public class PlanificadorService {
         GestorBacklog backlog = crearBacklogConPurga(enrutador);
         AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
         AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
-                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
+                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio, false);
         if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
         if (props.getScenario().isPrewarmSkeletons() && !plan.isEmpty()) {
@@ -891,7 +891,7 @@ public class PlanificadorService {
         String nivelAlertaPrevio = AlertaColapso.VERDE;
 
         AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
-                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio);
+                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio, false);
         if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
         for (ContextoTemporal ctx : plan) {
@@ -1083,7 +1083,7 @@ public class PlanificadorService {
 
         AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
                 solucionDummy, odStats, backlog, motorRes, seed,
-                props.getScenario().getTaSegundos() * 1000L, fechaInicio);
+                props.getScenario().getTaSegundos() * 1000L, fechaInicio, true);
         if (job != null) job.estadoInicial = construirEstadoInicial(auditWarmup.completos());
 
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
@@ -2261,7 +2261,8 @@ public class PlanificadorService {
                                                      Grafo graph, OperadorReparacionVoraz enrutador,
                                                      SolucionAlns solucionDummy, Map<String, int[]> odStats,
                                                      GestorBacklog backlog, String motorRes, long seed,
-                                                     long taFijoMs, LocalDateTime fechaInicio) {
+                                                     long taFijoMs, LocalDateTime fechaInicio,
+                                                     boolean cadenciaTaFija) {
         AcumuladorAuditoria auditWarmup = new AcumuladorAuditoria(true);
         if (warmupPlan == null || warmupPlan.isEmpty()) return auditWarmup;
 
@@ -2282,8 +2283,22 @@ public class PlanificadorService {
                 job.bloqueWarmup = wIdx;
                 if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
             }
-            log.info("Warm-up {}/{} [{}] | ventana {}→{} | Ta:{}ms | backlog:{}",
-                    wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin, ctx.taMs, backlog.tamaño());
+            log.info("Warm-up {}/{} [{}] | ventana {}→{} | Ta real:{}ms | backlog:{}",
+                    wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin, ctx.taRealMs, backlog.tamaño());
+            // Cadencia Ta fija (E3): cada bloque consume su Ta completo antes de avanzar,
+            // igual que una corrida desde el inicio del dataset, solo que sin publicar al front.
+            if (cadenciaTaFija && taFijoMs > 0) {
+                long restanteMs = taFijoMs - ctx.taRealMs;
+                if (restanteMs > 0) {
+                    try {
+                        Thread.sleep(restanteMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.warn("Warm-up interrumpido en bloque {}/{}", wIdx, warmupPlan.size());
+                        break;
+                    }
+                }
+            }
         }
         log.info("Warm-up completado en {} ms (backlog={}, pico={})",
                 System.currentTimeMillis() - inicioWarmupMs,

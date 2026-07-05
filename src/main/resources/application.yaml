@@ -55,7 +55,7 @@ planificador:
     umbral-colapso-backlog: 1000
     simular-tiempo-real-1: true            # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
     simular-tiempo-real-2: true           # El perfil smoke pondrá esto en false
-    simular-tiempo-real-3: true           # E3 corre a máxima velocidad hasta el colapso (sin sleep); Ta sigue siendo la cota por bloque
+    simular-tiempo-real-3: true           # E3 duerme (Sa·60 − Ta) entre bloques como E1/E2; su warm-up de fechaInicio va a cadencia Ta fija (sin Sa)
     prewarm-skeletons: true
 
   alns:
