@@ -2277,14 +2277,17 @@ public class PlanificadorService {
         for (ContextoTemporal ctx : warmupPlan) {
             wIdx++;
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
-            procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
                     auditWarmup, motorRes, rngBloque, taFijoMs, true, false);
+            // El warm-up NO persiste a BD: solo reconstruye el estado en memoria (ocupaciones,
+            // backlog) para que la simulación desde fechaInicio sea exacta. A BD va solo lo visible.
             if (job != null) {
                 job.bloqueWarmup = wIdx;
                 if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
             }
-            log.info("Warm-up {}/{} [{}] | ventana {}→{} | Ta real:{}ms | backlog:{}",
-                    wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin, ctx.taRealMs, backlog.tamaño());
+            log.info("Warm-up {}/{} [{}] | ventana {}→{} | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta real:{}ms | backlog:{}",
+                    wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin,
+                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taRealMs, backlog.tamaño());
             // Cadencia Ta fija (E3): cada bloque consume su Ta completo antes de avanzar,
             // igual que una corrida desde el inicio del dataset, solo que sin publicar al front.
             if (cadenciaTaFija && taFijoMs > 0) {
