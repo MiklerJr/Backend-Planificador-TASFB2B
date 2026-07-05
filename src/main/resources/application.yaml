@@ -1,13 +1,17 @@
 spring:
   datasource:
-    url: ${DB_URL:jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b}
-    username: ${DB_USER:postgres}
-    password: ${DB_PASSWORD:Furiousandfast.8}
+    url: jdbc:postgresql://127.0.0.1:5433/Tasf_b2b
+    username: postgres
+    password: Furiousandfast.8
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
   servlet:
     multipart:
       max-file-size: 512MB
