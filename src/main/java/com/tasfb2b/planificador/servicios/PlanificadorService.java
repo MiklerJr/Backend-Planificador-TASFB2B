@@ -2270,7 +2270,6 @@ public class PlanificadorService {
             job.totalBloquesWarmup = warmupPlan.size();
             job.bloqueWarmup = 0;
         }
-        int intervaloWarmup = Math.max(1, warmupPlan.size() / 10);
         long inicioWarmupMs = System.currentTimeMillis();
         log.info("Warm-up iniciado: {} bloques hasta fechaInicio={}", warmupPlan.size(), fechaInicio);
         int wIdx = 0;
@@ -2283,11 +2282,8 @@ public class PlanificadorService {
                 job.bloqueWarmup = wIdx;
                 if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
             }
-            if (wIdx % intervaloWarmup == 0 || wIdx == warmupPlan.size()) {
-                log.info("Warm-up ({}): {}% — {}/{} | backlog actual={}",
-                        motorRes, (int) Math.round(wIdx * 100.0 / warmupPlan.size()),
-                        wIdx, warmupPlan.size(), backlog.tamaño());
-            }
+            log.info("Warm-up {}/{} [{}] | ventana {}→{} | Ta:{}ms | backlog:{}",
+                    wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin, ctx.taMs, backlog.tamaño());
         }
         log.info("Warm-up completado en {} ms (backlog={}, pico={})",
                 System.currentTimeMillis() - inicioWarmupMs,
