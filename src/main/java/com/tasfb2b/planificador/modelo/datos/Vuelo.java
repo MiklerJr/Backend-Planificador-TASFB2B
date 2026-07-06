@@ -31,6 +31,9 @@ public class Vuelo {
     @Column(name = "capacidad_maxima")
     private Integer capacidad;
 
+    @Column(name = "capacidad_maxima_original")
+    private Integer capacidadOriginal;
+
     @Transient
     private Integer id;
 

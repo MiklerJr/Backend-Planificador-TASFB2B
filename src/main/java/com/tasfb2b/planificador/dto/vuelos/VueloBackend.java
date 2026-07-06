@@ -10,5 +10,6 @@ public class VueloBackend {
     private String fechaSalida;
     private String fechaLlegada;
     private int capacidadMaxima;
+    private int capacidadMaximaOriginal;
     private int cargaAsignada;
 }

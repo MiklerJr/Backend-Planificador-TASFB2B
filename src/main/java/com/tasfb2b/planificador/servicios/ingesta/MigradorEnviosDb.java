@@ -27,11 +27,11 @@ public class MigradorEnviosDb {
             "INSERT INTO ENVIO (id_envio, icao_origen, icao_destino, cantidad_maletas, id_cliente, fecha_hora_registro) "
           + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id_envio) DO NOTHING";
     private static final String SQL_VUELO =
-            "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima) "
-          + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
+            "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima, capacidad_maxima_original) "
+          + "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
     private static final String SQL_AEROPUERTO =
-            "INSERT INTO AEROPUERTO (icao, ciudad, pais, codigo_region, huso_horario, capacidad_almacen, latitud, longitud, activo) "
-          + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (icao) DO NOTHING";
+            "INSERT INTO AEROPUERTO (icao, ciudad, pais, codigo_region, huso_horario, capacidad_almacen, capacidad_almacen_original, latitud, longitud, activo) "
+          + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (icao) DO NOTHING";
 
     private static final int LOTE_ENVIOS = 10_000;
     private static final int LOTE_VUELOS = 500;
@@ -46,7 +46,7 @@ public class MigradorEnviosDb {
         List<Object[]> lote = new ArrayList<>(aeropuertos.size());
         for (Aeropuerto a : aeropuertos) {
             lote.add(new Object[]{ a.getCodigo(), a.getCiudad(), a.getPais(), a.getAbreviatura(),
-                    a.getOffsetHorario(), a.getCapacidad(), a.getLatitud(), a.getLongitud(), a.isActivo() });
+                    a.getOffsetHorario(), a.getCapacidad(), a.getCapacidad(), a.getLatitud(), a.getLongitud(), a.isActivo() });
         }
         jdbcTemplate.batchUpdate(SQL_AEROPUERTO, lote);
         return lote.size();
@@ -78,7 +78,7 @@ public class MigradorEnviosDb {
             int capacidad = (parts.length >= 5 && parts[4].matches("\\d+")) ? Integer.parseInt(parts[4]) : 0;
             String idVuelo = origen + "-" + destino + "-" + hSalida.replace(":", "");
 
-            lote.add(new Object[]{ idVuelo, origen, destino, hSalida, hLlegada, capacidad });
+            lote.add(new Object[]{ idVuelo, origen, destino, hSalida, hLlegada, capacidad, capacidad });
             if (lote.size() >= LOTE_VUELOS) {
                 jdbcTemplate.batchUpdate(SQL_VUELO, lote);
                 total += lote.size();

@@ -46,7 +46,7 @@ public class CargadorDatos {
         log.info("=================================================");
         log.info("INICIANDO DESCARGA DESDE LA NUBE (100% POSTGRESQL)");
 
-        String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, latitud, longitud FROM AEROPUERTO ORDER BY icao";
+        String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, capacidad_almacen_original, latitud, longitud FROM AEROPUERTO ORDER BY icao";
         aeropuertos = jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
             Aeropuerto a = new Aeropuerto();
             a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
@@ -54,6 +54,11 @@ public class CargadorDatos {
             a.setCiudad(rs.getString("ciudad"));
             a.setOffsetHorario(rs.getInt("huso_horario"));
             a.setCapacidad(rs.getInt("capacidad_almacen"));
+            
+            int capOriginal = rs.getInt("capacidad_almacen_original");
+            if (rs.wasNull()) capOriginal = a.getCapacidad(); // fallback
+            a.setCapacidadOriginal(capOriginal);
+            
             a.setLatitud(rs.getDouble("latitud"));
             a.setLongitud(rs.getDouble("longitud"));
             a.setContinente(continentePorIcao(codigo));
@@ -64,7 +69,7 @@ public class CargadorDatos {
         aeropuertoMapCache = aeropuertos.stream()
                 .collect(Collectors.toMap(Aeropuerto::getCodigo, a -> a));
 
-        String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima FROM VUELO ORDER BY id_vuelo";
+        String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima, capacidad_maxima_original FROM VUELO ORDER BY id_vuelo";
         List<Vuelo> vuelosCargados = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
             Vuelo v = new Vuelo();
 
@@ -85,6 +90,11 @@ public class CargadorDatos {
             LocalDateTime fechaLlegada = fechaLlegadaLocal(fechaSalida, horaLlegada, origen, destino);
 
             v.setCapacidad(rs.getInt("capacidad_maxima"));
+            
+            int capOriginal = rs.getInt("capacidad_maxima_original");
+            if (rs.wasNull()) capOriginal = v.getCapacidad(); // fallback
+            v.setCapacidadOriginal(capOriginal);
+            
             v.setOrigen(origenCodigo);
             v.setDestino(destinoCodigo);
             v.setFechaHoraSalida(fechaSalida);
@@ -289,6 +299,20 @@ public class CargadorDatos {
 
     public Aeropuerto getAeropuerto(String icao) {
         return icao == null ? null : aeropuertoMapCache.get(icao);
+    }
+
+    public void actualizarCapacidadAeropuerto(String icao, int nuevaCapacidad) {
+        Aeropuerto a = aeropuertoMapCache.get(icao);
+        if (a != null) {
+            a.setCapacidad(nuevaCapacidad);
+        }
+    }
+
+    public void actualizarCapacidadVuelo(String idVuelo, int nuevaCapacidad) {
+        vuelos.stream()
+              .filter(v -> v.getIdVuelo().equals(idVuelo))
+              .findFirst()
+              .ifPresent(v -> v.setCapacidad(nuevaCapacidad));
     }
 
     private static LocalDateTime fechaLlegadaLocal(LocalDateTime fechaSalida,

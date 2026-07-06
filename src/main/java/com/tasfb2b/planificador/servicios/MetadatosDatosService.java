@@ -44,6 +44,7 @@ public class MetadatosDatosService {
             dto.setLatitud(a.getLatitud() != null ? a.getLatitud() : 0.0);
             dto.setLongitud(a.getLongitud() != null ? a.getLongitud() : 0.0);
             dto.setCapacidadAlmacen(a.getCapacidad());
+            dto.setCapacidadAlmacenOriginal(a.getCapacidadOriginal() != null ? a.getCapacidadOriginal() : a.getCapacidad());
             dto.setGmt(a.getOffsetHorario() != null ? a.getOffsetHorario().doubleValue() : 0.0);
             info.put(a.getCodigo(), dto);
         }
@@ -61,6 +62,7 @@ public class MetadatosDatosService {
             vb.setFechaSalida(v.getFechaHoraSalida() != null ? v.getFechaHoraSalida().toString() : null);
             vb.setFechaLlegada(v.getFechaHoraLlegada() != null ? v.getFechaHoraLlegada().toString() : null);
             vb.setCapacidadMaxima(v.getCapacidad() != null ? v.getCapacidad() : 0);
+            vb.setCapacidadMaximaOriginal(v.getCapacidadOriginal() != null ? v.getCapacidadOriginal() : vb.getCapacidadMaxima());
             vb.setCargaAsignada(0);
             out.add(vb);
         }

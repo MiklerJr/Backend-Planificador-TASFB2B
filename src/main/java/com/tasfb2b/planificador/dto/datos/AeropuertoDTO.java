@@ -8,5 +8,6 @@ public class AeropuertoDTO {
     private double latitud;
     private double longitud;
     private Integer capacidadAlmacen;
+    private Integer capacidadAlmacenOriginal;
     private Double gmt;
 }

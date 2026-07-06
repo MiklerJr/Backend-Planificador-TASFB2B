@@ -35,6 +35,9 @@ public class Aeropuerto {
     @Column(name = "capacidad_almacen")
     private Integer capacidad;
 
+    @Column(name = "capacidad_almacen_original")
+    private Integer capacidadOriginal;
+
     @Column(name = "latitud")
     private Double latitud;
 

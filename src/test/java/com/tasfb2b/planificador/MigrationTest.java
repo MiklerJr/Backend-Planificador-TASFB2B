@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador;
 
-import com.tasfb2b.planificador.model.Aeropuerto;
-import com.tasfb2b.planificador.services.MigradorEnviosDb;
-import com.tasfb2b.planificador.util.AeropuertoParser;
+import com.tasfb2b.planificador.modelo.datos.Aeropuerto;
+import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
+import com.tasfb2b.planificador.utilidades.analizador.AnalizadorAeropuertos;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,7 +19,7 @@ public class MigrationTest {
     private MigradorEnviosDb migrador;
 
     @Autowired
-    private AeropuertoParser aeropuertoParser;
+    private AnalizadorAeropuertos analizadorAeropuertos;
 
     @Test
     @Sql(scripts = "/schema.sql")
@@ -27,7 +27,7 @@ public class MigrationTest {
         System.out.println("Iniciando migracion...");
         
         Path aeroFile = Paths.get("src/main/resources/data/c.1inf54.26.1.v1.Aeropuerto.husos.v1.20250818__estudiantes.txt");
-        List<Aeropuerto> aeropuertos = aeropuertoParser.parse(aeroFile);
+        List<Aeropuerto> aeropuertos = analizadorAeropuertos.parse(aeroFile);
         migrador.insertarAeropuertos(aeropuertos);
         System.out.println("Aeropuertos insertados: " + aeropuertos.size());
 

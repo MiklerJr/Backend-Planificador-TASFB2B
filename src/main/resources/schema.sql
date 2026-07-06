@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS aeropuerto (
     codigo_region     VARCHAR,                                -- el back la usa como "abreviatura"
     huso_horario      INTEGER,                                -- GMT offset (p. ej. -5, 0, +8)
     capacidad_almacen INTEGER,                                -- maletas concurrentes en almacén
+    capacidad_almacen_original INTEGER,                       -- valor original de capacidad_almacen
     latitud           DOUBLE PRECISION,
     longitud          DOUBLE PRECISION,
     activo            BOOLEAN          NOT NULL DEFAULT TRUE,
@@ -26,7 +27,8 @@ CREATE TABLE IF NOT EXISTS vuelo (
     icao_destino     VARCHAR  REFERENCES aeropuerto(icao),
     hora_salida      VARCHAR,                                 -- hora LOCAL del origen, "HH:MM"
     hora_llegada     VARCHAR,                                 -- hora LOCAL del destino, "HH:MM"
-    capacidad_maxima INTEGER
+    capacidad_maxima INTEGER,
+    capacidad_maxima_original INTEGER
 );
 
 -- ── envio ────────────────────────────────────────────────────────────────────────────
@@ -150,3 +152,7 @@ CREATE TABLE IF NOT EXISTS tramo_inyectado (
     hora_llegada_utc TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS ix_tramo_iny_id_ruta ON tramo_inyectado (id_ruta_iny);
+
+-- Migraciones adicionales (ejecutadas automáticamente)
+ALTER TABLE aeropuerto ADD COLUMN IF NOT EXISTS capacidad_almacen_original INTEGER;
+ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS capacidad_maxima_original INTEGER;
