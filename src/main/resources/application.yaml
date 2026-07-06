@@ -1,13 +1,13 @@
 spring:
   datasource:
     # BD de PRODUCCIÓN (VM, túnel local en el puerto 5433). Activa por defecto.
-    url: jdbc:postgresql://127.0.0.1:5433/Tasf_b2b
-    username: postgres
-    password: Furiousandfast.8
-    # BD de PRUEBAS (AWS RDS): descomentar este bloque (y comentar el de arriba) para apuntar a pruebas.
-#    url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b
+#    url: jdbc:postgresql://127.0.0.1:5433/Tasf_b2b
 #    username: postgres
 #    password: Furiousandfast.8
+    # BD de PRUEBAS (AWS RDS): descomentar este bloque (y comentar el de arriba) para apuntar a pruebas.
+    url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b
+    username: postgres
+    password: Furiousandfast.8
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:

@@ -417,8 +417,13 @@ recibido y volver a pedir con `desde = total`.
 ### `GET /jobs/{jobId}/alerta-colapso`
 Alerta de colapso **inminente** (pre-colapso). Siempre responde (VERDE si no hay riesgo). Ver §7.
 
-### `GET /jobs/{jobId}/resultado`
+### `GET /jobs/{jobId}/resultado?incluirVuelosPlaneados=true`
 `SimulacionResponse` final. `204` si el job sigue ejecutando.
+> **`incluirVuelosPlaneados`** (opcional, default `true`): con `false`, la respuesta omite la lista
+> `vuelosPlaneados` (llega como `null`). Esa lista es grande (miles de `VueloBackend`) y lenta de
+> serializar; pedir el resultado sin ella devuelve un payload mucho menor y más rápido cuando el
+> cliente no necesita los vuelos planeados (p. ej. solo quiere `metricas`). Sin el parámetro, el
+> comportamiento es idéntico al de antes.
 
 ### `GET /jobs/{jobId}/dashboard`
 Read-model agregado para panel: incluye `metricas` (ver §6), `tasas`, `ultimoBloque`, progreso, etc.

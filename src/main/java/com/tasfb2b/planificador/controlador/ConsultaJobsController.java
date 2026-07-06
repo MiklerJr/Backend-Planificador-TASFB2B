@@ -164,10 +164,32 @@ public class ConsultaJobsController {
     }
 
     @GetMapping("/jobs/{jobId}/resultado")
-    public ResponseEntity<SimulacionResponse> resultadoJob(@PathVariable String jobId) {
+    public ResponseEntity<SimulacionResponse> resultadoJob(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "true") boolean incluirVuelosPlaneados) {
         EstadoJob job = service.getJob(jobId);
         if (job == null)             return ResponseEntity.notFound().build();
         if (job.resultado == null)   return ResponseEntity.noContent().build(); // 204 = aún ejecutando
-        return ResponseEntity.ok(job.resultado);
+        // La lista vuelosPlaneados es grande (~miles de VueloBackend) y lenta de serializar; el
+        // cliente que no la necesita puede pedir el resultado sin ella (payload chico, menos abortos).
+        SimulacionResponse body = incluirVuelosPlaneados
+                ? job.resultado
+                : sinVuelosPlaneados(job.resultado);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Copia superficial de {@link SimulacionResponse} sin {@code vuelosPlaneados}. No se muta la
+     * instancia compartida cacheada en el {@code EstadoJob} (la sirven varios clientes).
+     */
+    private static SimulacionResponse sinVuelosPlaneados(SimulacionResponse full) {
+        SimulacionResponse copia = new SimulacionResponse();
+        copia.setMetricas(full.getMetricas());
+        copia.setTotalBloques(full.getTotalBloques());
+        copia.setAeropuertosInfo(full.getAeropuertosInfo());
+        copia.setK(full.getK());
+        copia.setSaMinutos(full.getSaMinutos());
+        // vuelosPlaneados queda null a propósito (el cliente lo omitió).
+        return copia;
     }
 }

@@ -1,17 +1,29 @@
 package com.tasfb2b.planificador.controlador;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.comun.ErrorResponse;
 import com.tasfb2b.planificador.excepcion.ManejadorExcepcionesGlobal;
 import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
 import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
+import org.apache.catalina.connector.ClientAbortException;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotWritableException;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+
+import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -72,6 +84,74 @@ class ManejadorExcepcionesGlobalTest {
         ErrorResponse body = resp.getBody();
         assertEquals(404, body.getEstado());
         assertEquals("Recurso no encontrado", body.getError());
+    }
+
+    @Test
+    void desconexionDelClienteEnResultadoNoSeLogueaComoError() {
+        // Cadena real del stack trace de /resultado cuando el navegador cierra la descarga en curso:
+        // HttpMessageNotWritableException → AsyncRequestNotUsableException → ClientAbortException → IOException.
+        HttpMessageNotWritableException ex = new HttpMessageNotWritableException(
+                "Could not write JSON",
+                new AsyncRequestNotUsableException("ServletOutputStream failed to write",
+                        new ClientAbortException(new IOException("Connection reset by peer"))));
+
+        ListAppender<ILoggingEvent> appender = adjuntarAppender();
+        try {
+            MockHttpServletRequest request =
+                    new MockHttpServletRequest("GET", "/api/planificador/jobs/JOB-1/resultado");
+
+            ResponseEntity<ErrorResponse> resp = handler.manejarEscrituraRespuesta(ex, request);
+
+            // No se reintenta escribir la respuesta ya comprometida: retorno null (no-op para Spring).
+            assertNull(resp);
+            // El evento benigno NO produce un log de nivel ERROR (a lo sumo un WARN de una línea).
+            assertFalse(hayEventoDeNivel(appender, Level.ERROR),
+                    "una desconexión del cliente no debe loguearse como ERROR");
+        } finally {
+            desadjuntarAppender(appender);
+        }
+    }
+
+    @Test
+    void errorRealDeSerializacionSigueSiendo500() {
+        // Canario anti over-swallow: un HttpMessageNotWritableException que NO es desconexión
+        // (bug de serialización genuino) mantiene el tratamiento de siempre: 500 + ERROR.
+        HttpMessageNotWritableException ex = new HttpMessageNotWritableException(
+                "No serializer found for class …", new RuntimeException("boom"));
+
+        ListAppender<ILoggingEvent> appender = adjuntarAppender();
+        try {
+            MockHttpServletRequest request =
+                    new MockHttpServletRequest("GET", "/api/planificador/jobs/JOB-1/resultado");
+
+            ResponseEntity<ErrorResponse> resp = handler.manejarEscrituraRespuesta(ex, request);
+
+            assertEquals(500, resp.getStatusCode().value());
+            assertEquals("Error interno del servidor", resp.getBody().getError());
+            assertTrue(hayEventoDeNivel(appender, Level.ERROR),
+                    "un error de serialización real sí debe loguearse como ERROR");
+        } finally {
+            desadjuntarAppender(appender);
+        }
+    }
+
+    // --------------------------------------------------------------------- helpers de logging
+
+    private static ListAppender<ILoggingEvent> adjuntarAppender() {
+        Logger logger = (Logger) LoggerFactory.getLogger(ManejadorExcepcionesGlobal.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private static void desadjuntarAppender(ListAppender<ILoggingEvent> appender) {
+        Logger logger = (Logger) LoggerFactory.getLogger(ManejadorExcepcionesGlobal.class);
+        logger.detachAppender(appender);
+    }
+
+    private static boolean hayEventoDeNivel(ListAppender<ILoggingEvent> appender, Level nivel) {
+        return appender.list.stream().anyMatch(e -> e.getLevel() == nivel);
     }
 
     @Test
