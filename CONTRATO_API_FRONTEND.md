@@ -111,8 +111,13 @@ Metadatos del dataset. Útil para validar `fechaInicio` antes de lanzar.
 ### `GET /aeropuertos`
 Mapa estático `{ [codigo]: AeropuertoDTO }` (cacheable, `max-age=3600`). Para dibujar el mapa.
 ```json
-{ "SKBO": { "codigo": "SKBO", "latitud": 4.70, "longitud": -74.14, "capacidadAlmacen": 430, "gmt": -5.0 } }
+{ "SKBO": { "codigo": "SKBO", "latitud": 4.70, "longitud": -74.14,
+            "capacidadAlmacen": 1500, "capacidadAlmacenOriginal": 1000, "gmt": -5.0 } }
 ```
+> **`capacidadAlmacen`** es la capacidad ACTUAL (puede haber sido modificada por el operador vía
+> `PUT /configuracion/aeropuertos/{icao}/capacidad`); **`capacidadAlmacenOriginal`** es el valor
+> original de fábrica. Cada corrida resetea la actual al original al arrancar (las modificaciones son
+> **por corrida**). Ver §Configuración de capacidades.
 > **`gmt`** (number, con signo, en horas) es el offset horario respecto a UTC: el **mismo** valor que
 > el backend usa para normalizar a UTC. El front lo usa tanto para mostrar el reloj local del
 > registrador como para convertir local→UTC, de modo que front y back comparten un único huso (con
@@ -131,8 +136,41 @@ en los tramos UTC de cada bloque, y la carga real por vuelo en `cargasVuelos` / 
 ```json
 [ { "id": "SKBO-SEQM-08:30", "origen": "SKBO", "destino": "SEQM",
     "fechaSalida": "2026-01-01T08:30", "fechaLlegada": "2026-01-01T10:15",
-    "capacidadMaxima": 300, "cargaAsignada": 0 } ]
+    "capacidadMaxima": 450, "capacidadMaximaOriginal": 300, "cargaAsignada": 0 } ]
 ```
+> **`capacidadMaxima`** es la capacidad ACTUAL (modificable vía
+> `PUT /configuracion/vuelos/{idVuelo}/capacidad`); **`capacidadMaximaOriginal`** es el valor
+> original del TXT (destino del botón restaurar). Ver §Configuración de capacidades.
+
+### Configuración de capacidades (edición en frío / en caliente + restaurar)
+Endpoints para que el operador ajuste capacidades de aeropuertos y vuelos. Hay **tres niveles** de
+valor: *original de fábrica* (el del TXT, intocable), *baseline en frío* (lo configurado, persiste) y
+*override en caliente* (efímero, solo el run en curso).
+
+El **modo se decide automáticamente** según si hay una simulación corriendo (el front NO envía ningún
+parámetro extra):
+
+- **Sin job en curso ⇒ EN FRÍO**: el cambio persiste (BD + memoria). El próximo job arranca con ese valor.
+- **Con job en curso ⇒ EN CALIENTE**: el cambio afecta solo a esa corrida (los bloques siguientes) y se
+  descarta al iniciar el próximo job, que vuelve al baseline en frío.
+
+| Método | Ruta | Query | Éxito | Errores |
+|---|---|---|---|---|
+| PUT | `/configuracion/aeropuertos/{icao}/capacidad` | `valor` (int ≥ 1) | `200` (sin cuerpo) | `400` valor<1, `404` icao inexistente |
+| PUT | `/configuracion/vuelos/{idVuelo}/capacidad` | `valor` (int ≥ 1) | `200` (sin cuerpo) | `400` valor<1, `404` id inexistente |
+| POST | `/configuracion/capacidades/restaurar` | — | `200` (sin cuerpo) | — |
+
+> **Botón restaurar** (`POST /configuracion/capacidades/restaurar`): devuelve TODAS las capacidades
+> (aeropuertos y vuelos) a su valor original de fábrica en BD + memoria, con efecto inmediato en el job
+> en curso si lo hay. Es el modo de deshacer tanto lo frío como lo caliente.
+>
+> `idVuelo` puede llegar con o sin los dos puntos de la hora (`SKBO-SEQM-08:30` o `SKBO-SEQM-0830`);
+> el backend normaliza. Ejemplo: `PUT /configuracion/aeropuertos/SKBO/capacidad?valor=1500`.
+>
+> ⚠ **Colapso por sobre-suscripción**: si reduces una capacidad por debajo de la ocupación concurrente
+> actual (p. ej. un almacén al 130% de la nueva capacidad), el detector de colapso de almacén se dispara
+> y **detiene la corrida** en el siguiente bloque (`utilización > 100%`). Es el comportamiento esperado.
+> Además, la utilización reportada puede exceder el 100% mientras dura la sobrecarga: el front debe tolerarlo.
 
 ### `GET /escenarios`
 Catálogo con defaults (Sa, Ta, K por escenario), motores soportados y endpoints de cada escenario.
@@ -737,7 +775,9 @@ bloqueIdx : int                      // = BloqueSimulacion.bloqueIdx
 
 ### `AeropuertoDTO`
 ```
-codigo : string, latitud, longitud : double, capacidadAlmacen : int (maletas)
+codigo : string, latitud, longitud : double
+capacidadAlmacen : int (maletas, ACTUAL) , capacidadAlmacenOriginal : int (valor de fábrica)
+gmt : number (offset horario)
 ```
 
 ### `VueloBackend` (`vuelosPlaneados` del resultado final y respuesta de `GET /vuelos`)
@@ -745,7 +785,8 @@ codigo : string, latitud, longitud : double, capacidadAlmacen : int (maletas)
 id : string                        // id de BD del vuelo — el MISMO que TramoRuta.vueloId
 origen, destino : string (ICAO)
 fechaSalida, fechaLlegada : string (ISO sin offset) // hora LOCAL de cada aeropuerto
-capacidadMaxima : int, cargaAsignada : int (siempre 0 aquí)
+capacidadMaxima : int (ACTUAL), capacidadMaximaOriginal : int (valor del TXT)
+cargaAsignada : int (siempre 0 aquí)
 ```
 > Es la **malla estática** de la red (TODOS los vuelos del dataset, desplazados al día de la
 > simulación): sirve para pintar las rutas posibles del mapa. Sus horas están en la **hora local

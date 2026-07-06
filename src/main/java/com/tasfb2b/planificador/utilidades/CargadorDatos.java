@@ -89,12 +89,13 @@ public class CargadorDatos {
             LocalDateTime fechaSalida = LocalDateTime.of(AnalizadorVuelos.FLIGHT_BASE_DATE, horaSalida);
             LocalDateTime fechaLlegada = fechaLlegadaLocal(fechaSalida, horaLlegada, origen, destino);
 
+            v.setIdVuelo(rs.getString("id_vuelo"));
             v.setCapacidad(rs.getInt("capacidad_maxima"));
-            
+
             int capOriginal = rs.getInt("capacidad_maxima_original");
             if (rs.wasNull()) capOriginal = v.getCapacidad(); // fallback
             v.setCapacidadOriginal(capOriginal);
-            
+
             v.setOrigen(origenCodigo);
             v.setDestino(destinoCodigo);
             v.setFechaHoraSalida(fechaSalida);
@@ -299,20 +300,6 @@ public class CargadorDatos {
 
     public Aeropuerto getAeropuerto(String icao) {
         return icao == null ? null : aeropuertoMapCache.get(icao);
-    }
-
-    public void actualizarCapacidadAeropuerto(String icao, int nuevaCapacidad) {
-        Aeropuerto a = aeropuertoMapCache.get(icao);
-        if (a != null) {
-            a.setCapacidad(nuevaCapacidad);
-        }
-    }
-
-    public void actualizarCapacidadVuelo(String idVuelo, int nuevaCapacidad) {
-        vuelos.stream()
-              .filter(v -> v.getIdVuelo().equals(idVuelo))
-              .findFirst()
-              .ifPresent(v -> v.setCapacidad(nuevaCapacidad));
     }
 
     private static LocalDateTime fechaLlegadaLocal(LocalDateTime fechaSalida,

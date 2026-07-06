@@ -42,12 +42,19 @@ public class AlmacenCacheEsqueletos {
     private final MotorGrafoCache motorCache;
     private final String archivo;   // vacío ⇒ persistencia desactivada (no-op)
 
+    // Escala mínima y recojo en destino (min): entran en la huella para que cambiarlos invalide la caché
+    // persistida (los esqueletos son topológicos, pero su factibilidad SLA depende de estos tiempos).
+    private int tiempoMinEscala = 10;
+    private int tiempoRecojoDestino = 15;
+
     private int clavesUltimoGuardado = 0;
 
     @Autowired
     public AlmacenCacheEsqueletos(CargadorDatos cargadorDatos, MotorGrafoCache motorCache,
                               PlanificadorProperties props) {
         this(cargadorDatos, motorCache, props.getCache().getSkeletonFile());
+        this.tiempoMinEscala = props.getOperativo().getTiempoMinEscalaMinutos();
+        this.tiempoRecojoDestino = props.getOperativo().getTiempoRecojoDestinoMinutos();
     }
 
     AlmacenCacheEsqueletos(CargadorDatos cargadorDatos, MotorGrafoCache motorCache, String archivo) {
@@ -107,10 +114,16 @@ public class AlmacenCacheEsqueletos {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 no disponible", ex);   // imposible en un JRE estándar
         }
+        // La escala mínima SÍ entra (cambia la factibilidad de los esqueletos). Las capacidades NO:
+        // los esqueletos son topológicos (índices de aristas; la capacidad se valida en runtime contra la
+        // ocupación) y son mutables por corrida (ConfiguracionCapacidadesService) — incluirlas invalidaría
+        // la caché tras cada PUT/reset.
+        md.update(("escala|" + tiempoMinEscala + "|recojo|" + tiempoRecojoDestino + "\n")
+                .getBytes(StandardCharsets.UTF_8));
         List<Aeropuerto> aeropuertos = cargadorDatos != null ? cargadorDatos.getAeropuertos() : null;
         if (aeropuertos != null) {
             for (Aeropuerto a : aeropuertos) {
-                md.update((a.getCodigo() + "|" + a.getOffsetHorario() + "|" + a.getCapacidad() + "\n")
+                md.update((a.getCodigo() + "|" + a.getOffsetHorario() + "\n")
                         .getBytes(StandardCharsets.UTF_8));
             }
         }
@@ -118,7 +131,7 @@ public class AlmacenCacheEsqueletos {
         if (vuelos != null) {
             for (Vuelo v : vuelos) {
                 md.update((v.getOrigen() + "|" + v.getDestino() + "|" + v.getFechaHoraSalida() + "|"
-                        + v.getFechaHoraLlegada() + "|" + v.getCapacidad() + "\n")
+                        + v.getFechaHoraLlegada() + "\n")
                         .getBytes(StandardCharsets.UTF_8));
             }
         }

@@ -13,8 +13,12 @@ import java.util.function.BooleanSupplier;
 @Slf4j
 public class OperadorReparacionVoraz implements OperadorReparacion {
 
-    private static final long CONEXION_MIN   = 10L;
-    private static final long ALMACEN_DEST_MIN = 10L;
+    // Escala mínima (permanencia mín. en un aeropuerto entre vuelos), en minutos. Configurable por yaml
+    // (planificador.operativo.tiempo-min-escala-minutos) vía configurarTiempoMinEscala; default 10.
+    private long conexionMin = 10L;
+    // Tiempo de espera en el destino final hasta el recojo (min). Configurable por yaml
+    // (planificador.operativo.tiempo-recojo-destino-minutos) vía configurarTiempoRecojoDestino; default 15.
+    private long tiempoRecojoDestino = 15L;
     public static final long SLOT_ALMACEN_MIN = 60L;
     private static final long HORIZONTE_MAX_MIN  = 3 * 24 * 60L;
     private static final long MIN_DIA          = CodificadorClaveVuelo.MIN_DIA;
@@ -94,6 +98,16 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     public void configurarStorageAware(double umbralHubPico, double precioHubExponente) {
         if (umbralHubPico > 0.0) this.umbralHubPico = umbralHubPico;
         if (precioHubExponente > 0.0) this.precioHubExponente = precioHubExponente;
+    }
+
+    /** Escala mínima (permanencia mín. en aeropuerto entre vuelos), en minutos. Se aplica en el ruteo. */
+    public void configurarTiempoMinEscala(long minutos) {
+        if (minutos >= 0) this.conexionMin = minutos;
+    }
+
+    /** Tiempo de espera en el destino final hasta el recojo (min). Cuenta para SLA y ocupación destino. */
+    public void configurarTiempoRecojoDestino(long minutos) {
+        if (minutos >= 0) this.tiempoRecojoDestino = minutos;
     }
 
     private void marcarHubs(Set<String> codigos) {
@@ -181,7 +195,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         while (!pq.isEmpty()) {
             EstadoRuta current = pq.poll();
             if (current.nodeIdx == targetIdx) {
-                long transitMinutes = (current.arrivalMin + ALMACEN_DEST_MIN) - readyMin;
+                long transitMinutes = (current.arrivalMin + tiempoRecojoDestino) - readyMin;
                 if (transitMinutes > slaMaxMinutes) return null;   // la mejor llegada ya es tardÃ­a
                 int[] sk = new int[current.legs];
                 int i = current.legs - 1;
@@ -193,7 +207,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 int nextIdx = (flight.destino == null) ? -1 : flight.destino.indice;
                 if (nextIdx < 0) continue;
                 if (nextIdx != targetIdx && esHub(nextIdx)) continue;   // no transitar por hubs
-                long minWait  = (current.edge == null) ? 0L : CONEXION_MIN;
+                long minWait  = (current.edge == null) ? 0L : conexionMin;
                 long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, current.arrivalMin + minWait);
                 long actualArr = actualDep + flight.duracionMinutos;
                 long dayOffset = actualArr / MIN_DIA - readyDay;
@@ -272,7 +286,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, deps.get(i + 1),
                         -batch.getCantidad());
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
-                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + tiempoRecojoDestino,
                         -batch.getCantidad());
             }
         }
@@ -418,7 +432,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, deps.get(i + 1),
                         -batch.getCantidad());
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
-                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, arrMin + tiempoRecojoDestino,
                         -batch.getCantidad());
             }
         }
@@ -451,7 +465,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, deps.get(i + 1),
                         -batch.getCantidad());
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
-                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, arrMin + tiempoRecojoDestino,
                         -batch.getCantidad());
             }
         }
@@ -460,7 +474,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     public boolean cumpleSlaDesdeOrigen(RutaCandidata sufijo, LoteEnvio original) {
         if (sufijo == null || original == null) return false;
         long deadlineMin = aMinutoEpoch(original.getTiempoListo()) + (long) original.getHorasLimiteSla() * 60L;
-        return (sufijo.getLlegadaMin() + ALMACEN_DEST_MIN) <= deadlineMin;
+        return (sufijo.getLlegadaMin() + tiempoRecojoDestino) <= deadlineMin;
     }
 
     // -----------------------------------------------------------------------
@@ -523,12 +537,12 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                         && !cabeEstadiasRuta(edges, deps, batch.getCantidad(), blockAirport)) {
                     continue;
                 }
-                long transitMinutes = (current.arrivalMin + ALMACEN_DEST_MIN) - readyMin;
+                long transitMinutes = (current.arrivalMin + tiempoRecojoDestino) - readyMin;
                 return new ResultadoRuta(edges, deps, transitMinutes <= slaMaxMinutes);
             }
 
             for (Arista flight : adyacenciaPorIndice[current.nodeIdx]) {
-                long minWait  = (current.edge == null) ? 0L : CONEXION_MIN;
+                long minWait  = (current.edge == null) ? 0L : conexionMin;
                 long earliest = current.arrivalMin + minWait;
 
                 long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, earliest);
@@ -651,7 +665,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 int nextIdx = flight.destino.indice;
                 if (contieneNodo(current, nextIdx)) continue;
 
-                long minWait = (current.edge == null) ? 0L : CONEXION_MIN;
+                long minWait = (current.edge == null) ? 0L : conexionMin;
                 long earliest = current.arrivalMin + minWait;
                 long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, earliest);
                 long actualArr = actualDep + flight.duracionMinutos;
@@ -660,7 +674,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 if (dayOffset < 0 || dayOffset >= SLOTS_DIA) continue;
                 if (actualArr - readyMin > HORIZONTE_MAX_MIN) continue;
                 if (candidatosOnTime >= maxCandidatos
-                        && (actualArr + ALMACEN_DEST_MIN) - readyMin > slaMaxMinutes) {
+                        && (actualArr + tiempoRecojoDestino) - readyMin > slaMaxMinutes) {
                     continue;
                 }
                 // Primer vuelo viable solo si la espera en almacÃ©n de origen cabe.
@@ -769,8 +783,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 long salida = result.salidasReales.get(i + 1);   // hasta que sale el siguiente vuelo
                 cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, salida, batch.getCantidad());
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
-                // Destino final: la maleta se retira ~ALMACEN_DEST_MIN tras aterrizar (1 slot).
-                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN,
+                // Destino final: la maleta se retira ~tiempoRecojoDestino tras aterrizar (1 slot).
+                cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + tiempoRecojoDestino,
                         batch.getCantidad());
             }
         }
@@ -861,7 +875,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             boolean finalLeg = i == ruta.size() - 1;
             if (finalLeg && !Objects.equals(batch.getCodigoDestino(), edge.destino.codigo)) return null;
 
-            long minDeparture = (i == 0) ? earliest : earliest + CONEXION_MIN;
+            long minDeparture = (i == 0) ? earliest : earliest + conexionMin;
             long depMin = proximaSalidaMin(edge.minutoDelDiaSalida, minDeparture);
             long arrMin = depMin + edge.duracionMinutos;
             boolean found = false;
@@ -935,7 +949,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (deps.get(0) < readyMin) return false;   // el envÃ­o aÃºn no estaba listo
 
         long arrMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).duracionMinutos;
-        long transitMin = (arrMin + ALMACEN_DEST_MIN) - readyMin;
+        long transitMin = (arrMin + tiempoRecojoDestino) - readyMin;
         if (transitMin > (long) batch.getHorasLimiteSla() * 60L) return false;   // tardarÃ­a
 
         // ColchÃ³n de reserva proporcional a la holgura (urgente â‡’ 0 â‡’ sin reserva).
@@ -957,8 +971,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             boolean finalLeg = (i == edges.size() - 1);
             long llegada = depMin + e.duracionMinutos;
             // Capacidad CONCURRENTE: la estadÃ­a real ocupa [llegada, salida); cada slot
-            // del intervalo debe caber. Destino final â‰ˆ ALMACEN_DEST_MIN; escala = hasta salir.
-            long salida = finalLeg ? llegada + ALMACEN_DEST_MIN : deps.get(i + 1);
+            // del intervalo debe caber. Destino final â‰ˆ tiempoRecojoDestino; escala = hasta salir.
+            long salida = finalLeg ? llegada + tiempoRecojoDestino : deps.get(i + 1);
             if (!cabeAlmacenPierna(e.destino, llegada, salida, qty, blockAirport)) {
                 return false;
             }
@@ -1005,7 +1019,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             if (!esFinalLeg && e.destino.indice >= 0) {
                 agregarSlotsEstadia(keys, e.destino.indice, arrMin, deps.get(i + 1));
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
-                agregarSlotsEstadia(keys, e.destino.indice, arrMin, arrMin + ALMACEN_DEST_MIN);
+                agregarSlotsEstadia(keys, e.destino.indice, arrMin, arrMin + tiempoRecojoDestino);
             }
         }
         return keys;
@@ -1053,7 +1067,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         for (int i = 0; i < edges.size(); i++) {
             Arista e = edges.get(i);
             long llegada = deps.get(i) + e.duracionMinutos;
-            long salida = (i < edges.size() - 1) ? deps.get(i + 1) : llegada + ALMACEN_DEST_MIN;
+            long salida = (i < edges.size() - 1) ? deps.get(i + 1) : llegada + tiempoRecojoDestino;
             if (!cabeAlmacenPierna(e.destino, llegada, salida, qty, blockAirport)) return false;
         }
         return true;
@@ -1115,7 +1129,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (!cabeEstadiasRuta(edges, deps, batch.getCantidad(), blockAirport)) return null;
 
         long arrivalMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).duracionMinutos;
-        long transitMin = (arrivalMin + ALMACEN_DEST_MIN) - readyMin;
+        long transitMin = (arrivalMin + tiempoRecojoDestino) - readyMin;
         long slackMin = slaMaxMinutes - transitMin;
         double pressure = presionProyectada(edges, deps, batch, blockFlight, blockAirport);
         double scarcity = projectedScarcity(edges, deps, blockFlight, blockAirport);

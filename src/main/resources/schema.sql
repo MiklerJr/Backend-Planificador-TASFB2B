@@ -156,3 +156,10 @@ CREATE INDEX IF NOT EXISTS ix_tramo_iny_id_ruta ON tramo_inyectado (id_ruta_iny)
 -- Migraciones adicionales (ejecutadas automáticamente)
 ALTER TABLE aeropuerto ADD COLUMN IF NOT EXISTS capacidad_almacen_original INTEGER;
 ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS capacidad_maxima_original INTEGER;
+
+-- Backfill idempotente del valor original: solo rellena NULL (nunca pisa un valor existente). Deja
+-- consistente cualquier BD que tenga las columnas vacías, sin pasos manuales. El reset por corrida
+-- (ConfiguracionCapacidadesService) filtra por capacidad_*_original IS NOT NULL, así que sin este
+-- backfill el reset no restauraría nada.
+UPDATE aeropuerto SET capacidad_almacen_original = capacidad_almacen WHERE capacidad_almacen_original IS NULL;
+UPDATE vuelo      SET capacidad_maxima_original  = capacidad_maxima  WHERE capacidad_maxima_original  IS NULL;

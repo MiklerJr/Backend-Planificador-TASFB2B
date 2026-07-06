@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.servicios;
 
-import com.tasfb2b.planificador.algoritmo.aco.ConstantesOperativas;
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
+import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.auditoria.AuditoriaEnvio;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
@@ -33,8 +33,14 @@ import java.util.zip.ZipOutputStream;
 @Service
 public class AuditoriaService {
 
-    private static final int TIEMPO_MIN_ESCALA = ConstantesOperativas.TIEMPO_MIN_ESCALA;
-    private static final long ALMACEN_DEST_MIN = 10L;
+    // Escala mínima y recojo en destino (min): fuente única en yaml (planificador.operativo.*).
+    private final int tiempoMinEscala;
+    private final long tiempoRecojoDestino;
+
+    public AuditoriaService(PlanificadorProperties props) {
+        this.tiempoMinEscala = props.getOperativo().getTiempoMinEscalaMinutos();
+        this.tiempoRecojoDestino = props.getOperativo().getTiempoRecojoDestinoMinutos();
+    }
     private static final String CSV_HEADER =
             "idEnvio,origen,destino,clienteId,cantidad,tipoEnvio,registroHHMM,deadlineMin,exitoso,motivoFalla,"
                     + "ruta,numTramos,numEscalas,tiempoVueloMin,tiempoEsperaMin,tiempoTotalMin,llegadaMin,"
@@ -106,7 +112,7 @@ public class AuditoriaService {
         int llegadaDesdeReady = (int) (llegadaEpoch - readyMin);
         audit.setLlegadaMin(llegadaDesdeReady);
 
-        audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + ALMACEN_DEST_MIN));
+        audit.setFechaHoraFin(epochMinToLocalDateTime(llegadaEpoch + tiempoRecojoDestino));
 
         int slack = slaMin - llegadaDesdeReady;
         audit.setSlackSlaMin(slack);
@@ -352,7 +358,7 @@ public class AuditoriaService {
         return true;
     }
 
-    private static boolean cumpleEscalaMinima(List<Arista> ruta, List<Long> deps) {
+    private boolean cumpleEscalaMinima(List<Arista> ruta, List<Long> deps) {
         if (deps == null || deps.size() != ruta.size()) {
             // Sin info de departures reales, validamos contra los tiempos estáticos.
             for (int i = 0; i < ruta.size() - 1; i++) {
@@ -360,14 +366,14 @@ public class AuditoriaService {
                 int llegadaAct = (ruta.get(i).minutoDelDiaSalida + ruta.get(i).duracionMinutos) % 1440;
                 int diff = salidaSig - llegadaAct;
                 if (diff < 0) diff += 1440;
-                if (diff < TIEMPO_MIN_ESCALA) return false;
+                if (diff < tiempoMinEscala) return false;
             }
             return true;
         }
         for (int i = 0; i < ruta.size() - 1; i++) {
             long llegada = deps.get(i) + ruta.get(i).duracionMinutos;
             long salida  = deps.get(i + 1);
-            if (salida - llegada < TIEMPO_MIN_ESCALA) return false;
+            if (salida - llegada < tiempoMinEscala) return false;
         }
         return true;
     }

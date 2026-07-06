@@ -57,6 +57,7 @@ public class PlanificadorService {
     private final LectorSolucionBd solucionBdReader;
     private final MotorGrafoCache motorCache;
     private final AlmacenCacheEsqueletos almacenEsqueletos;
+    private final ConfiguracionCapacidadesService configCapacidades;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -80,7 +81,8 @@ public class PlanificadorService {
                                PersistenciaSolucionService persistencia,
                                LectorSolucionBd solucionBdReader,
                                MotorGrafoCache motorCache,
-                               AlmacenCacheEsqueletos almacenEsqueletos) {
+                               AlmacenCacheEsqueletos almacenEsqueletos,
+                               ConfiguracionCapacidadesService configCapacidades) {
         this.cargadorDatos = cargadorDatos;
         this.mapper = mapper;
         this.props = props;
@@ -91,6 +93,7 @@ public class PlanificadorService {
         this.solucionBdReader = solucionBdReader;
         this.motorCache = motorCache;
         this.almacenEsqueletos = almacenEsqueletos;
+        this.configCapacidades = configCapacidades;
     }
 
     PlanificadorService(CargadorDatos cargadorDatos, MapeadorAlgoritmo mapper, PlanificadorProperties props,
@@ -98,7 +101,18 @@ public class PlanificadorService {
                         ColoniaACO acoEngine) {
         this(cargadorDatos, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new LectorSolucionBd(null, null, null),
-                new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""));
+                new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""), null);
+    }
+
+    /**
+     * Al comenzar cada corrida repone en el grafo el baseline EN FRÍO (capacidades persistidas), descartando
+     * los overrides EN CALIENTE del run anterior. Así las ediciones en caliente son por-corrida y las de en
+     * frío persisten. Null-safe: en el constructor de tests configCapacidades es null.
+     */
+    private void resetearCapacidadesAlIniciarCorrida() {
+        if (configCapacidades != null) {
+            configCapacidades.resincronizarCapacidadesConBaselineFrio();
+        }
     }
 
     public EstadoJob iniciarEscenario2Async(EjecucionParametros params) {
@@ -639,11 +653,14 @@ public class PlanificadorService {
                 ? construirPlanWarmup(k, fechaInicio, saOverride)
                 : Collections.emptyList();
 
+        resetearCapacidadesAlIniciarCorrida();
         Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
+        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
+        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
         SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
 
         int totalBloques = plan.size();
@@ -856,11 +873,14 @@ public class PlanificadorService {
             return r;
         }
 
+        resetearCapacidadesAlIniciarCorrida();
         Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
+        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
+        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
         SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
 
 
@@ -1052,11 +1072,14 @@ public class PlanificadorService {
             return r;
         }
 
+        resetearCapacidadesAlIniciarCorrida();
         Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
         enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
                 props.getStorageAware().getPrecioHubExponente());   // Fase P
+        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
+        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
         SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
 
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();

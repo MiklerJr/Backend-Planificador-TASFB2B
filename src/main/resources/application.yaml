@@ -1,8 +1,13 @@
 spring:
   datasource:
+    # BD de PRODUCCIÓN (VM, túnel local en el puerto 5433). Activa por defecto.
     url: jdbc:postgresql://127.0.0.1:5433/Tasf_b2b
     username: postgres
     password: Furiousandfast.8
+    # BD de PRUEBAS (AWS RDS): descomentar este bloque (y comentar el de arriba) para apuntar a pruebas.
+#    url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b
+#    username: postgres
+#    password: Furiousandfast.8
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -100,6 +105,15 @@ planificador:
   consulta:
     max-filas-pagina: 5000      # tope de filas por página (limit por defecto) en /vuelos/carga y /almacenes/ocupacion
     demanda-max-dias: 31        # span máximo (días) de /demanda/resumen (acota el escaneo de BD)
+
+  operativo:
+    # Escala mínima = permanencia mínima de una maleta en un aeropuerto entre dos vuelos (min).
+    # Fuente única para el ruteo (OperadorReparacionVoraz) y la auditoría (AuditoriaService).
+    # Cambiar cualquiera de estos invalida la caché de esqueletos persistida (huella distinta) → se recalcula.
+    tiempo-min-escala-minutos: 10
+    # Tiempo de espera en el almacén del destino FINAL hasta que el cliente recoge la maleta (min).
+    # Cuenta para el SLA (transit = llegada + este tiempo) y para la ocupación del almacén destino.
+    tiempo-recojo-destino-minutos: 15
 
   cache:
     skeleton-file: data/skeleton-cache.bin
