@@ -1,7 +1,8 @@
 # Contrato de API — Backend Planificador TASF.B2B
 
 Guía para el frontend: qué endpoints existen, cómo usarlos y qué devuelven.
-Generado a partir de `PlanificadorController` y los DTOs del backend.
+Generado a partir de los controladores del backend (`EscenarioController`, `ConsultaJobsController`,
+`MetadatosController`, `ConfiguracionController`, `AuditoriaController`, `IngestaController`) y sus DTOs.
 
 ---
 
@@ -246,6 +247,8 @@ dataset (**solo** cuando `enVivo=false`). La respuesta incluye `"enVivo"`.
 ### Síncronos (bloquean hasta terminar — solo para pruebas / corridas cortas)
 - `GET /ejecutar?algoritmo=alns&k=14` → `SimulacionResponse` (solo `alns`).
 - `GET /ejecutar-colapso?k=144&umbralColapso=0.20` → `SimulacionResponse`.
+- `GET /bloque/{index}` → `BloqueSimulacion` del último `/ejecutar` síncrono (o `404` si el índice
+  no existe). Legacy: en el flujo asíncrono se usa `GET /jobs/{jobId}/bloques?desde=N` (§5).
 
 ### E1 — Operación día a día en vivo (`enVivo=true`)
 
