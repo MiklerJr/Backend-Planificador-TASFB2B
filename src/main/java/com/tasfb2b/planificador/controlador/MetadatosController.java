@@ -33,17 +33,19 @@ public class MetadatosController {
         return ResponseEntity.ok(datasetMetadata.getDatosInfo());
     }
 
+    // Cache-Control corto: las altas EN CALIENTE (efímeras por corrida) agregan aeropuertos/vuelos en
+    // vivo; un max-age largo haría que el front tardara en verlos. no-cache ⇒ revalida siempre.
     @GetMapping("/aeropuertos")
     public ResponseEntity<Map<String, AeropuertoDTO>> aeropuertos() {
         return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                 .body(datasetMetadata.getAeropuertosInfo());
     }
 
     @GetMapping("/vuelos")
     public ResponseEntity<List<VueloBackend>> vuelos() {
         return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                 .body(datasetMetadata.getVuelosPlaneados());
     }
 

@@ -5,7 +5,9 @@ import lombok.Data;
 
 import java.util.List;
 
+import com.tasfb2b.planificador.dto.datos.AeropuertoAgregado;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
+import com.tasfb2b.planificador.dto.vuelos.VueloAgregado;
 import com.tasfb2b.planificador.dto.vuelos.VueloCancelado;
 
 @Data
@@ -41,4 +43,8 @@ public class EstadoJobResponse {
     private List<VueloCancelado> vuelosCancelados;
     private List<CancelacionVueloRequest> cancelacionesNoAplicadas;
     private List<EnvioInyectadoInfo> enviosInyectados;
+    private List<VueloAgregado> vuelosAgregados;
+    private List<VueloAgregado> altasVueloNoAplicadas;
+    private List<AeropuertoAgregado> aeropuertosAgregados;
+    private List<AeropuertoAgregado> altasAeropuertoNoAplicadas;
 }

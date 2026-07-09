@@ -646,6 +646,46 @@ se identifica con los mismos datos de `/jobs/{jobId}/vuelos/usados`. **Body JSON
   en el CSV `*-vuelos-cancelados.csv` del ZIP de auditoría (ver §8). Si no casó ningún vuelo-día,
   aparece en `cancelacionesNoAplicadas` de `GET /jobs/{jobId}/estado`.
 
+### `POST /jobs/{jobId}/agregar-vuelo` — agregar un vuelo **en caliente** (efímero)
+Agrega un vuelo nuevo mientras el job corre (E1 async / E2 / E3). El vuelo es **recurrente diario**
+(se repite cada día de la simulación, como todo el dataset) y **efímero**: vale **solo para esa
+corrida** y se revierte al iniciar la corrida siguiente, sin tocar el dataset maestro. Las rutas que
+lo usen se recalculan a partir del bloque siguiente. **Body JSON:**
+```json
+{ "origen": "SKBO", "destino": "SEQM", "horaSalida": "08:30", "horaLlegada": "10:15", "capacidad": 300 }
+```
+> `horaSalida`/`horaLlegada` van en **hora LOCAL** ("HH:mm"): `horaSalida` en la del origen y
+> `horaLlegada` en la del destino — el mismo criterio del dataset. El backend normaliza a UTC.
+> Ambos aeropuertos deben existir (o venir de un `agregar-aeropuerto` encolado en el mismo job).
+- `202` si se encoló: `{ "jobId", "encolado": true, "idVuelo": "SKBO-SEQM-0830", "origen", "destino" }`.
+- `400` si algún campo es inválido (ICAO desconocido, horas mal formadas, `capacidad < 1`, id ya existente).
+- `404` si el `jobId` no existe · `409` si el job ya terminó (no activo).
+- Se aplica al inicio del siguiente bloque. Una vez aplicado aparece en `vuelosAgregados` de
+  `GET /jobs/{jobId}/estado`; si se rechaza al aplicarlo, en `altasVueloNoAplicadas` (con `motivo`).
+  El vuelo aparece también en `GET /vuelos` y en `vuelosPlaneados` del resultado de esa corrida.
+
+### `POST /jobs/{jobId}/agregar-aeropuerto` — agregar un aeropuerto **en caliente** (efímero)
+Agrega un aeropuerto nuevo mientras el job corre. También **efímero** (se revierte al iniciar la
+corrida siguiente). Por sí solo no cambia ninguna ruta: participa cuando se agregan vuelos en caliente
+hacia/desde él (`agregar-vuelo`) o se le inyectan envíos. **Body JSON:**
+```json
+{ "icao": "SPQU", "ciudad": "Arequipa", "husoHorario": -5, "capacidad": 400,
+  "latitud": -16.34, "longitud": -71.58, "continente": "AM" }
+```
+> `icao` = 4 letras mayúsculas, no existente. `husoHorario` = GMT offset entero [-12..14] (obligatorio).
+> `continente` (AM/EU/AS) fija el SLA; si se omite se deriva del prefijo ICAO (S→AM, E/L/U→EU, O/V→AS)
+> y, si el prefijo no lo permite, el alta se rechaza con `400` (envíe `continente` explícito).
+- `202` si se encoló: `{ "jobId", "encolado": true, "icao" }`.
+- `400` inválido · `404` job inexistente · `409` job no activo.
+- Aparece en `aeropuertosAgregados` de `GET /jobs/{jobId}/estado` (o `altasAeropuertoNoAplicadas` con
+  `motivo`), y en `GET /aeropuertos` de esa corrida.
+
+> **Efímeras y anti-contaminación.** Los vuelos/aeropuertos agregados en caliente existen como filas
+> reales (`efimero=TRUE`) para satisfacer las claves foráneas de la persistencia, pero se **eliminan**
+> de BD + memoria al iniciar la corrida siguiente. Nunca contaminan el dataset maestro ni corridas
+> futuras. Se pueden **cancelar** con `cancelar-vuelo` como cualquier otro vuelo dentro de la misma
+> corrida.
+
 ---
 
 ## 6. Esquemas de datos

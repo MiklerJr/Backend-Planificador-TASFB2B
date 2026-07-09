@@ -88,12 +88,39 @@ public class AlmacenCacheEsqueletos {
         int claves = motorCache.cacheEsqueletos().size();
         if (claves <= clavesUltimoGuardado) return;
         try {
-            escribir(path(), huellaDataset(), motorCache.cacheEsqueletos());
+            // El guardado corre al FIN de cada corrida, cuando las altas EN CALIENTE aún viven (se
+            // revierten al iniciar la siguiente): se filtran los esqueletos que referencien aristas
+            // efímeras (índices >= nº de vuelos baseline) para que el archivo sea siempre el baseline.
+            escribir(path(), huellaDataset(), sinEsqueletosEfimeros(motorCache.cacheEsqueletos()));
             clavesUltimoGuardado = claves;
             log.info("Caché de esqueletos persistida en {} ({} claves).", archivo, claves);
         } catch (Exception ex) {
             log.warn("No se pudo persistir la caché de esqueletos en {}: {}", archivo, ex.getMessage());
         }
+    }
+
+    /** Copia de la caché sin los esqueletos que usan aristas efímeras (índice >= vuelos baseline). */
+    Map<Long, List<int[]>> sinEsqueletosEfimeros(Map<Long, List<int[]>> cache) {
+        List<Vuelo> vuelos = cargadorDatos != null ? cargadorDatos.getVuelos() : null;
+        if (vuelos == null) return cache;
+        int base = 0;
+        boolean hayEfimeros = false;
+        for (Vuelo v : vuelos) {
+            if (v.isEfimero()) hayEfimeros = true;
+            else base++;
+        }
+        if (!hayEfimeros) return cache;
+        Map<Long, List<int[]>> filtrada = new HashMap<>(Math.max(16, cache.size() * 2));
+        for (Map.Entry<Long, List<int[]>> e : cache.entrySet()) {
+            List<int[]> limpios = new ArrayList<>(e.getValue().size());
+            for (int[] sk : e.getValue()) {
+                boolean usaEfimera = false;
+                for (int idx : sk) if (idx >= base) { usaEfimera = true; break; }
+                if (!usaEfimera) limpios.add(sk);
+            }
+            if (!limpios.isEmpty()) filtrada.put(e.getKey(), limpios);
+        }
+        return filtrada;
     }
 
     public synchronized void borrar() {
@@ -120,9 +147,12 @@ public class AlmacenCacheEsqueletos {
         // la caché tras cada PUT/reset.
         md.update(("escala|" + tiempoMinEscala + "|recojo|" + tiempoRecojoDestino + "\n")
                 .getBytes(StandardCharsets.UTF_8));
+        // Las altas EN CALIENTE (efímeras por corrida) tampoco entran: la huella es siempre la del
+        // dataset baseline, para que un guardado con altas vivas no invalide el archivo al reiniciar.
         List<Aeropuerto> aeropuertos = cargadorDatos != null ? cargadorDatos.getAeropuertos() : null;
         if (aeropuertos != null) {
             for (Aeropuerto a : aeropuertos) {
+                if (a.isEfimero()) continue;
                 md.update((a.getCodigo() + "|" + a.getOffsetHorario() + "\n")
                         .getBytes(StandardCharsets.UTF_8));
             }
@@ -130,6 +160,7 @@ public class AlmacenCacheEsqueletos {
         List<Vuelo> vuelos = cargadorDatos != null ? cargadorDatos.getVuelos() : null;
         if (vuelos != null) {
             for (Vuelo v : vuelos) {
+                if (v.isEfimero()) continue;
                 md.update((v.getOrigen() + "|" + v.getDestino() + "|" + v.getFechaHoraSalida() + "|"
                         + v.getFechaHoraLlegada() + "\n")
                         .getBytes(StandardCharsets.UTF_8));

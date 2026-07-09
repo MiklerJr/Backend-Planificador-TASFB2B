@@ -1,6 +1,8 @@
 package com.tasfb2b.planificador.servicios.jobs;
 
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
+import com.tasfb2b.planificador.dto.datos.AeropuertoAgregado;
+import com.tasfb2b.planificador.dto.datos.AltaAeropuertoRequest;
 import com.tasfb2b.planificador.dto.jobs.AlertaColapso;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.almacenes.*;
@@ -154,6 +156,42 @@ public class EstadoJob {
     public Queue<InyeccionEnviosRequest.Item> getInyeccionesPendientes() {
         return inyeccionesPendientes;
     }
+
+    // Altas de vuelo EN CALIENTE (efímeras por corrida): mismo patrón que las cancelaciones —
+    // se encolan aquí y el worker las aplica en la frontera del siguiente bloque.
+    private final Queue<AltaVueloRequest> altasVueloPendientes = new ConcurrentLinkedQueue<>();
+
+    public boolean encolarAltaVuelo(AltaVueloRequest alta) {
+        if (alta == null) return false;
+        if (altasVueloPendientes.contains(alta)) return false;   // anti doble-click
+        return altasVueloPendientes.add(alta);
+    }
+
+    public Queue<AltaVueloRequest> getAltasVueloPendientes() {
+        return altasVueloPendientes;
+    }
+
+    private final List<VueloAgregado> vuelosAgregados = new CopyOnWriteArrayList<>();
+
+    private final List<VueloAgregado> altasVueloNoAplicadas = new CopyOnWriteArrayList<>();
+
+    // Altas de aeropuerto EN CALIENTE (efímeras por corrida). Se drenan ANTES que las de vuelo,
+    // para poder encolar un aeropuerto y vuelos hacia él en el mismo bloque.
+    private final Queue<AltaAeropuertoRequest> altasAeropuertoPendientes = new ConcurrentLinkedQueue<>();
+
+    public boolean encolarAltaAeropuerto(AltaAeropuertoRequest alta) {
+        if (alta == null) return false;
+        if (altasAeropuertoPendientes.contains(alta)) return false;   // anti doble-click
+        return altasAeropuertoPendientes.add(alta);
+    }
+
+    public Queue<AltaAeropuertoRequest> getAltasAeropuertoPendientes() {
+        return altasAeropuertoPendientes;
+    }
+
+    private final List<AeropuertoAgregado> aeropuertosAgregados = new CopyOnWriteArrayList<>();
+
+    private final List<AeropuertoAgregado> altasAeropuertoNoAplicadas = new CopyOnWriteArrayList<>();
 
     private final List<EnvioInyectadoInfo> enviosInyectados = new CopyOnWriteArrayList<>();
 

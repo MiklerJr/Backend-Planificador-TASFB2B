@@ -34,46 +34,56 @@ public class MapeadorAlgoritmo {
         // 2. Mapear Aristas (Vuelos)
         int edgeIdx = 0;
         for (Vuelo v : vuelos) {
-            Arista edge = new Arista();
-
-            if (v.getId() != null) {
-                edge.id = v.getId().toString();
-            } else {
-                edge.id = v.getAeropuertoOrigen().getCodigo() + "-" +
-                        v.getAeropuertoDestino().getCodigo() + "-" +
-                        v.getFechaHoraSalida().toLocalTime().toString();
-            }
-
-            edge.origen = graph.nodos.get(v.getAeropuertoOrigen().getCodigo());
-            edge.destino = graph.nodos.get(v.getAeropuertoDestino().getCodigo());
-
-            edge.capacidad = v.getCapacidad() != null ? v.getCapacidad() : 0;
-
-            int originOffset = v.getAeropuertoOrigen().getOffsetHorario();
-            int destOffset   = v.getAeropuertoDestino().getOffsetHorario();
-
-            LocalDateTime depUtc = v.getFechaHoraSalida().minusHours(originOffset);
-
-            int depWall = v.getFechaHoraSalida().getHour() * 60 + v.getFechaHoraSalida().getMinute();
-            int arrWall = v.getFechaHoraLlegada().getHour() * 60 + v.getFechaHoraLlegada().getMinute();
-            int durMin = Math.floorMod((arrWall - destOffset * 60) - (depWall - originOffset * 60), 1440);
-
-            LocalDateTime arrUtc = depUtc.plusMinutes(durMin);
-            Duration utcDur = Duration.ofMinutes(durMin);
-
-            edge.horaSalida     = depUtc;
-            edge.horaLlegada       = arrUtc;
-            edge.duracion          = utcDur;
-            edge.costo              = durMin;
-            edge.horaSalidaLocal = depUtc.toLocalTime();
-            edge.duracionMinutos   = durMin;
-            edge.minutoDelDiaSalida    = depUtc.getHour() * 60 + depUtc.getMinute();
-            edge.indice               = edgeIdx++;
-
-            graph.agregarArista(edge);
+            graph.agregarArista(construirArista(v, graph, edgeIdx++));
         }
 
         return graph;
+    }
+
+    /**
+     * Construye la arista de un vuelo con la normalización UTC canónica (depUtc = salida − offset del
+     * origen; duración real con módulo 24 h). Única fuente del mapeo vuelo→arista: la usa el bucle de
+     * {@link #mapearAGrafo} y las altas EN CALIENTE (AltasEnCalienteService), que deben producir una
+     * arista idéntica a la que saldría de reconstruir el grafo. No agrega la arista al grafo.
+     */
+    public static Arista construirArista(Vuelo v, Grafo graph, int indice) {
+        Arista edge = new Arista();
+
+        if (v.getId() != null) {
+            edge.id = v.getId().toString();
+        } else {
+            edge.id = v.getAeropuertoOrigen().getCodigo() + "-" +
+                    v.getAeropuertoDestino().getCodigo() + "-" +
+                    v.getFechaHoraSalida().toLocalTime().toString();
+        }
+
+        edge.origen = graph.nodos.get(v.getAeropuertoOrigen().getCodigo());
+        edge.destino = graph.nodos.get(v.getAeropuertoDestino().getCodigo());
+
+        edge.capacidad = v.getCapacidad() != null ? v.getCapacidad() : 0;
+
+        int originOffset = v.getAeropuertoOrigen().getOffsetHorario();
+        int destOffset   = v.getAeropuertoDestino().getOffsetHorario();
+
+        LocalDateTime depUtc = v.getFechaHoraSalida().minusHours(originOffset);
+
+        int depWall = v.getFechaHoraSalida().getHour() * 60 + v.getFechaHoraSalida().getMinute();
+        int arrWall = v.getFechaHoraLlegada().getHour() * 60 + v.getFechaHoraLlegada().getMinute();
+        int durMin = Math.floorMod((arrWall - destOffset * 60) - (depWall - originOffset * 60), 1440);
+
+        LocalDateTime arrUtc = depUtc.plusMinutes(durMin);
+        Duration utcDur = Duration.ofMinutes(durMin);
+
+        edge.horaSalida     = depUtc;
+        edge.horaLlegada       = arrUtc;
+        edge.duracion          = utcDur;
+        edge.costo              = durMin;
+        edge.horaSalidaLocal = depUtc.toLocalTime();
+        edge.duracionMinutos   = durMin;
+        edge.minutoDelDiaSalida    = depUtc.getHour() * 60 + depUtc.getMinute();
+        edge.indice               = indice;
+
+        return edge;
     }
 
     public List<LoteEnvio> mapearALotes(List<Envio> maletas) {

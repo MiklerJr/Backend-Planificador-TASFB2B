@@ -34,12 +34,14 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private final Grafo grafo;
 
-    private final int      conteoNodos;
+    // NO finales: las altas EN CALIENTE (incorporarArista/incorporarNodo) los reemplazan por
+    // copias ampliadas (append-only: ningún índice existente se mueve).
+    private int                  conteoNodos;
     private static final int SLOTS_DIA = (int)(HORIZONTE_MAX_MIN / MIN_DIA) + 1; // 4
 
-    private final Arista[]       aristaPorIndice;
-    private final String[]     nodoPorIndice;
-    private final List<Arista>[] adyacenciaPorIndice;   // adyacenciaPorIndice[node.indice] â†’ vecinos salientes
+    private Arista[]             aristaPorIndice;
+    private String[]             nodoPorIndice;
+    private List<Arista>[]       adyacenciaPorIndice;   // adyacenciaPorIndice[node.indice] â†’ vecinos salientes
 
     private final ConcurrentHashMap<Long, Integer> ocupacionVuelo  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> ocupacionAeropuerto = new ConcurrentHashMap<>();
@@ -61,10 +63,13 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.rutaCacheEsqueleto = rutaCacheEsqueleto;
         this.grafo = grafo;
 
-        // Asignar idx entero a cada nodo
+        // Asignar idx entero a cada nodo, en orden lexicogrÃ¡fico de ICAO (TreeMap): determinista y
+        // estable entre corridas/reinicios aunque el mapa de nodos cambie de implementaciÃ³n o las
+        // altas EN CALIENTE agreguen/quiten nodos (siempre revertidas antes de construir el operador).
+        // Sostiene las claves de la cachÃ© de esqueletos persistida (skeletonKey empaqueta Ã­ndices).
         Map<String, Integer> nodeIndex = new HashMap<>(grafo.nodos.size() * 2);
         int i = 0;
-        for (Map.Entry<String, Nodo> entry : grafo.nodos.entrySet()) {
+        for (Map.Entry<String, Nodo> entry : new TreeMap<>(grafo.nodos).entrySet()) {
             nodeIndex.put(entry.getKey(), i);
             entry.getValue().indice = i;
             i++;
@@ -89,6 +94,48 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         adyacenciaPorIndice = adj;
 
         this.hubPorIndice = new boolean[conteoNodos];
+    }
+
+    /**
+     * Alta EN CALIENTE de un vuelo (frontera de bloque, hilo worker): incorpora una arista nueva a las
+     * estructuras congeladas en el constructor. Solo acepta append-only ({@code indice} nuevo, mayor que
+     * todos los existentes): así ningún índice existente se mueve y las claves de ocupación/esqueletos
+     * acumuladas siguen válidas. La ocupación es un mapa disperso, no requiere redimensionar.
+     *
+     * @return true si se incorporó; false si el índice no es append-only o el origen es desconocido.
+     */
+    public boolean incorporarArista(Arista e) {
+        if (e == null || e.indice < aristaPorIndice.length) return false;   // solo append-only
+        if (e.origen == null || e.origen.indice < 0 || e.origen.indice >= adyacenciaPorIndice.length) {
+            return false;   // origen fuera del snapshot (nodo nuevo sin incorporar)
+        }
+        Arista[] ampliado = Arrays.copyOf(aristaPorIndice, e.indice + 1);
+        ampliado[e.indice] = e;
+        aristaPorIndice = ampliado;
+        adyacenciaPorIndice[e.origen.indice].add(e);
+        return true;
+    }
+
+    /**
+     * Alta EN CALIENTE de un aeropuerto (frontera de bloque, hilo worker): incorpora un nodo nuevo
+     * al final de las estructuras congeladas en el constructor (append-only: los índices existentes
+     * no se mueven). Las búsquedas dimensionan sus arrays por {@code conteoNodos} en cada llamada,
+     * así que el nodo participa desde la siguiente búsqueda sin más cambios.
+     *
+     * @return el índice asignado al nodo (o el que ya tenía si ya estaba incorporado).
+     */
+    public int incorporarNodo(Nodo nodo) {
+        if (nodo == null) return -1;
+        if (nodo.indice >= 0 && nodo.indice < conteoNodos) return nodo.indice;   // ya incorporado
+        int idx = conteoNodos;
+        nodo.indice = idx;
+        nodoPorIndice = Arrays.copyOf(nodoPorIndice, idx + 1);
+        nodoPorIndice[idx] = nodo.codigo;
+        adyacenciaPorIndice = Arrays.copyOf(adyacenciaPorIndice, idx + 1);
+        adyacenciaPorIndice[idx] = new ArrayList<>();
+        hubPorIndice = Arrays.copyOf(hubPorIndice, idx + 1);
+        conteoNodos = idx + 1;
+        return idx;
     }
 
     public void setHubs(Set<String> codigos) {

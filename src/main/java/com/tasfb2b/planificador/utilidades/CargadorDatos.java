@@ -20,6 +20,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -28,10 +30,12 @@ public class CargadorDatos {
 
     private final JdbcTemplate jdbcTemplate;
 
-    private List<Aeropuerto> aeropuertos = new ArrayList<>();
-    private List<Vuelo> vuelos = new ArrayList<>();
+    // Estructuras concurrentes: las altas EN CALIENTE (AltasEnCalienteService, hilo worker) hacen
+    // append/remove mientras los endpoints HTTP las leen. Escrituras rarísimas ⇒ copy-on-write.
+    private List<Aeropuerto> aeropuertos = new CopyOnWriteArrayList<>();
+    private List<Vuelo> vuelos = new CopyOnWriteArrayList<>();
 
-    private Map<String, Aeropuerto> aeropuertoMapCache;
+    private Map<String, Aeropuerto> aeropuertoMapCache = new ConcurrentHashMap<>();
 
     private int maxOffsetAbsHoras = 0;
     private LocalDateTime primeraVentanaUtc;
@@ -47,7 +51,7 @@ public class CargadorDatos {
         log.info("INICIANDO DESCARGA DESDE LA NUBE (100% POSTGRESQL)");
 
         String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, capacidad_almacen_original, latitud, longitud FROM AEROPUERTO ORDER BY icao";
-        aeropuertos = jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
+        aeropuertos = new CopyOnWriteArrayList<>(jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
             Aeropuerto a = new Aeropuerto();
             a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
             String codigo = a.getCodigo();
@@ -64,10 +68,10 @@ public class CargadorDatos {
             a.setContinente(continentePorIcao(codigo));
             a.setActivo(true);
             return a;
-        });
+        }));
 
-        aeropuertoMapCache = aeropuertos.stream()
-                .collect(Collectors.toMap(Aeropuerto::getCodigo, a -> a));
+        aeropuertoMapCache = new ConcurrentHashMap<>(aeropuertos.stream()
+                .collect(Collectors.toMap(Aeropuerto::getCodigo, a -> a)));
 
         String sqlVuelos = "SELECT id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima, capacidad_maxima_original FROM VUELO ORDER BY id_vuelo";
         List<Vuelo> vuelosCargados = jdbcTemplate.query(sqlVuelos, (rs, rowNum) -> {
@@ -109,7 +113,7 @@ public class CargadorDatos {
                 .collect(Collectors.toList());
         vuelos = noNulos.stream()
                 .filter(ValidadorVuelo::esCoherente)
-                .collect(Collectors.toList());
+                .collect(Collectors.toCollection(CopyOnWriteArrayList::new));
         int descartadosIncoherentes = noNulos.size() - vuelos.size();
         if (descartadosIncoherentes > 0) {
             log.warn("ValidadorVuelo: {} vuelos descartados (capacidad<=0 u origen=destino)",
@@ -302,7 +306,38 @@ public class CargadorDatos {
         return icao == null ? null : aeropuertoMapCache.get(icao);
     }
 
-    private static LocalDateTime fechaLlegadaLocal(LocalDateTime fechaSalida,
+    // ── Altas EN CALIENTE (efímeras por corrida; ver AltasEnCalienteService) ────────────
+    // Append-only al final de la lista: preserva el mapeo posicional 1:1 vuelo↔arista del grafo.
+
+    public void agregarVueloEfimero(Vuelo v) {
+        if (v != null) vuelos.add(v);
+    }
+
+    public void quitarVuelosEfimeros() {
+        vuelos.removeIf(Vuelo::isEfimero);
+    }
+
+    public void agregarAeropuertoEfimero(Aeropuerto a) {
+        if (a == null || a.getCodigo() == null) return;
+        aeropuertos.add(a);
+        aeropuertoMapCache.put(a.getCodigo(), a);
+    }
+
+    /** Compensación puntual de un alta fallida: quita exactamente ese aeropuerto (lista + mapa). */
+    public void quitarAeropuertoEfimero(Aeropuerto a) {
+        if (a == null || !a.isEfimero()) return;
+        aeropuertos.remove(a);
+        aeropuertoMapCache.remove(a.getCodigo(), a);
+    }
+
+    public void quitarAeropuertosEfimeros() {
+        for (Aeropuerto a : aeropuertos) {
+            if (a.isEfimero()) aeropuertoMapCache.remove(a.getCodigo());
+        }
+        aeropuertos.removeIf(Aeropuerto::isEfimero);
+    }
+
+    public static LocalDateTime fechaLlegadaLocal(LocalDateTime fechaSalida,
                                                    LocalTime horaLlegada,
                                                    Aeropuerto origen,
                                                    Aeropuerto destino) {
@@ -340,7 +375,7 @@ public class CargadorDatos {
         return time.getHour() * 60 + time.getMinute();
     }
 
-    private static String continentePorIcao(String code) {
+    public static String continentePorIcao(String code) {
         if (code == null || code.isBlank()) return "UNKNOWN";
         return switch (code.charAt(0)) {
             case 'S' -> "AM";

@@ -1,6 +1,7 @@
 package com.tasfb2b.planificador.controlador;
 
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
+import com.tasfb2b.planificador.dto.datos.AltaAeropuertoRequest;
 import com.tasfb2b.planificador.dto.vuelos.CancelacionVueloRequest;
 import com.tasfb2b.planificador.dto.simulacion.EjecucionParametros;
 import com.tasfb2b.planificador.dto.jobs.*;
@@ -10,6 +11,7 @@ import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
 import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
 import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
 import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
+import com.tasfb2b.planificador.servicios.AltasEnCalienteService;
 import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -233,6 +235,53 @@ public class EscenarioController {
                 "origen",   orden.getOrigen(),
                 "destino",  orden.getDestino(),
                 "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
+    }
+
+    /**
+     * Alta de vuelo EN CALIENTE (efímera por corrida): se encola y el worker la aplica en la frontera
+     * del siguiente bloque. Se revierte al iniciar la corrida siguiente (no contamina el dataset).
+     * 202 encolada / 400 inválida / 404 job inexistente / 409 job no activo.
+     */
+    @PostMapping("/jobs/{jobId}/agregar-vuelo")
+    public ResponseEntity<Map<String, Object>> agregarVueloJob(
+            @PathVariable String jobId,
+            @RequestBody AltaVueloRequest alta) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        boolean ok = service.solicitarAltaVuelo(jobId, alta);   // lanza 400 si es inválida
+        if (!ok) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "jobId", jobId, "encolado", false,
+                    "motivo", "el job no está activo (ya terminó o fue cancelado)"));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId",    jobId,
+                "encolado", true,
+                "idVuelo",  AltasEnCalienteService.idVueloDe(alta),
+                "origen",   alta.getOrigen(),
+                "destino",  alta.getDestino()));
+    }
+
+    /**
+     * Alta de aeropuerto EN CALIENTE (efímera por corrida): se encola y el worker la aplica en la
+     * frontera del siguiente bloque. Se revierte al iniciar la corrida siguiente. Por sí solo no cambia
+     * rutas; participa con vuelos EN CALIENTE hacia/desde él o inyecciones.
+     * 202 encolada / 400 inválida / 404 job inexistente / 409 job no activo.
+     */
+    @PostMapping("/jobs/{jobId}/agregar-aeropuerto")
+    public ResponseEntity<Map<String, Object>> agregarAeropuertoJob(
+            @PathVariable String jobId,
+            @RequestBody AltaAeropuertoRequest alta) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        boolean ok = service.solicitarAltaAeropuerto(jobId, alta);   // lanza 400 si es inválida
+        if (!ok) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "jobId", jobId, "encolado", false,
+                    "motivo", "el job no está activo (ya terminó o fue cancelado)"));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "jobId",    jobId,
+                "encolado", true,
+                "icao",     alta.getIcao()));
     }
 
     @PostMapping({"/jobs/{jobId}/inyectar-envios", "/jobs/{jobId}/registrar-envios"})

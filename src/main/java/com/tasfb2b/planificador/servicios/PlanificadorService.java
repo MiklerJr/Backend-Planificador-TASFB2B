@@ -58,6 +58,7 @@ public class PlanificadorService {
     private final MotorGrafoCache motorCache;
     private final AlmacenCacheEsqueletos almacenEsqueletos;
     private final ConfiguracionCapacidadesService configCapacidades;
+    private final AltasEnCalienteService altasEnCaliente;
 
     public static final String MOTOR_ALNS = "alns";
     public static final String MOTOR_ACO  = "aco";
@@ -82,7 +83,8 @@ public class PlanificadorService {
                                LectorSolucionBd solucionBdReader,
                                MotorGrafoCache motorCache,
                                AlmacenCacheEsqueletos almacenEsqueletos,
-                               ConfiguracionCapacidadesService configCapacidades) {
+                               ConfiguracionCapacidadesService configCapacidades,
+                               AltasEnCalienteService altasEnCaliente) {
         this.cargadorDatos = cargadorDatos;
         this.mapper = mapper;
         this.props = props;
@@ -94,6 +96,7 @@ public class PlanificadorService {
         this.motorCache = motorCache;
         this.almacenEsqueletos = almacenEsqueletos;
         this.configCapacidades = configCapacidades;
+        this.altasEnCaliente = altasEnCaliente;
     }
 
     PlanificadorService(CargadorDatos cargadorDatos, MapeadorAlgoritmo mapper, PlanificadorProperties props,
@@ -101,15 +104,21 @@ public class PlanificadorService {
                         ColoniaACO acoEngine) {
         this(cargadorDatos, mapper, props, jobs, auditoria, acoEngine,
                 new PersistenciaSolucionService(null, null), new LectorSolucionBd(null, null, null),
-                new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""), null);
+                new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""), null, null);
     }
 
     /**
-     * Al comenzar cada corrida repone en el grafo el baseline EN FRÍO (capacidades persistidas), descartando
-     * los overrides EN CALIENTE del run anterior. Así las ediciones en caliente son por-corrida y las de en
-     * frío persisten. Null-safe: en el constructor de tests configCapacidades es null.
+     * Al comenzar cada corrida: (1) revierte las altas EN CALIENTE efímeras de la corrida anterior
+     * (vuelos/aeropuertos agregados en vivo — BD+RAM+grafo+esqueletos) y (2) repone en el grafo el
+     * baseline EN FRÍO (capacidades persistidas), descartando los overrides EN CALIENTE. Así las
+     * ediciones en caliente son por-corrida y las de en frío persisten. El orden importa: primero el
+     * recorte topológico, para que la resincronización itere listas ya alineadas 1:1.
+     * Null-safe: en el constructor de tests ambas dependencias son null.
      */
     private void resetearCapacidadesAlIniciarCorrida() {
+        if (altasEnCaliente != null) {
+            altasEnCaliente.revertirAltasEfimeras();
+        }
         if (configCapacidades != null) {
             configCapacidades.resincronizarCapacidadesConBaselineFrio();
         }
@@ -350,6 +359,101 @@ public class PlanificadorService {
         return req.getEnvios().size();
     }
 
+    /**
+     * Encola un alta de vuelo EN CALIENTE (efímera por corrida). Mismo contrato que
+     * {@link #solicitarCancelacionVuelo}: false ⇒ job inexistente/inactivo (404/409 en el controller);
+     * {@link ParametroInvalidoException} ⇒ 400. El worker la aplica en la frontera del siguiente bloque.
+     */
+    public boolean solicitarAltaVuelo(String jobId, AltaVueloRequest alta) {
+        EstadoJob job = jobs.get(jobId);
+        if (job == null) return false;
+        if (altasEnCaliente == null)
+            throw new ParametroInvalidoException("altas en caliente no disponibles");
+        // Como origen/destino valen también las altas de aeropuerto aún en cola del mismo job:
+        // se drenan ANTES que los vuelos en la misma frontera de bloque.
+        Set<String> icaosPendientes = new HashSet<>();
+        for (AltaAeropuertoRequest p : job.getAltasAeropuertoPendientes()) {
+            if (p.getIcao() != null) icaosPendientes.add(p.getIcao().trim());
+        }
+        altasEnCaliente.validarAltaVuelo(alta, icaosPendientes);
+        if (!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado)) return false;
+
+        String idVuelo = AltasEnCalienteService.idVueloDe(alta);
+        for (AltaVueloRequest pendiente : job.getAltasVueloPendientes()) {
+            if (idVuelo.equals(AltasEnCalienteService.idVueloDe(pendiente)))
+                throw new ParametroInvalidoException("ya hay un alta pendiente con id " + idVuelo);
+        }
+        if (job.encolarAltaVuelo(alta)) {
+            log.info("Alta de vuelo encolada (job {}): {} cap {}", jobId, idVuelo, alta.getCapacidad());
+        } else {
+            log.debug("Alta de vuelo duplicada ya pendiente (job {}): {} — ignorada", jobId, idVuelo);
+        }
+        return true;   // aceptada para el front (encolada o ya pendiente)
+    }
+
+    public boolean solicitarAltaAeropuerto(String jobId, AltaAeropuertoRequest alta) {
+        EstadoJob job = jobs.get(jobId);
+        if (job == null) return false;
+        if (altasEnCaliente == null)
+            throw new ParametroInvalidoException("altas en caliente no disponibles");
+        altasEnCaliente.validarAltaAeropuerto(alta);
+        if (!RegistroJobs.ESTADOS_ACTIVOS.contains(job.estado)) return false;
+
+        String icao = alta.getIcao().trim();
+        for (AltaAeropuertoRequest pendiente : job.getAltasAeropuertoPendientes()) {
+            if (pendiente.getIcao() != null && icao.equals(pendiente.getIcao().trim()))
+                throw new ParametroInvalidoException("ya hay un alta pendiente con ICAO " + icao);
+        }
+        if (job.encolarAltaAeropuerto(alta)) {
+            log.info("Alta de aeropuerto encolada (job {}): {} (huso {}, cap {})",
+                    jobId, icao, alta.getHusoHorario(), alta.getCapacidad());
+        } else {
+            log.debug("Alta de aeropuerto duplicada ya pendiente (job {}): {} — ignorada", jobId, icao);
+        }
+        return true;   // aceptada para el front (encolada o ya pendiente)
+    }
+
+    /**
+     * Drena y aplica las altas EN CALIENTE pendientes en la frontera de bloque (hilo worker):
+     * primero aeropuertos, luego vuelos — así un aeropuerto y sus vuelos encolados juntos se
+     * aplican en el mismo bloque.
+     */
+    private void aplicarAltasEnCaliente(EstadoJob job, Grafo graph, OperadorReparacionVoraz enrutador,
+                                        int bloqueIdx) {
+        if (job == null || altasEnCaliente == null) return;
+
+        AltaAeropuertoRequest reqAero;
+        while ((reqAero = job.getAltasAeropuertoPendientes().poll()) != null) {
+            String motivo = altasEnCaliente.aplicarAltaAeropuerto(reqAero, graph, enrutador);
+            AeropuertoAgregado info = new AeropuertoAgregado(
+                    reqAero.getIcao(), reqAero.getCiudad(), reqAero.getHusoHorario(),
+                    reqAero.getCapacidad(), reqAero.getContinente(), bloqueIdx, motivo);
+            if (motivo == null) {
+                job.getAeropuertosAgregados().add(info);
+            } else {
+                job.getAltasAeropuertoNoAplicadas().add(info);
+                log.warn("Alta de aeropuerto NO aplicada (job {}, bloque {}): {}",
+                        job.getJobId(), bloqueIdx, motivo);
+            }
+        }
+
+        AltaVueloRequest req;
+        while ((req = job.getAltasVueloPendientes().poll()) != null) {
+            String motivo = altasEnCaliente.aplicarAltaVuelo(req, graph, enrutador);
+            String idVuelo = null;
+            try { idVuelo = AltasEnCalienteService.idVueloDe(req); } catch (Exception ignored) { }
+            VueloAgregado info = new VueloAgregado(idVuelo, req.getOrigen(), req.getDestino(),
+                    req.getHoraSalida(), req.getHoraLlegada(), req.getCapacidad(), bloqueIdx, motivo);
+            if (motivo == null) {
+                job.getVuelosAgregados().add(info);
+            } else {
+                job.getAltasVueloNoAplicadas().add(info);
+                log.warn("Alta de vuelo NO aplicada (job {}, bloque {}): {}",
+                        job.getJobId(), bloqueIdx, motivo);
+            }
+        }
+    }
+
     private int aplicarCancelacionesVuelo(String jobId, java.util.Queue<CancelacionVueloRequest> cola,
                                           Grafo graph,
                                           OperadorReparacionVoraz enrutador, GestorBacklog backlog,
@@ -588,6 +692,10 @@ public class PlanificadorService {
         body.setVuelosCancelados(job.getVuelosCancelados());
         body.setCancelacionesNoAplicadas(job.getCancelacionesNoAplicadas());
         body.setEnviosInyectados(job.getEnviosInyectados());
+        body.setVuelosAgregados(job.getVuelosAgregados());
+        body.setAltasVueloNoAplicadas(job.getAltasVueloNoAplicadas());
+        body.setAeropuertosAgregados(job.getAeropuertosAgregados());
+        body.setAltasAeropuertoNoAplicadas(job.getAltasAeropuertoNoAplicadas());
         return body;
     }
 
@@ -719,6 +827,7 @@ public class PlanificadorService {
         String nivelAlertaPrevio = AlertaColapso.VERDE;
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
+            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);   // antes de cancelar: permite alta+cancelación en la misma frontera
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
@@ -916,6 +1025,7 @@ public class PlanificadorService {
 
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
+            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);   // antes de cancelar: permite alta+cancelación en la misma frontera
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
@@ -1113,6 +1223,7 @@ public class PlanificadorService {
 
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
+            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);   // antes de cancelar: permite alta+cancelación en la misma frontera
             aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,

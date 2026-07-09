@@ -163,3 +163,19 @@ ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS capacidad_maxima_original INTEGER;
 -- backfill el reset no restauraría nada.
 UPDATE aeropuerto SET capacidad_almacen_original = capacidad_almacen WHERE capacidad_almacen_original IS NULL;
 UPDATE vuelo      SET capacidad_maxima_original  = capacidad_maxima  WHERE capacidad_maxima_original  IS NULL;
+
+-- ── Altas EN CALIENTE (efímeras por corrida) ─────────────────────────────────────────
+-- Vuelos/aeropuertos agregados EN VIVO por el operador durante una corrida. Existen como fila
+-- real (las FKs de tramo_ruta/tramo_inyectado/cancelacion_vuelo exigen que el vuelo exista),
+-- marcados efimero=TRUE. Se revierten al iniciar la corrida siguiente (AltasEnCalienteService).
+ALTER TABLE aeropuerto ADD COLUMN IF NOT EXISTS efimero BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE vuelo      ADD COLUMN IF NOT EXISTS efimero BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Limpieza al arranque: residuos de una corrida interrumpida (crash con altas activas). Corre
+-- antes del @PostConstruct de CargadorDatos ⇒ la RAM nunca arranca con efímeros. Orden por FKs:
+-- envio_inyectado→aeropuerto NO cascadea; vuelo→tramo_*/cancelacion_vuelo SÍ (ON DELETE CASCADE).
+DELETE FROM envio_inyectado
+ WHERE icao_origen  IN (SELECT icao FROM aeropuerto WHERE efimero)
+    OR icao_destino IN (SELECT icao FROM aeropuerto WHERE efimero);
+DELETE FROM vuelo WHERE efimero;
+DELETE FROM aeropuerto WHERE efimero;
