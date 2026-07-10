@@ -360,6 +360,18 @@ public class PlanificadorService {
     }
 
     /**
+     * Offset GMT (horas) del aeropuerto o null si el ICAO no existe. Lo usa la carga de envíos por TXT
+     * para convertir la hora LOCAL de la sede a UTC. No confundir con el privado offsetHoras(String):
+     * aquel cachea al primer uso (stale con aeropuertos efímeros) y devuelve 0 para ICAO desconocido,
+     * mientras que "desconocido" debe distinguirse de "offset 0" (→ 400 en el controlador).
+     */
+    public Integer getOffsetAeropuerto(String icao) {
+        if (cargadorDatos == null || icao == null) return null;
+        Aeropuerto a = cargadorDatos.getAeropuerto(icao.trim());
+        return (a == null) ? null : a.getOffsetHorario();
+    }
+
+    /**
      * Encola un alta de vuelo EN CALIENTE (efímera por corrida). Mismo contrato que
      * {@link #solicitarCancelacionVuelo}: false ⇒ job inexistente/inactivo (404/409 en el controller);
      * {@link ParametroInvalidoException} ⇒ 400. El worker la aplica en la frontera del siguiente bloque.

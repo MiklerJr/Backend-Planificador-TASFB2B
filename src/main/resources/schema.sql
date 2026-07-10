@@ -164,6 +164,17 @@ ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS capacidad_maxima_original INTEGER;
 UPDATE aeropuerto SET capacidad_almacen_original = capacidad_almacen WHERE capacidad_almacen_original IS NULL;
 UPDATE vuelo      SET capacidad_maxima_original  = capacidad_maxima  WHERE capacidad_maxima_original  IS NULL;
 
+-- ── Horarios de vuelo modificables (prueba E1 "día a día") ───────────────────────────
+-- PUT /configuracion/vuelos/{id}/horario cambia hora_salida/hora_llegada EN FRÍO (persistente,
+-- solo sin simulación en curso); estas columnas guardan el valor de fábrica para
+-- POST /configuracion/vuelos/restaurar-horarios. El id_vuelo NO cambia al modificar la salida
+-- (PK referenciada por tramo_ruta/tramo_inyectado/cancelacion_vuelo, sin ON UPDATE CASCADE):
+-- conserva el HHMM original como identificador estable.
+ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS hora_salida_original  VARCHAR;
+ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS hora_llegada_original VARCHAR;
+UPDATE vuelo SET hora_salida_original  = hora_salida  WHERE hora_salida_original  IS NULL;
+UPDATE vuelo SET hora_llegada_original = hora_llegada WHERE hora_llegada_original IS NULL;
+
 -- ── Altas EN CALIENTE (efímeras por corrida) ─────────────────────────────────────────
 -- Vuelos/aeropuertos agregados EN VIVO por el operador durante una corrida. Existen como fila
 -- real (las FKs de tramo_ruta/tramo_inyectado/cancelacion_vuelo exigen que el vuelo exista),

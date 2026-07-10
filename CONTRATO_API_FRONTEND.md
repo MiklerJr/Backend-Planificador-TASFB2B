@@ -173,6 +173,62 @@ parámetro extra):
 > y **detiene la corrida** en el siguiente bloque (`utilización > 100%`). Es el comportamiento esperado.
 > Además, la utilización reportada puede exceder el 100% mientras dura la sobrecarga: el front debe tolerarlo.
 
+### Modificación de horarios de vuelo (solo EN FRÍO) — prueba E1 "día a día"
+Ajusta la hora de salida/llegada (y por ende la duración) de un vuelo **existente** del dataset. Pensado
+para adaptar los horarios de los vuelos del caso "según la hora de presentación", **antes de iniciar** la
+corrida. A diferencia de la capacidad, el horario **solo se modifica sin simulación en curso** (con un job
+activo devuelve `409`): en caliente el equivalente seguro es **cancelar el vuelo-día + `agregar-vuelo`**
+con el horario nuevo.
+
+| Método | Ruta | Query | Éxito | Errores |
+|---|---|---|---|---|
+| PUT | `/configuracion/vuelos/{idVuelo}/horario` | `salida` y/o `llegada` (LOCAL `"HH:mm"`, al menos una) | `200` `{idVuelo, aplicado:true}` | `400` hora malformada / sin params, `404` id inexistente, `409` simulación en curso |
+| POST | `/configuracion/vuelos/restaurar-horarios` | — | `200` `{restaurados:N}` | `409` simulación en curso |
+
+> ⚠ **El `idVuelo` se RENOMBRA si cambia la salida**: el invariante del sistema es
+> `id_vuelo ≡ ORIGEN-DESTINO-HHMM(salida)`. La respuesta trae el **id resultante** en `idVuelo` — el front
+> debe usarlo a partir de ese momento (p. ej. `SPIM-SCEL-0859` con `salida=11:00` pasa a `SPIM-SCEL-1100`).
+> Las horas son **LOCALES** del origen/destino (como el TXT del dataset); la duración UTC la deriva el
+> backend con `floorMod` 24 h (soporta cruces de medianoche y duraciones de 4–13 h).
+>
+> `restaurar-horarios` devuelve el horario **y el id** de todos los vuelos modificados a su valor de
+> fábrica. Es independiente del botón `restaurar` de capacidades.
+>
+> ⚠ **Costo operativo**: modificar un horario **invalida la caché de esqueletos** de ruteo persistida
+> (su huella incluye los horarios), así que el **arranque del siguiente job paga el pre-warm frío**
+> (~13 min en la VM de 2 vCPU). Hazlo con margen antes de la hora de la prueba. La vía *agregar vuelos*
+> (`cargar-vuelos-txt`, en caliente) **no** tiene este costo.
+
+### 🟦 Resumen para el front — manejo de los cambios E1 «día a día»
+
+Checklist accionable de qué cambia para el front en la prueba de operación día a día. **Regla de oro:
+lo que es EN FRÍO va ANTES de iniciar el job; lo EN CALIENTE va DESPUÉS (requiere job activo).**
+
+1. **Hora de los envíos — dos vías, dos convenciones (no mezclar):**
+   - `POST /jobs/{id}/registrar-envios` (JSON, data-entry manual): el **front convierte a UTC** y manda
+     `fechaHoraRegistro` en UTC. *Sin cambios respecto de hoy.*
+   - `POST /jobs/{id}/cargar-envios-txt` (archivos por sede): el archivo trae **hora LOCAL de la sede** y
+     **el backend la convierte** con el `gmt` del ICAO origen. El front **NO** debe pre-convertir el TXT.
+     Verificable en `/estado.enviosInyectados[].readyTimeUtc` (p. ej. VIDP +5, `02:00` local → `…T21:00`
+     del día anterior en UTC).
+2. **`PUT …/vuelos/{id}/horario` renombra el id**: tras un cambio de salida, **usa el `idVuelo` que
+   devuelve la respuesta** (`SPIM-SCEL-0859` → `SPIM-SCEL-1100`). Si el front cachea la lista de vuelos,
+   debe refrescar ese id. Solo EN FRÍO (con job activo → `409`). Hazlo **antes de iniciar** y con margen
+   (dispara pre-warm frío en el arranque del job).
+3. **`POST …/cargar-vuelos-txt` responde `202 = ENCOLADO`, no aplicado.** El front debe:
+   - Renderizar `detalleDescartados` (líneas ignoradas con `linea`/`contenido`/`motivo`) para el operador.
+     Los **duplicados y basura NO son error del lote** — el `202` puede traer `encolados:0`.
+   - **Confirmar la aplicación con polling de `/estado`** (`vuelosAgregados` / `altasVueloNoAplicadas`):
+     los vuelos aplican en la **siguiente frontera de bloque**, que en E1 **enVivo llega en tiempo real**
+     (hasta `Sa` minutos después). No asumir aplicación inmediata tras el `202`.
+4. **Capacidad 999 y restauraciones son EN FRÍO** (sin job): `PUT …/aeropuertos/{icao}/capacidad?valor=999`
+   antes de iniciar; `POST …/capacidades/restaurar` y `POST …/vuelos/restaurar-horarios` para volver a
+   fábrica (ambos `409` con job en curso).
+5. **Los envíos inyectados usan id sintético `INV-…`** (el del TXT/JSON se descarta); son por-corrida (no
+   entran al dataset maestro) y las altas en caliente se **revierten al iniciar la corrida siguiente**.
+
+Secuencia operativa completa en `docs/runbook-e1-dia-a-dia.md` (verificada e2e).
+
 ### `GET /escenarios`
 Catálogo con defaults (Sa, Ta, K por escenario), motores soportados y endpoints de cada escenario.
 No requiere hardcodear nada en el front.
@@ -291,11 +347,32 @@ Campos del formulario:
 | `registrador` | opcional | se aplica a todos los ítems |
 | `sede` | opcional | se aplica a todos los ítems |
 
-- **Tiempos del TXT en UTC**; se parsea sin tocar la BD y se delega en la **misma** cola/validación/
-  persistencia que el registro manual.
+- ⚠ **La fecha-hora del TXT está en hora LOCAL de la sede origen** (no en UTC): el **backend la convierte
+  a UTC** con el `gmt` del ICAO origen (`registroUtc = local − offset`), como los TXT del dataset maestro.
+  Esto difiere de `registrar-envios` (JSON), donde el **front** envía `fechaHoraRegistro` ya en UTC. Se
+  parsea sin tocar la BD y se delega en la **misma** cola/validación/persistencia que el registro manual.
 - **202** → `{ "jobId", "encolado": true, "encolados": N }`.
 - **404** job inexistente · **409** job no activo · **400** faltan archivos / sin ICAO derivable /
-  ningún envío válido / algún envío inválido.
+  **ICAO origen desconocido** / ningún envío válido / algún envío inválido.
+
+#### `POST /jobs/{jobId}/cargar-vuelos-txt` — carga TXT de planes de vuelo **en caliente** (`multipart/form-data`)
+Alta masiva de vuelos adicionales durante la corrida (equivalente por lotes de `agregar-vuelo`, ver §5).
+Un solo campo de formulario `archivos` (**1..N**), cada TXT con el formato del dataset
+`ORIG-DEST-HH:MM-HH:MM-CAPACIDAD` por línea, **horas LOCALES**.
+
+- Líneas de **comentario** (`*`, `**`, `//`), vacías y la **cabecera** `ORIG-DEST` se ignoran en silencio.
+- Cada línea válida se **encola** por la misma tubería que `agregar-vuelo`: vuelo **efímero** por corrida,
+  **recurrente diario**, aplicado en la **frontera del siguiente bloque** (≤ `Sa`). Se ve en `/estado`
+  (`vuelosAgregados` / `altasVueloNoAplicadas`).
+- **Duplicados tolerados** ("no se preocupe si coincide con un vuelo existente") y líneas inválidas se
+  **descartan por línea** y se reportan — **no abortan** el lote. Por eso el `202` puede traer `encolados:0`.
+- **202** → `{ "jobId", "encolado": true, "encolados": N, "descartados": M, "detalleDescartados": [ { "archivo", "linea", "contenido", "motivo" } ] }`.
+- **404** job inexistente · **409** job no activo (`{ "encolado": false, "motivo" }`) · **400** faltan
+  archivos / ninguna línea de vuelo en los archivos.
+
+> Modificar el horario de un vuelo **ya existente** es otra cosa (ver `PUT /configuracion/vuelos/{id}/horario`
+> arriba): eso es **EN FRÍO** (antes de iniciar) y **renombra** el id; `cargar-vuelos-txt` **agrega** vuelos
+> nuevos **en caliente** sin tocar la caché de esqueletos.
 
 #### Concurrencia y husos (garantías del backend)
 - Varios registradores POST en paralelo: cada request en su hilo; la validación es previa al encolado y
@@ -304,8 +381,10 @@ Campos del formulario:
   capacidades). Los ids `INV-bloque-n` los asigna el worker → sin colisión.
 - Cada envío lleva su ICAO origen; el orden temporal correcto entre sedes lo da el eje UTC común. Los
   husos los expone `GET /aeropuertos` (`gmt`) y son los **enteros del dataset**: Lima −5, Buenos Aires
-  −3, Copenhague **+2**, Delhi **+5**. El front toma ese `gmt`, convierte la hora local del registrador
-  a UTC y el backend la ordena en el mismo reloj — front y back usan exactamente el mismo offset.
+  −3, Copenhague **+2**, Delhi **+5**. En la vía **JSON** (`registrar-envios`) el front toma ese `gmt`,
+  convierte la hora local del registrador a UTC y el backend la ordena en el mismo reloj — front y back
+  usan exactamente el mismo offset. En la vía **TXT** (`cargar-envios-txt`) la hora del archivo es LOCAL
+  y **el backend** aplica ese mismo `gmt` para convertirla a UTC.
 
 ---
 

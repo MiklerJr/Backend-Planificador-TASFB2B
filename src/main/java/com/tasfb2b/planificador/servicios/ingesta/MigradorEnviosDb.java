@@ -159,8 +159,14 @@ public class MigradorEnviosDb {
         return new int[]{ insertados, descartados };
     }
 
+    /**
+     * La fecha-hora de cada línea (YYYYMMDD-HH-MM) está en hora LOCAL del aeropuerto origen (misma
+     * convención que los TXT del dataset maestro); se convierte a UTC con {@code offsetOrigenHoras}
+     * (registroUtc = local − offset) porque la inyección en vivo consume tiempos UTC.
+     */
     public static List<InyeccionEnviosRequest.Item> parsearEnviosParaInyeccion(
-            Reader reader, String origenIcao, String registrador, String sede) throws IOException {
+            Reader reader, String origenIcao, int offsetOrigenHoras,
+            String registrador, String sede) throws IOException {
         BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
         List<InyeccionEnviosRequest.Item> items = new ArrayList<>();
         String linea;
@@ -174,7 +180,7 @@ public class MigradorEnviosDb {
             try {
                 int hh = Integer.parseInt(horaStr), mm = Integer.parseInt(minStr);
                 int maletas = Integer.parseInt(maletasStr), idCliente = Integer.parseInt(clienteStr);
-                LocalDateTime registroUtc = LocalDateTime.of(
+                LocalDateTime registroLocal = LocalDateTime.of(
                         Integer.parseInt(fechaRaw.substring(0, 4)),
                         Integer.parseInt(fechaRaw.substring(4, 6)),
                         Integer.parseInt(fechaRaw.substring(6, 8)), hh, mm);
@@ -182,7 +188,7 @@ public class MigradorEnviosDb {
                 it.setOrigen(origenIcao);
                 it.setDestino(destino);
                 it.setCantidad(maletas);
-                it.setFechaHoraRegistro(registroUtc);
+                it.setFechaHoraRegistro(registroLocal.minusHours(offsetOrigenHoras));
                 it.setClienteId(idCliente);
                 it.setRegistrador(registrador);
                 it.setSede(sede);

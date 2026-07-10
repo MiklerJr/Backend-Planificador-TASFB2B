@@ -4,6 +4,8 @@ import com.tasfb2b.planificador.servicios.ConfiguracionCapacidadesService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/planificador/configuracion")
 public class ConfiguracionController {
@@ -38,5 +40,38 @@ public class ConfiguracionController {
     public ResponseEntity<Void> restaurarCapacidades() {
         capacidades.restaurarCapacidadesAFabrica();
         return ResponseEntity.ok().build();
+    }
+
+    /** PUT .../vuelos/{idVuelo}/horario?salida=HH:mm&llegada=HH:mm (horas LOCALES; al menos una) →
+     *  200 / 400 (hora malformada o sin parámetros) / 404 (id inexistente) / 409 (simulación en curso:
+     *  el horario solo se modifica EN FRÍO; en caliente usar cancelar-vuelo + agregar-vuelo).
+     *  Persistente hasta restaurar-horarios. El idVuelo se RENOMBRA si cambia la salida
+     *  (el invariante es id_vuelo ≡ ORIGEN-DESTINO-HHMM de la salida vigente): la respuesta trae
+     *  {@code idVuelo} con el id resultante para que el front lo use. Acepta el id con o sin los dos puntos. */
+    @PutMapping("/vuelos/{idVuelo}/horario")
+    public ResponseEntity<Map<String, Object>> actualizarHorarioVuelo(
+            @PathVariable String idVuelo,
+            @RequestParam(required = false) String salida,
+            @RequestParam(required = false) String llegada) {
+        try {
+            String nuevoId = capacidades.actualizarHorarioVuelo(idVuelo, salida, llegada);
+            return nuevoId != null
+                    ? ResponseEntity.ok(Map.of("idVuelo", nuevoId, "aplicado", true))
+                    : ResponseEntity.notFound().build();
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(409).body(Map.of("aplicado", false, "motivo", ex.getMessage()));
+        }
+    }
+
+    /** POST .../vuelos/restaurar-horarios → 200 {restaurados:N} / 409 (simulación en curso). Devuelve los
+     *  horarios de TODOS los vuelos a su valor original de fábrica (BD + RAM) e invalida el grafo. */
+    @PostMapping("/vuelos/restaurar-horarios")
+    public ResponseEntity<Map<String, Object>> restaurarHorariosVuelos() {
+        try {
+            int restaurados = capacidades.restaurarHorariosVuelosAFabrica();
+            return ResponseEntity.ok(Map.of("restaurados", restaurados));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(409).body(Map.of("restaurados", 0, "motivo", ex.getMessage()));
+        }
     }
 }

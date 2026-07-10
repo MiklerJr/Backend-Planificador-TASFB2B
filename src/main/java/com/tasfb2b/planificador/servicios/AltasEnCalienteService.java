@@ -17,6 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -408,6 +411,48 @@ public class AltasEnCalienteService {
             throw new ParametroInvalidoException(
                     campo + " inválida: '" + valor + "' (formato esperado \"HH:mm\")");
         }
+    }
+
+    /** Resultado por línea del TXT de vuelos: o el alta parseada o el motivo del descarte. */
+    public record LineaVueloTxt(int numeroLinea, String contenido,
+                                AltaVueloRequest alta, String motivoDescarte) { }
+
+    /**
+     * Parsea un TXT de planes de vuelo (formato del dataset: ORIG-DEST-HH:MM-HH:MM-CAPACIDAD, horas
+     * LOCALES) a altas EN CALIENTE. Ignora en silencio líneas vacías, comentarios ("*"/"**" — formato
+     * del curso — y "//") y la cabecera "ORIG-DEST"; las malformadas se devuelven con motivo para que
+     * el llamador las reporte sin abortar el lote. La validación profunda (formato de horas, ICAO
+     * existentes, duplicados) la hace la tubería de encolado, no este parser.
+     */
+    public static List<LineaVueloTxt> parsearAltasVueloTxt(Reader reader) throws IOException {
+        BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
+        List<LineaVueloTxt> lineas = new ArrayList<>();
+        String linea;
+        int n = 0;
+        while ((linea = br.readLine()) != null) {
+            n++;
+            String s = linea.replace(String.valueOf((char) 0xFEFF), "").trim();   // BOM defensivo (TXT del curso)
+            if (s.isEmpty() || s.startsWith("*") || s.startsWith("//") || s.contains("ORIG-DEST"))
+                continue;
+            String[] parts = s.split("[\\s-]+");
+            if (parts.length < 5) {
+                lineas.add(new LineaVueloTxt(n, s, null,
+                        "formato inválido (se esperan 5 campos ORIG-DEST-HH:MM-HH:MM-CAPACIDAD)"));
+                continue;
+            }
+            if (!parts[4].matches("\\d+")) {
+                lineas.add(new LineaVueloTxt(n, s, null, "capacidad no numérica: '" + parts[4] + "'"));
+                continue;
+            }
+            AltaVueloRequest alta = new AltaVueloRequest();
+            alta.setOrigen(parts[0].trim());
+            alta.setDestino(parts[1].trim());
+            alta.setHoraSalida(parts[2].trim());
+            alta.setHoraLlegada(parts[3].trim());
+            alta.setCapacidad(Integer.parseInt(parts[4]));
+            lineas.add(new LineaVueloTxt(n, s, alta, null));
+        }
+        return lineas;
     }
 
     private boolean existeIdVuelo(String idVuelo) {
