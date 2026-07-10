@@ -27,6 +27,7 @@ import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
 import com.tasfb2b.planificador.utilidades.MapeadorAlgoritmo;
 import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import com.tasfb2b.planificador.utilidades.CalculadorEstadoEnvio;
+import com.tasfb2b.planificador.utilidades.FragmentadorEnvios;
 import com.tasfb2b.planificador.utilidades.analizador.AnalizadorVuelos;
 import com.tasfb2b.planificador.utilidades.FormatoSimulacion;
 import lombok.extern.slf4j.Slf4j;
@@ -533,11 +534,15 @@ public class PlanificadorService {
     }
 
     private int aplicarInyeccionesEnvio(EstadoJob job, List<InyeccionEnviosRequest.Item> buffer,
-                                        ContextoTemporal ctx, GestorBacklog backlog) {
+                                        ContextoTemporal ctx, GestorBacklog backlog, Grafo graph) {
         if (job == null || backlog == null) return 0;
         InyeccionEnviosRequest.Item it;
         while ((it = job.getInyeccionesPendientes().poll()) != null) buffer.add(it);
         if (buffer.isEmpty()) return 0;
+        // Mismo umbral que procesarBloque (sobre el grafo del run): el caso E1 del profesor (cantidad >
+        // capacidad de avión) entra por aquí cuando la corrida es enVivo / hay inyección/carga TXT.
+        int umbralFrag = FragmentadorEnvios.umbralEfectivo(props.getFragmentacion(), graph);
+        int maxSublotes = props.getFragmentacion().getMaxSublotes();
         List<EnvioInyectadoInfo> liberados = new ArrayList<>();
         Iterator<InyeccionEnviosRequest.Item> itr = buffer.iterator();
         int n = 0;
@@ -555,7 +560,11 @@ public class PlanificadorService {
                     o.getCodigo(), d.getCodigo(), readyEff);
             b.setSintetico(true);
             if (x.getClienteId() != null) b.setClienteId(x.getClienteId());
-            backlog.agregarSinRuta(b);                                       // el flujo estándar lo recoge
+            // Fragmenta si supera el umbral: cada sub-lote entra al backlog, pero se registra UNA
+            // sola fila envio_inyectado por el padre (id sintético) — su cantidad total.
+            for (LoteEnvio sub : FragmentadorEnvios.fragmentar(b, umbralFrag, maxSublotes)) {
+                backlog.agregarSinRuta(sub);                                 // el flujo estándar lo recoge
+            }
             EnvioInyectadoInfo info = new EnvioInyectadoInfo(id, o.getCodigo(), d.getCodigo(),
                     x.getCantidad(), x.getClienteId(), sla, readyEff.toString(), ctx.bloqueIdx,
                     x.getRegistrador(), x.getSede());
@@ -1042,7 +1051,7 @@ public class PlanificadorService {
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
                     graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
-            if (job != null) aplicarInyeccionesEnvio(job, bufferInyecciones, ctx, backlog);
+            if (job != null) aplicarInyeccionesEnvio(job, bufferInyecciones, ctx, backlog, graph);
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs, false, enVivo);
 
@@ -1572,7 +1581,12 @@ public class PlanificadorService {
         List<Envio> maletasVentana = demandaEnVivo
                 ? Collections.emptyList()
                 : cargadorDatos.getMaletasEnRango(ctx.scInicio, ctx.scFin);
-        List<LoteEnvio> bloqueBatches = mapper.mapearALotes(maletasVentana);
+        // Umbral de fragmentación de ESTE bloque: sobre el grafo del run (incluye overrides de
+        // capacidad EN CALIENTE y altas append-only). O(nº aristas), trivial. Un envío cuya cantidad
+        // supera el umbral se parte en sub-lotes AL NACER (mismos ids/cantidades en ambos mapeos).
+        int umbralFrag = FragmentadorEnvios.umbralEfectivo(props.getFragmentacion(), graph);
+        int maxSublotes = props.getFragmentacion().getMaxSublotes();
+        List<LoteEnvio> bloqueBatches = mapper.mapearALotes(maletasVentana, umbralFrag, maxSublotes);
 
         List<LoteEnvio> afectadosCrudos = new ArrayList<>();
         if (backlog != null) {
@@ -1595,7 +1609,7 @@ public class PlanificadorService {
             if (!normales.isEmpty()) {
                 bloqueBatches = new ArrayList<>(bloqueBatches.size() + normales.size());
                 bloqueBatches.addAll(normales);
-                bloqueBatches.addAll(mapper.mapearALotes(maletasVentana));
+                bloqueBatches.addAll(mapper.mapearALotes(maletasVentana, umbralFrag, maxSublotes));
             }
         }
 
@@ -1988,39 +2002,49 @@ public class PlanificadorService {
     }
 
     public EnvioEstadoResponse buscarEstadoEnvio(String jobId, String idEnvio, LocalDateTime instante) {
-        AsignacionMaleta asig = construirAsignacionDesdeBd(jobId, idEnvio);
-        if (asig == null) asig = construirAsignacionSintetica(jobId, idEnvio);   // inyectados/registrados EN VIVO
-        if (asig == null) return null;
+        List<AsignacionMaleta> asigs = construirAsignacionesDesdeBd(jobId, idEnvio);
+        if (asigs.isEmpty()) asigs = construirAsignacionesSinteticas(jobId, idEnvio);  // inyectados/registrados EN VIVO
+        if (asigs.isEmpty()) return null;
         LocalDateTime ahora = (instante != null) ? instante : ahoraDelJob(jobId);
-        EnvioEstadoResponse resp = CalculadorEstadoEnvio.calcular(asig, ahora);
+        // Un solo (sub)lote → estado directo (envío no fragmentado o consulta por id de sub-lote);
+        // varios → envío fragmentado consultado por su id de padre → estado agregado + fragmentos[].
+        EnvioEstadoResponse resp = asigs.size() == 1
+                ? CalculadorEstadoEnvio.calcular(asigs.get(0), ahora)
+                : CalculadorEstadoEnvio.agregarFragmentos(asigs, ahora);
         resp.setInstanteDerivadoDelJob(instante == null && ahora != null);
         return resp;
     }
 
-    private AsignacionMaleta construirAsignacionSintetica(String jobId, String idEnvio) {
-        if (idEnvio == null || !idEnvio.startsWith("INV-")) return null;
+    private List<AsignacionMaleta> construirAsignacionesSinteticas(String jobId, String idEnvio) {
+        if (idEnvio == null || !idEnvio.startsWith("INV-")) return List.of();
         EstadoJob job = getJob(jobId);
         if (job != null) {
-            AsignacionMaleta enRam = job.getRutaSintetica(idEnvio);
-            if (enRam != null) return enRam;
+            List<AsignacionMaleta> enRam = job.getRutasSinteticasFamilia(idEnvio);
+            if (!enRam.isEmpty()) return ordenarPorFragmento(enRam);
         }
-        if (!persistencia.reflejaEnBd(jobId)) return null;
+        if (!persistencia.reflejaEnBd(jobId)) return List.of();
         Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
-        return solucionBdReader.buscarPorEnvioInyectado(idEnvio, indiceVuelo)
+        return ordenarPorFragmento(solucionBdReader.buscarPorEnvioInyectado(idEnvio, indiceVuelo).stream()
                 .map(b -> buildAsignaciones(List.of(b)).get(0))
-                .orElse(null);
+                .collect(Collectors.toList()));
     }
 
-    private AsignacionMaleta construirAsignacionDesdeBd(String jobId, String idEnvio) {
-        if (!persistencia.reflejaEnBd(jobId)) return null;
+    private List<AsignacionMaleta> construirAsignacionesDesdeBd(String jobId, String idEnvio) {
+        if (!persistencia.reflejaEnBd(jobId)) return List.of();
         Grafo graph = motorCache.obtenerGrafo(
                 () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
         Map<String, Arista> indiceVuelo = solucionBdReader.construirIndiceVuelo(graph);
-        return solucionBdReader.buscarPorEnvio(idEnvio, indiceVuelo)
+        return ordenarPorFragmento(solucionBdReader.buscarPorEnvio(idEnvio, indiceVuelo).stream()
                 .map(b -> buildAsignaciones(List.of(b)).get(0))
-                .orElse(null);
+                .collect(Collectors.toList()));
+    }
+
+    /** Ordena las asignaciones de una familia por número de fragmento (estable para la respuesta). */
+    private static List<AsignacionMaleta> ordenarPorFragmento(List<AsignacionMaleta> asigs) {
+        asigs.sort(Comparator.comparingInt(a -> FragmentadorEnvios.numeroFragmentoDe(a.getBatchId())));
+        return asigs;
     }
 
     private LocalDateTime ahoraDelJob(String jobId) {
@@ -2126,6 +2150,11 @@ public class PlanificadorService {
             asig.setOrigen(b.getCodigoOrigen());
             asig.setDestino(b.getCodigoDestino());
             asig.setCantidad(b.getCantidad());
+            if (b.esFragmento()) {                 // sub-lote de un envío fragmentado
+                asig.setIdEnvioPadre(b.getIdPadre());
+                asig.setFragmento(b.getFragmento());
+                asig.setTotalFragmentos(b.getTotalFragmentos());
+            }
             asig.setEnrutada(enrutada);
             asig.setCumpleSLA(b.isCumpleSLA());
             asig.setRutaVuelos(tieneTramos

@@ -656,6 +656,15 @@ Devuelve un `EnvioEstadoResponse`: la `asignacion` (mismo esquema que el campo `
 > **Estado de cada tramo** (`tramos[].estado`): `COMPLETADO` (`llegadaUtc <= ahora`), `EN_CURSO`
 > (`salidaUtc <= ahora < llegadaUtc`), `PENDIENTE` (`salidaUtc > ahora`).
 >
+> **Envío FRAGMENTADO (caso E1: cantidad > capacidad de avión).** Si `idEnvio` es el id de un envío
+> que se fragmentó (p. ej. `SKBO-12345`), la respuesta trae un campo extra **`fragmentos`**: un array de
+> `EnvioEstadoResponse`, uno por sub-lote (cada uno con su `asignacion` de `batchId` `"...-Fn"`). En ese
+> caso los campos de nivel superior son **agregados**: `estado` = el del sub-lote **menos avanzado**
+> (`ENTREGADO` solo si todos lo están), `tramosTotales`/`tramosCompletados` = **sumas**, `llegadaFinalUtc`
+> = el **máximo**, y `asignacion` va **omitida** (cada fragmento lleva la suya). Si consultas por el id de
+> UN sub-lote (`SKBO-12345-F2`) obtienes la respuesta normal de ese fragmento (sin `fragmentos`). Un envío
+> **no fragmentado no lleva `fragmentos`** → respuesta byte-idéntica a antes.
+>
 > **Flujo recomendado.** El front busca el envío primero en su histórico local (los bloques que ya
 > recibió por `/bloques` o `/asignaciones`); **solo si no lo tiene**, llama a este endpoint.
 > - **`200`** con el `EnvioEstadoResponse`.
@@ -827,21 +836,36 @@ scMinutos           : int     // Sc = K·Sa
 > sobrescribir con la asignación del bloque más reciente; los bloques antiguos no se corrigen
 > retroactivamente.
 
+> **Fragmentación y métricas.** Cuando un envío se fragmenta (ver `AsignacionMaleta` abajo), sus
+> sub-lotes cuentan como **entradas independientes** en las métricas de bloque (`procesadas`,
+> `enrutadas`, `onTime`, `sinRuta`, y sus `*Acum`): un envío partido en 3 sub-lotes suma 3, no 1.
+> `maletasIndividuales` (suma de `cantidad`) sí es exacta. Para "número de envíos lógicos" agrupa por
+> `idEnvioPadre` en el front. Los envíos del dataset (cantidades 1-3) nunca se fragmentan → sin drift.
+
 ### `AsignacionMaleta`
 ```
-batchId, origen, destino : string
-cantidad                 : int   // maletas físicas del envío
+batchId, origen, destino : string    // fragmentado: batchId = id del sub-lote "<idEnvio>-F<n>"
+cantidad                 : int   // maletas físicas de ESTE (sub)lote
 enrutada, cumpleSLA      : bool
 rutaVuelos               : string[]   // ICAOs/ids de la ruta
 tramos                   : TramoRuta[]
 registroLocal            : string (ISO sin offset) // nacimiento del envío, hora local del origen
 registroUtc              : string (ISO sin offset) // mismo nacimiento en UTC real (offset del origen aplicado)
+idEnvioPadre             : string  (opcional)  // SOLO si fragmentado: id del envío original
+fragmento                : int     (opcional)  // SOLO si fragmentado: 1..totalFragmentos
+totalFragmentos          : int     (opcional)  // SOLO si fragmentado: nº de sub-lotes del padre
 ```
 > `registro*` se devuelve **siempre** (esté o no enrutado el envío). Es el instante desde el
 > que las maletas existen esperando en el aeropuerto de origen, antes de su primer vuelo.
 > **`enrutada` = el envío llegó/llegará a su DESTINO final**, no "tiene tramos". Con Fase 2 un envío
 > puede estar **varado** en una escala (`enrutada:false` con `tramos[]` de los vuelos ya volados): para
 > "¿tiene algún tramo dibujable?" usa `tramos.length`, no `enrutada`.
+> **Fragmentación (caso E1: cantidad > capacidad de avión).** Un envío cuya cantidad supera la
+> capacidad de los aviones se parte en **sub-lotes** que se rutean por separado. Cada sub-lote llega
+> como una `AsignacionMaleta` con `batchId = "<idEnvio>-F<n>"` (clave única → la regla "la última gana"
+> por `batchId` sigue intacta) y los tres campos `idEnvioPadre`/`fragmento`/`totalFragmentos`. Un envío
+> **no fragmentado no lleva esos campos** (ausentes) → JSON byte-idéntico a antes. Para reagrupar los
+> sub-lotes de un mismo envío en la UI, agrupa por `idEnvioPadre` (o usa `GET /envios/{idEnvioPadre}`).
 
 ### `TramoRuta`
 ```

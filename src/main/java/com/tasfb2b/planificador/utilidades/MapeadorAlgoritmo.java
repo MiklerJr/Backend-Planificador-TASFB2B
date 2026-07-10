@@ -13,7 +13,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Component
 public class MapeadorAlgoritmo {
@@ -86,9 +85,21 @@ public class MapeadorAlgoritmo {
         return edge;
     }
 
+    /** Mapeo sin fragmentación (comportamiento previo exacto): delega con umbral infinito. */
     public List<LoteEnvio> mapearALotes(List<Envio> maletas) {
-        return maletas.stream().map(m -> {
+        return mapearALotes(maletas, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
 
+    /**
+     * Mapea la demanda a lotes fragmentando AL NACER los envíos cuya cantidad supera {@code umbral}
+     * (caso E1: cantidad &gt; capacidad de avión). Con {@code umbral = Integer.MAX_VALUE} nadie se
+     * fragmenta (equivale al mapeo previo). El reparto es puro y determinista
+     * ({@link FragmentadorEnvios#fragmentar}), imprescindible porque procesarBloque re-mapea la demanda
+     * dos veces por bloque y ambas pasadas deben producir ids/cantidades idénticos.
+     */
+    public List<LoteEnvio> mapearALotes(List<Envio> maletas, int umbral, int maxSublotes) {
+        List<LoteEnvio> out = new ArrayList<>();
+        for (Envio m : maletas) {
             int offset = m.getAeropuertoOrigen().getOffsetHorario();
             LocalDateTime readyTimeUtc = m.getFechaHoraRegistro().minusHours(offset);
             LoteEnvio b = new LoteEnvio(
@@ -100,7 +111,8 @@ public class MapeadorAlgoritmo {
                     readyTimeUtc
             );
             if (m.getCliente() != null) b.setClienteId(m.getCliente().getId());
-            return b;
-        }).collect(Collectors.toList());
+            out.addAll(FragmentadorEnvios.fragmentar(b, umbral, maxSublotes));
+        }
+        return out;
     }
 }

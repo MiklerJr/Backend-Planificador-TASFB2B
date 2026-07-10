@@ -20,6 +20,17 @@ public class PlanificadorProperties {
     private Consulta     consulta     = new Consulta();
     private Cache        cache        = new Cache();
     private Operativo    operativo    = new Operativo();
+    private Fragmentacion fragmentacion = new Fragmentacion();
+
+    @Data
+    public static class Fragmentacion {
+        /** false = comportamiento actual exacto (un envío nunca se fragmenta). */
+        private boolean habilitada = true;
+        /** Maletas máximas por sub-lote. 0 = auto = max(capacidad de avión) del grafo de la corrida. */
+        private int maxMaletasPorSublote = 0;
+        /** Tope de sub-lotes por envío (anti-abuso ante inyecciones con cantidad absurda). */
+        private int maxSublotes = 64;
+    }
 
     @Data
     public static class Operativo {

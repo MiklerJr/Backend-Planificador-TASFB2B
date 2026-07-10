@@ -117,3 +117,13 @@ planificador:
 
   cache:
     skeleton-file: data/skeleton-cache.bin
+
+  # ── Fragmentación de envíos en sub-lotes (caso E1: cantidad > capacidad de avión) ──
+  # Un envío con cantidad mayor que la capacidad máxima de los aviones jamás encuentra ruta y
+  # rebota en el backlog hasta vencer su SLA (dispara el colapso backlog_definitivo). Al fragmentarlo
+  # AL NACER en N sub-lotes independientes, cada uno cabe y se rutea por separado; el motor no se toca.
+  # Sólo actúa si cantidad > umbral ⇒ no-op para los ~9,5 M de envíos del dataset (cantidades 001-003).
+  fragmentacion:
+    habilitada: true                 # false = comportamiento actual exacto
+    max-maletas-por-sublote: 150     # 0 = auto = max(capacidad de avión) del grafo de la corrida
+    max-sublotes: 64                 # tope de sub-lotes por envío (anti-abuso ante cantidad absurda)

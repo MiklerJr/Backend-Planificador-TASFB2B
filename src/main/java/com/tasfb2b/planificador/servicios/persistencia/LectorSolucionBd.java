@@ -12,6 +12,7 @@ import com.tasfb2b.planificador.modelo.datos.TipoEnvio;
 import com.tasfb2b.planificador.modelo.datos.Vuelo;
 import com.tasfb2b.planificador.utilidades.CargadorDatos;
 import com.tasfb2b.planificador.utilidades.FormatoSimulacion;
+import com.tasfb2b.planificador.utilidades.FragmentadorEnvios;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -25,7 +26,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 @Slf4j
@@ -64,8 +64,9 @@ public class LectorSolucionBd {
                                 Consumer<LoteEnvio> consumer) {
         final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
         StringBuilder sql = new StringBuilder()
-                .append("SELECT r.id_ruta, r.id_envio, r.cumple_sla, ")
-                .append("       e.icao_origen, e.icao_destino, e.cantidad_maletas, e.fecha_hora_registro, ")
+                .append("SELECT r.id_ruta, r.id_envio, r.cumple_sla, r.sub_lote, r.total_sub_lotes, ")
+                .append("       e.icao_origen, e.icao_destino, ")
+                .append("       COALESCE(r.cantidad, e.cantidad_maletas) AS cantidad_maletas, e.fecha_hora_registro, ")
                 .append("       t.numero_orden, t.id_vuelo, t.hora_salida_utc ")
                 .append("FROM ruta_asignada r ")
                 .append("JOIN envio e ON e.id_envio = r.id_envio ")
@@ -107,8 +108,9 @@ public class LectorSolucionBd {
     private void forEachEnrutadoInyectado(Map<String, Arista> indiceVuelo, LocalDateTime desde,
                                           LocalDateTime hasta, Consumer<LoteEnvio> consumer) {
         StringBuilder sql = new StringBuilder()
-                .append("SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, ")
-                .append("       i.icao_origen, i.icao_destino, i.cantidad_maletas, ")
+                .append("SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, r.sub_lote, r.total_sub_lotes, ")
+                .append("       i.icao_origen, i.icao_destino, ")
+                .append("       COALESCE(r.cantidad, i.cantidad_maletas) AS cantidad_maletas, ")
                 .append("       i.ready_time_utc AS fecha_hora_registro, ")
                 .append("       t.numero_orden, t.id_vuelo, t.hora_salida_utc ")
                 .append("FROM ruta_inyectada r ")
@@ -164,8 +166,9 @@ public class LectorSolucionBd {
 
         // 2. Reconstruir cada ruta afectada (datos del envío + todos sus tramos).
         String sqlRutas =
-                "SELECT r.id_ruta, r.id_envio, r.cumple_sla, "
-              + "       e.icao_origen, e.icao_destino, e.cantidad_maletas, e.fecha_hora_registro, "
+                "SELECT r.id_ruta, r.id_envio, r.cumple_sla, r.sub_lote, r.total_sub_lotes, "
+              + "       e.icao_origen, e.icao_destino, "
+              + "       COALESCE(r.cantidad, e.cantidad_maletas) AS cantidad_maletas, e.fecha_hora_registro, "
               + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
               + "FROM ruta_asignada r "
               + "JOIN envio e ON e.id_envio = r.id_envio "
@@ -280,8 +283,12 @@ public class LectorSolucionBd {
 
     public List<VuelosUsadosResponse.VueloUsado> reconstruirVuelosUsados() {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
+        // COUNT(DISTINCT r.id_ruta): cada sub-lote es una ruta activa (con id_envio del padre repetido,
+        // DISTINCT r.id_envio subcontaría). SUM(COALESCE(r.cantidad, e.cantidad_maletas)): la cantidad de
+        // ESTE sub-lote (con e.cantidad_maletas — la del padre — cada sub-lote doblaría las maletas).
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
-                + "COUNT(DISTINCT r.id_envio) AS envios, COALESCE(SUM(e.cantidad_maletas), 0) AS maletas "
+                + "COUNT(DISTINCT r.id_ruta) AS envios, "
+                + "COALESCE(SUM(COALESCE(r.cantidad, e.cantidad_maletas)), 0) AS maletas "
                 + "FROM tramo_ruta t "
                 + "JOIN ruta_asignada r ON r.id_ruta = t.id_ruta AND r.activa "
                 + "JOIN envio e ON e.id_envio = r.id_envio "
@@ -312,8 +319,10 @@ public class LectorSolucionBd {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
         final int offset = Math.max(0, desde);
         final int lim = Math.max(1, limit);
+        // SUM(COALESCE(r.cantidad, e.cantidad_maletas)): la carga real de cada sub-lote (con
+        // e.cantidad_maletas — la del padre — cada sub-lote doblaría las maletas del vuelo).
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
-                + "COALESCE(SUM(e.cantidad_maletas), 0) AS carga "
+                + "COALESCE(SUM(COALESCE(r.cantidad, e.cantidad_maletas)), 0) AS carga "
                 + "FROM tramo_ruta t "
                 + "JOIN ruta_asignada r ON r.id_ruta = t.id_ruta AND r.activa "
                 + "JOIN envio e ON e.id_envio = r.id_envio "
@@ -370,55 +379,72 @@ public class LectorSolucionBd {
         }
     }
 
-    public Optional<LoteEnvio> buscarPorEnvio(String idEnvio, Map<String, Arista> indiceVuelo) {
-        if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
-        String sql =
-                "SELECT r.id_ruta, r.id_envio, r.cumple_sla, "
-              + "       e.icao_origen, e.icao_destino, e.cantidad_maletas, e.fecha_hora_registro, "
-              + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
-              + "FROM ruta_asignada r "
-              + "JOIN envio e ON e.id_envio = r.id_envio "
-              + "JOIN tramo_ruta t ON t.id_ruta = r.id_ruta "
-              + "WHERE r.id_envio = ? AND r.activa "
-              + "ORDER BY t.numero_orden";
-        final Acumulador acc = new Acumulador();
-        jdbc.query(con -> {
-            var ps = con.prepareStatement(sql);
-            ps.setString(1, idEnvio);
-            return ps;
-        }, rs -> {
-            if (acc.idEnvio == null) acc.reset(rs);   // datos del envío: del primer tramo
-            acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
-                    rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
-        });
-        if (acc.idEnvio == null || acc.tramos.isEmpty()) return Optional.empty();
-        return Optional.ofNullable(reconstruir(acc, indiceVuelo));
+    /**
+     * Rutas activas de un envío del dataset. Devuelve una lista porque un envío fragmentado tiene N
+     * sub-lotes (cada uno una ruta activa). Si {@code idEnvio} es un id de sub-lote ("PADRE-Fn") filtra
+     * ese sub-lote; si es el id del padre devuelve TODOS sus sub-lotes; si no está fragmentado, uno.
+     * Segmenta por {@code id_ruta} (agrupar por id_envio fusionaría rutas distintas del mismo padre).
+     */
+    public List<LoteEnvio> buscarPorEnvio(String idEnvio, Map<String, Arista> indiceVuelo) {
+        return buscarRutasActivas(idEnvio, indiceVuelo, false);
     }
 
-    public Optional<LoteEnvio> buscarPorEnvioInyectado(String idEnvio, Map<String, Arista> indiceVuelo) {
-        if (idEnvio == null || idEnvio.isBlank()) return Optional.empty();
-        String sql =
-                "SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, "
-              + "       i.icao_origen, i.icao_destino, i.cantidad_maletas, "
-              + "       i.ready_time_utc AS fecha_hora_registro, "
-              + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
-              + "FROM ruta_inyectada r "
-              + "JOIN envio_inyectado i ON i.id_envio = r.id_envio "
-              + "JOIN tramo_inyectado t ON t.id_ruta_iny = r.id_ruta_iny "
-              + "WHERE r.id_envio = ? AND r.activa "
-              + "ORDER BY t.numero_orden";
+    /** Como {@link #buscarPorEnvio} pero en el carril de los envíos INYECTADOS EN VIVO (INV-*). */
+    public List<LoteEnvio> buscarPorEnvioInyectado(String idEnvio, Map<String, Arista> indiceVuelo) {
+        return buscarRutasActivas(idEnvio, indiceVuelo, true);
+    }
+
+    private List<LoteEnvio> buscarRutasActivas(String idEnvio, Map<String, Arista> indiceVuelo,
+                                               boolean inyectado) {
+        List<LoteEnvio> out = new ArrayList<>();
+        if (idEnvio == null || idEnvio.isBlank()) return out;
+
+        boolean esSub = FragmentadorEnvios.esIdSubLote(idEnvio);
+        String idBd = esSub ? FragmentadorEnvios.idPadreDe(idEnvio) : idEnvio;
+        Integer subFiltro = esSub ? FragmentadorEnvios.numeroFragmentoDe(idEnvio) : null;
+
+        String sql = inyectado
+                ? "SELECT r.id_ruta_iny AS id_ruta, r.id_envio, r.cumple_sla, r.sub_lote, r.total_sub_lotes, "
+                  + "       i.icao_origen, i.icao_destino, "
+                  + "       COALESCE(r.cantidad, i.cantidad_maletas) AS cantidad_maletas, "
+                  + "       i.ready_time_utc AS fecha_hora_registro, "
+                  + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
+                  + "FROM ruta_inyectada r "
+                  + "JOIN envio_inyectado i ON i.id_envio = r.id_envio "
+                  + "JOIN tramo_inyectado t ON t.id_ruta_iny = r.id_ruta_iny "
+                  + "WHERE r.id_envio = ? AND r.activa "
+                  + (subFiltro != null ? "AND r.sub_lote = ? " : "")
+                  + "ORDER BY r.id_ruta_iny, t.numero_orden"
+                : "SELECT r.id_ruta, r.id_envio, r.cumple_sla, r.sub_lote, r.total_sub_lotes, "
+                  + "       e.icao_origen, e.icao_destino, "
+                  + "       COALESCE(r.cantidad, e.cantidad_maletas) AS cantidad_maletas, e.fecha_hora_registro, "
+                  + "       t.numero_orden, t.id_vuelo, t.hora_salida_utc "
+                  + "FROM ruta_asignada r "
+                  + "JOIN envio e ON e.id_envio = r.id_envio "
+                  + "JOIN tramo_ruta t ON t.id_ruta = r.id_ruta "
+                  + "WHERE r.id_envio = ? AND r.activa "
+                  + (subFiltro != null ? "AND r.sub_lote = ? " : "")
+                  + "ORDER BY r.id_ruta, t.numero_orden";
+
+        final long[] idRutaActual = { Long.MIN_VALUE };
         final Acumulador acc = new Acumulador();
         jdbc.query(con -> {
             var ps = con.prepareStatement(sql);
-            ps.setString(1, idEnvio);
+            ps.setString(1, idBd);
+            if (subFiltro != null) ps.setInt(2, subFiltro);
             return ps;
         }, rs -> {
-            if (acc.idEnvio == null) acc.reset(rs);   // datos del envío: del primer tramo
+            long idRuta = rs.getLong("id_ruta");
+            if (idRuta != idRutaActual[0]) {
+                emitir(acc, indiceVuelo, out::add, inyectado);   // cierra el sub-lote anterior
+                idRutaActual[0] = idRuta;
+                acc.reset(rs);
+            }
             acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
                     rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
         });
-        if (acc.idEnvio == null || acc.tramos.isEmpty()) return Optional.empty();
-        return Optional.ofNullable(reconstruir(acc, indiceVuelo, true));
+        emitir(acc, indiceVuelo, out::add, inyectado);           // último sub-lote pendiente
+        return out;
     }
 
     // ── Reconstrucción ──────────────────────────────────────────────────────
@@ -452,8 +478,17 @@ public class LectorSolucionBd {
                 : acc.registroLocal.minusHours(origen.getOffsetHorario());
         int sla = TipoEnvio.derivar(origen, destino) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
 
-        LoteEnvio b = new LoteEnvio(acc.idEnvio, acc.cantidad, sla,
+        // Fragmentación: si es un sub-lote (sub_lote > 0), reconstruir su id "PADRE-Fn" y su identidad.
+        // Imprescindible: sin esto el reenrutado tras cancelación reconstruye con la cantidad del PADRE
+        // (COALESCE ya la corrige a la del sub-lote) y re-persistir escribiría id_envio="PADRE-Fn" → FK rota.
+        String id = acc.subLote > 0 ? acc.idEnvio + FragmentadorEnvios.SUFIJO + acc.subLote : acc.idEnvio;
+        LoteEnvio b = new LoteEnvio(id, acc.cantidad, sla,
                 origen.getCodigo(), destino.getCodigo(), readyUtc);
+        if (acc.subLote > 0) {
+            b.setIdPadre(acc.idEnvio);
+            b.setFragmento(acc.subLote);
+            b.setTotalFragmentos(acc.totalSubLotes);
+        }
 
         acc.tramos.sort((x, y) -> Integer.compare(x.numeroOrden, y.numeroOrden));
         List<Arista> ruta = new ArrayList<>(acc.tramos.size());
@@ -483,6 +518,8 @@ public class LectorSolucionBd {
         String origen;
         String destino;
         int cantidad;
+        int subLote;          // 0 si el envío no está fragmentado
+        int totalSubLotes;
         LocalDateTime registroLocal;
         boolean cumpleSla;
         final List<Tramo> tramos = new ArrayList<>();
@@ -493,6 +530,8 @@ public class LectorSolucionBd {
                 origen = rs.getString("icao_origen");
                 destino = rs.getString("icao_destino");
                 cantidad = rs.getInt("cantidad_maletas");
+                subLote = rs.getInt("sub_lote");
+                totalSubLotes = rs.getInt("total_sub_lotes");
                 registroLocal = rs.getTimestamp("fecha_hora_registro").toLocalDateTime();
                 cumpleSla = rs.getBoolean("cumple_sla");
                 tramos.clear();

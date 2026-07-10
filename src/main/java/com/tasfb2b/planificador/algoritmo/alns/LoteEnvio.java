@@ -16,6 +16,13 @@ public class LoteEnvio {
     private Integer clienteId;
     private boolean sintetico;
 
+    // Fragmentación de envíos (caso E1: cantidad > capacidad de avión). Un envío se parte en N
+    // sub-lotes AL NACER (MapeadorAlgoritmo/inyección); el motor sólo ve LoteEnvio independientes.
+    // idPadre == null y totalFragmentos == 0 ⇒ lote NO fragmentado (semántica previa exacta).
+    private String idPadre;         // id del envío padre; null si no fragmentado
+    private int fragmento;          // 1..N; 0 si no fragmentado
+    private int totalFragmentos;    // N; 0 si no fragmentado
+
     private List<Arista> rutaAsignada;
     private List<Long> salidasAsignadas; // epoch-minutes, paralelo a rutaAsignada
     private boolean cumpleSLA;
@@ -118,6 +125,9 @@ public class LoteEnvio {
                                                codigoOrigen, codigoDestino, tiempoListo);
         clone.setClienteId(this.clienteId);
         clone.setSintetico(this.sintetico);
+        clone.setIdPadre(this.idPadre);
+        clone.setFragmento(this.fragmento);
+        clone.setTotalFragmentos(this.totalFragmentos);
         clone.setRutaAsignada(new ArrayList<>(this.rutaAsignada));
         clone.setSalidasAsignadas(
                 salidasAsignadas != null ? new ArrayList<>(salidasAsignadas) : null);
@@ -149,4 +159,13 @@ public class LoteEnvio {
     public void setClienteId(Integer id)      { this.clienteId = id; }
     public boolean isSintetico()              { return sintetico; }
     public void setSintetico(boolean v)       { this.sintetico = v; }
+    public String getIdPadre()                { return idPadre; }
+    public void setIdPadre(String p)          { this.idPadre = p; }
+    public int getFragmento()                 { return fragmento; }
+    public void setFragmento(int f)           { this.fragmento = f; }
+    public int getTotalFragmentos()           { return totalFragmentos; }
+    public void setTotalFragmentos(int n)     { this.totalFragmentos = n; }
+
+    /** true si este lote es un sub-lote de un envío fragmentado (tiene padre). */
+    public boolean esFragmento()              { return idPadre != null; }
 }

@@ -190,3 +190,26 @@ DELETE FROM envio_inyectado
     OR icao_destino IN (SELECT icao FROM aeropuerto WHERE efimero);
 DELETE FROM vuelo WHERE efimero;
 DELETE FROM aeropuerto WHERE efimero;
+
+-- ── Fragmentación de envíos en sub-lotes (caso E1: cantidad > capacidad de avión) ─────
+-- Un envío con cantidad mayor que la capacidad máxima de los aviones se parte en N sub-lotes AL
+-- NACER; cada sub-lote es una ruta activa propia. sub_lote = 0 ⇒ envío NO fragmentado (semántica
+-- previa exacta). Para fragmentados, id_envio = id del PADRE (conserva la FK a envio) y sub_lote =
+-- 1..total_sub_lotes; cantidad = maletas ruteadas por ESTE sub-lote (COALESCE con la cantidad del
+-- envío/inyección al leer, para las filas viejas donde la columna cantidad quedó NULL).
+ALTER TABLE ruta_asignada  ADD COLUMN IF NOT EXISTS sub_lote        SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_asignada  ADD COLUMN IF NOT EXISTS total_sub_lotes SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_asignada  ADD COLUMN IF NOT EXISTS cantidad        INTEGER;
+ALTER TABLE ruta_inyectada ADD COLUMN IF NOT EXISTS sub_lote        SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_inyectada ADD COLUMN IF NOT EXISTS total_sub_lotes SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_inyectada ADD COLUMN IF NOT EXISTS cantidad        INTEGER;
+
+-- Invariante: como máximo UNA ruta activa por (envío, sub_lote). Reemplaza al índice que sólo
+-- consideraba id_envio (rompería con 2 sub-lotes activos del mismo padre). Para envíos no
+-- fragmentados (sub_lote = 0 constante) equivale al índice anterior.
+DROP INDEX IF EXISTS ux_ruta_activa_por_envio;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_activa_por_envio_sublote
+    ON ruta_asignada (id_envio, sub_lote) WHERE activa;
+DROP INDEX IF EXISTS ux_ruta_iny_activa_por_envio;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_iny_activa_por_envio_sublote
+    ON ruta_inyectada (id_envio, sub_lote) WHERE activa;

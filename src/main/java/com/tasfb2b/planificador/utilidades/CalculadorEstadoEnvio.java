@@ -5,6 +5,7 @@ import com.tasfb2b.planificador.dto.simulacion.EnvioEstadoResponse;
 import com.tasfb2b.planificador.dto.simulacion.TramoRuta;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 public final class CalculadorEstadoEnvio {
@@ -90,6 +91,62 @@ public final class CalculadorEstadoEnvio {
             }
         }
         return r;
+    }
+
+    /**
+     * Estado agregado de un envío FRAGMENTADO a partir del estado de cada sub-lote. El estado global es
+     * el del sub-lote MENOS avanzado (ENTREGADO sólo si todos lo están); {@code tramosTotales} y
+     * {@code tramosCompletados} son sumas; {@code llegadaFinalUtc} es el máximo. La {@code asignacion}
+     * global va null (cada fragmento lleva la suya en {@code fragmentos}).
+     */
+    public static EnvioEstadoResponse agregarFragmentos(List<AsignacionMaleta> asigs, LocalDateTime ahoraUtc) {
+        EnvioEstadoResponse agg = new EnvioEstadoResponse();
+        agg.setInstanteReferencia(ahoraUtc != null ? ahoraUtc.toString() : null);
+
+        List<EnvioEstadoResponse> fragmentos = new ArrayList<>(asigs.size());
+        int tramosTotales = 0, tramosCompletados = 0;
+        String llegadaMax = null;
+        int rankMin = Integer.MAX_VALUE;
+        String estadoMenosAvanzado = E_DESCONOCIDO;
+
+        for (AsignacionMaleta a : asigs) {
+            EnvioEstadoResponse f = calcular(a, ahoraUtc);
+            fragmentos.add(f);
+            tramosTotales += f.getTramosTotales();
+            tramosCompletados += f.getTramosCompletados();
+            llegadaMax = maxIso(llegadaMax, f.getLlegadaFinalUtc());
+            int rank = rangoEstado(f.getEstado());
+            if (rank < rankMin) {
+                rankMin = rank;
+                estadoMenosAvanzado = f.getEstado();
+            }
+        }
+
+        agg.setFragmentos(fragmentos);
+        agg.setTramosTotales(tramosTotales);
+        agg.setTramosCompletados(tramosCompletados);
+        agg.setLlegadaFinalUtc(llegadaMax);
+        agg.setEstado(estadoMenosAvanzado);
+        return agg;
+    }
+
+    /** Orden de avance de un envío (menor = menos avanzado): controla el estado agregado. */
+    private static int rangoEstado(String estado) {
+        if (estado == null) return 0;
+        switch (estado) {
+            case E_DESCONOCIDO: return 0;
+            case E_PROGRAMADO:  return 1;
+            case E_EN_ESCALA:   return 2;
+            case E_EN_VUELO:    return 3;
+            case E_ENTREGADO:   return 4;
+            default:            return 1;
+        }
+    }
+
+    private static String maxIso(String a, String b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.compareTo(b) >= 0 ? a : b;   // ISO-8601 es comparable lexicográficamente
     }
 
     private static LocalDateTime parse(String iso) {

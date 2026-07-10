@@ -359,6 +359,25 @@ public class EstadoJob {
         return idEnvio == null ? null : rutasSinteticas.get(idEnvio);
     }
 
+    /**
+     * Rutas sintéticas de la "familia" de {@code idEnvio}: si es el id de un padre fragmentado, todos
+     * sus sub-lotes {@code INV-...-Fn}; si es un id de sub-lote o un envío no fragmentado, esa única
+     * ruta. Necesario porque {@link #getRutaSintetica} busca por id exacto y no hallaría el padre de un
+     * inyectado fragmentado (cuyas rutas viven bajo los ids de sub-lote).
+     */
+    public List<AsignacionMaleta> getRutasSinteticasFamilia(String idEnvio) {
+        if (idEnvio == null) return List.of();
+        List<AsignacionMaleta> out = new ArrayList<>();
+        for (Map.Entry<String, AsignacionMaleta> e : rutasSinteticas.entrySet()) {
+            String k = e.getKey();
+            if (k.equals(idEnvio)
+                    || com.tasfb2b.planificador.utilidades.FragmentadorEnvios.idPadreDe(k).equals(idEnvio)) {
+                out.add(e.getValue());
+            }
+        }
+        return out;
+    }
+
     public int vuelosUsadosAcumSize() {
         synchronized (vuelosUsadosAcum) { return vuelosUsadosAcum.size(); }
     }
