@@ -63,9 +63,11 @@ CREATE TABLE IF NOT EXISTS ruta_asignada (
     fecha_calculo  TIMESTAMP        NOT NULL DEFAULT now()    -- el INSERT de la persistencia la omite
 );
 -- Índice por envío (lookups por id_envio) + invariante clave: como máximo una ruta activa por
--- envío (lo asume SolucionBdReader / PersistenciaSolucionService).
+-- (envío, sub_lote) (lo asume SolucionBdReader / PersistenciaSolucionService). El índice único
+-- lo crea la sección de fragmentación (más abajo): es COMPUESTO (id_envio, sub_lote) y no puede
+-- vivir aquí porque la columna sub_lote se agrega por ALTER después. NO recrear aquí el índice de
+-- una sola columna: chocaría con BD que ya tengan sub-lotes activos del mismo padre.
 CREATE INDEX        IF NOT EXISTS ix_ruta_por_envio        ON ruta_asignada (id_envio);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_activa_por_envio ON ruta_asignada (id_envio) WHERE activa;
 
 -- ── tramo_ruta ───────────────────────────────────────────────────────────────────────
 -- Un vuelo dentro de una ruta, ordenado por numero_orden (0,1,2...). id_vuelo en formato
@@ -139,9 +141,11 @@ CREATE TABLE IF NOT EXISTS ruta_inyectada (
     llegada_utc    TIMESTAMP,
     fecha_calculo  TIMESTAMP        NOT NULL DEFAULT now()     -- el INSERT de la persistencia la omite
 );
--- Lookups por envío + invariante: como máximo una ruta activa por envío sintético.
+-- Lookups por envío + invariante: como máximo una ruta activa por (envío sintético, sub_lote). El
+-- índice único COMPUESTO lo crea la sección de fragmentación (más abajo), tras el ALTER de sub_lote.
+-- NO recrear aquí el índice de una sola columna: chocaría con BD que ya tengan sub-lotes activos
+-- del mismo padre inyectado (p. ej. dos filas INV-1-0 con sub_lote 1 y 2).
 CREATE INDEX        IF NOT EXISTS ix_ruta_iny_por_envio        ON ruta_inyectada (id_envio);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_iny_activa_por_envio ON ruta_inyectada (id_envio) WHERE activa;
 
 CREATE TABLE IF NOT EXISTS tramo_inyectado (
     id_tramo_iny     INTEGER    GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
