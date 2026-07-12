@@ -173,26 +173,29 @@ parámetro extra):
 > y **detiene la corrida** en el siguiente bloque (`utilización > 100%`). Es el comportamiento esperado.
 > Además, la utilización reportada puede exceder el 100% mientras dura la sobrecarga: el front debe tolerarlo.
 
-### Modificación de horarios de vuelo (solo EN FRÍO) — prueba E1 "día a día"
-Ajusta la hora de salida/llegada (y por ende la duración) de un vuelo **existente** del dataset. Pensado
-para adaptar los horarios de los vuelos del caso "según la hora de presentación", **antes de iniciar** la
-corrida. A diferencia de la capacidad, el horario **solo se modifica sin simulación en curso** (con un job
-activo devuelve `409`): en caliente el equivalente seguro es **cancelar el vuelo-día + `agregar-vuelo`**
-con el horario nuevo.
+### Modificación del plan de vuelo: horarios y destino (solo EN FRÍO) — prueba E1 "día a día"
+Ajusta la hora de salida/llegada (y por ende la duración) o el **aeropuerto destino** de un vuelo
+**existente** del dataset. Pensado para adaptar los vuelos del caso "según la hora de presentación",
+**antes de iniciar** la corrida. A diferencia de la capacidad, el plan **solo se modifica sin simulación
+en curso** (con un job activo devuelve `409`): en caliente el equivalente seguro es **cancelar el
+vuelo-día + `agregar-vuelo`** con el plan nuevo.
 
 | Método | Ruta | Query | Éxito | Errores |
 |---|---|---|---|---|
 | PUT | `/configuracion/vuelos/{idVuelo}/horario` | `salida` y/o `llegada` (LOCAL `"HH:mm"`, al menos una) | `200` `{idVuelo, aplicado:true}` | `400` hora malformada / sin params, `404` id inexistente, `409` simulación en curso |
+| PUT | `/configuracion/vuelos/{idVuelo}/destino` | `valor` (ICAO destino existente, obligatorio) + `llegada` opcional (LOCAL `"HH:mm"` del destino nuevo; sin ella se conserva la vigente) | `200` `{idVuelo, aplicado:true}` | `400` ICAO desconocido / igual al origen / colisión de id, `404` id inexistente, `409` simulación en curso |
 | POST | `/configuracion/vuelos/restaurar-horarios` | — | `200` `{restaurados:N}` | `409` simulación en curso |
 
-> ⚠ **El `idVuelo` se RENOMBRA si cambia la salida**: el invariante del sistema es
+> ⚠ **El `idVuelo` se RENOMBRA si cambia la salida o el destino**: el invariante del sistema es
 > `id_vuelo ≡ ORIGEN-DESTINO-HHMM(salida)`. La respuesta trae el **id resultante** en `idVuelo` — el front
-> debe usarlo a partir de ese momento (p. ej. `SPIM-SCEL-0859` con `salida=11:00` pasa a `SPIM-SCEL-1100`).
-> Las horas son **LOCALES** del origen/destino (como el TXT del dataset); la duración UTC la deriva el
-> backend con `floorMod` 24 h (soporta cruces de medianoche y duraciones de 4–13 h).
+> debe usarlo a partir de ese momento (p. ej. `SPIM-SCEL-0859` con `salida=11:00` pasa a `SPIM-SCEL-1100`,
+> y con `destino=SABE` pasa a `SPIM-SABE-0859`). Las horas son **LOCALES** del origen/destino (como el TXT
+> del dataset); la duración UTC la deriva el backend con `floorMod` 24 h (soporta cruces de medianoche y
+> duraciones de 4–13 h). Ojo con `destino`: cambia el huso con que se interpreta `hora_llegada`, así que
+> la duración UTC varía aunque se conserve la misma hora local de llegada.
 >
-> `restaurar-horarios` devuelve el horario **y el id** de todos los vuelos modificados a su valor de
-> fábrica. Es independiente del botón `restaurar` de capacidades.
+> `restaurar-horarios` devuelve el horario, el **destino** y el **id** de todos los vuelos modificados a
+> su valor de fábrica. Es independiente del botón `restaurar` de capacidades.
 >
 > ⚠ **Costo operativo**: modificar un horario **invalida la caché de esqueletos** de ruteo persistida
 > (su huella incluye los horarios), así que el **arranque del siguiente job paga el pre-warm frío**

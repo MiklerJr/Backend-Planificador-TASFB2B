@@ -253,10 +253,76 @@ public class ConfiguracionCapacidadesService {
     }
 
     /**
-     * Devuelve los horarios de TODOS los vuelos a su valor original de fábrica ({@code hora_*_original})
-     * en BD + RAM — renombrando el id de vuelta al HHMM original — e invalida el grafo cacheado. Solo EN
-     * FRÍO ({@link IllegalStateException} → 409 con simulación en curso). Idempotente: si nada fue
-     * modificado, no invalida nada.
+     * Cambia el aeropuerto DESTINO de un vuelo existente (re-ruta del plan). <b>Solo EN FRÍO</b>, por
+     * las mismas razones que {@link #actualizarHorarioVuelo}: con simulación en curso lanza
+     * {@link IllegalStateException} (→ 409); el equivalente en caliente es cancelar el vuelo-día +
+     * agregar-vuelo hacia el destino nuevo.
+     *
+     * <p><b>El id se renombra siempre que el destino cambie</b> (invariante
+     * {@code id_vuelo ≡ ORIGEN-DESTINO-HHMM(salida)}), con el mismo despeje de FKs que el cambio de
+     * horario. Como {@code hora_llegada} es hora LOCAL del destino, cambiar de destino cambia el huso
+     * con que se interpreta: si el llamador no pasa {@code llegada}, se conserva la hora local vigente
+     * (la duración UTC resultante la deriva el mapeador con el huso del destino nuevo).
+     *
+     * @param destino ICAO del nuevo aeropuerto destino (obligatorio, debe existir en el catálogo).
+     * @param llegada nueva hora local de llegada "HH:mm" (null/blank = conservar la actual).
+     * @return el id vigente tras el cambio, o null si el vuelo no existe (→ 404).
+     * @throws ParametroInvalidoException destino ausente/desconocido/igual al origen, hora malformada
+     *                                    o colisión del id nuevo (→ 400).
+     * @throws IllegalStateException      simulación en curso (→ 409).
+     */
+    public String actualizarDestinoVuelo(String idVuelo, String destino, String llegada) {
+        if (destino == null || destino.isBlank())
+            throw new ParametroInvalidoException(
+                    "se requiere el parámetro valor con el ICAO del nuevo destino (4 letras)");
+        String icaoDestino = destino.trim().toUpperCase();
+        LocalTime hLlegada = (llegada != null && !llegada.isBlank())
+                ? AltasEnCalienteService.parseHora(llegada, "llegada") : null;
+        if (registroJobs.haySimulacionEnCurso())
+            throw new IllegalStateException("Hay una simulación en curso; el destino de un vuelo solo se "
+                    + "modifica EN FRÍO. Equivalente en caliente: cancelar el vuelo-día y agregar-vuelo "
+                    + "hacia el destino nuevo.");
+
+        String idDb = idVuelo.replace(":", "");
+        int i = indiceVuelo(idDb);
+        if (i < 0) return null;
+        Vuelo v = cargadorDatos.getVuelos().get(i);
+        if (icaoDestino.equals(v.getOrigen()))
+            throw new ParametroInvalidoException("origen y destino no pueden ser iguales");
+        Aeropuerto aeropuertoDestino = cargadorDatos.getAeropuerto(icaoDestino);
+        if (aeropuertoDestino == null)
+            throw new ParametroInvalidoException("ICAO destino desconocido: " + icaoDestino);
+
+        LocalTime salida = v.getFechaHoraSalida().toLocalTime();
+        LocalTime llegadaEff = hLlegada != null ? hLlegada : v.getFechaHoraLlegada().toLocalTime();
+        String nuevoId = v.getOrigen() + "-" + icaoDestino + "-"
+                + String.format("%02d%02d", salida.getHour(), salida.getMinute());
+        boolean renombra = !nuevoId.equals(idDb);
+        if (renombra && indiceVuelo(nuevoId) >= 0)
+            throw new ParametroInvalidoException("ya existe un vuelo con id " + nuevoId
+                    + "; modifique ese vuelo o elija otro destino");
+
+        if (renombra) borrarReferenciasSolucion(idDb);
+        int filas = jdbcTemplate.update(
+                "UPDATE vuelo SET id_vuelo = ?, icao_destino = ?, hora_llegada = ? WHERE id_vuelo = ?",
+                nuevoId, icaoDestino, hhmm(llegadaEff), idDb);
+        if (filas == 0) return null;
+
+        v.setIdVuelo(nuevoId);
+        v.setDestino(icaoDestino);
+        v.setAeropuertoDestino(aeropuertoDestino);
+        aplicarHorarioEnRam(v, salida, llegadaEff);   // rehace la llegada con el huso del destino nuevo
+        motorCache.invalidar();
+        log.info("Destino de vuelo {} → {} (llegada {} local) — EN FRÍO, BD+RAM; grafo y esqueletos "
+                + "invalidados.", idDb, nuevoId, hhmm(llegadaEff));
+        return nuevoId;
+    }
+
+    /**
+     * Devuelve el plan de TODOS los vuelos modificados a su valor original de fábrica — horarios
+     * ({@code hora_*_original}) y destino ({@code icao_destino_original}) — en BD + RAM, renombrando el
+     * id de vuelta al original, e invalida el grafo cacheado. Solo EN FRÍO ({@link IllegalStateException}
+     * → 409 con simulación en curso). Idempotente: si nada fue modificado, no invalida nada.
      *
      * @return número de vuelos restaurados.
      */
@@ -265,11 +331,14 @@ public class ConfiguracionCapacidadesService {
             throw new IllegalStateException(
                     "Hay una simulación en curso; los horarios solo se restauran EN FRÍO.");
         List<Map<String, Object>> modificados = jdbcTemplate.queryForList(
-                "SELECT id_vuelo, icao_origen, icao_destino, hora_salida_original, hora_llegada_original "
+                "SELECT id_vuelo, icao_origen, icao_destino, icao_destino_original, "
+              + "hora_salida_original, hora_llegada_original "
               + "FROM vuelo "
               + "WHERE hora_salida_original IS NOT NULL AND hora_llegada_original IS NOT NULL "
               + "AND (hora_salida IS DISTINCT FROM hora_salida_original "
-              + "  OR hora_llegada IS DISTINCT FROM hora_llegada_original)");
+              + "  OR hora_llegada IS DISTINCT FROM hora_llegada_original "
+              + "  OR (icao_destino_original IS NOT NULL "
+              + "      AND icao_destino IS DISTINCT FROM icao_destino_original))");
         if (modificados.isEmpty()) {
             log.info("Restaurar horarios de vuelo: ningún vuelo modificado (no-op).");
             return 0;
@@ -284,15 +353,23 @@ public class ConfiguracionCapacidadesService {
                         (String) fila.get("hora_salida_original"), "hora_salida_original");
                 LocalTime llegadaOrig = AltasEnCalienteService.parseHora(
                         (String) fila.get("hora_llegada_original"), "hora_llegada_original");
-                String idOriginal = fila.get("icao_origen") + "-" + fila.get("icao_destino") + "-"
+                // BD anterior al backfill de icao_destino_original: conservar el destino vigente.
+                String destinoOrig = fila.get("icao_destino_original") != null
+                        ? (String) fila.get("icao_destino_original")
+                        : (String) fila.get("icao_destino");
+                String idOriginal = fila.get("icao_origen") + "-" + destinoOrig + "-"
                         + String.format("%02d%02d", salidaOrig.getHour(), salidaOrig.getMinute());
                 if (!idOriginal.equals(idActual)) borrarReferenciasSolucion(idActual);
                 jdbcTemplate.update(
-                        "UPDATE vuelo SET id_vuelo = ?, hora_salida = ?, hora_llegada = ? WHERE id_vuelo = ?",
-                        idOriginal, hhmm(salidaOrig), hhmm(llegadaOrig), idActual);
+                        "UPDATE vuelo SET id_vuelo = ?, icao_destino = ?, hora_salida = ?, "
+                      + "hora_llegada = ? WHERE id_vuelo = ?",
+                        idOriginal, destinoOrig, hhmm(salidaOrig), hhmm(llegadaOrig), idActual);
                 Vuelo v = porId.get(idActual);
                 if (v != null) {
                     v.setIdVuelo(idOriginal);
+                    v.setDestino(destinoOrig);
+                    Aeropuerto aOrig = cargadorDatos.getAeropuerto(destinoOrig);
+                    if (aOrig != null) v.setAeropuertoDestino(aOrig);
                     aplicarHorarioEnRam(v, salidaOrig, llegadaOrig);
                 }
                 restaurados++;

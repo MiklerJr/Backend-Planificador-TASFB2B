@@ -63,8 +63,30 @@ public class ConfiguracionController {
         }
     }
 
+    /** PUT .../vuelos/{idVuelo}/destino?valor=SKBO&llegada=HH:mm (llegada opcional, hora LOCAL del
+     *  destino nuevo; sin ella se conserva la vigente) → 200 / 400 (ICAO desconocido, igual al origen o
+     *  colisión de id) / 404 (id inexistente) / 409 (simulación en curso: el destino solo se modifica EN
+     *  FRÍO; en caliente usar cancelar-vuelo + agregar-vuelo). Persistente hasta restaurar-horarios.
+     *  El idVuelo se RENOMBRA (invariante id_vuelo ≡ ORIGEN-DESTINO-HHMM): la respuesta trae
+     *  {@code idVuelo} con el id resultante. Acepta el id con o sin los dos puntos. */
+    @PutMapping("/vuelos/{idVuelo}/destino")
+    public ResponseEntity<Map<String, Object>> actualizarDestinoVuelo(
+            @PathVariable String idVuelo,
+            @RequestParam String valor,
+            @RequestParam(required = false) String llegada) {
+        try {
+            String nuevoId = capacidades.actualizarDestinoVuelo(idVuelo, valor, llegada);
+            return nuevoId != null
+                    ? ResponseEntity.ok(Map.of("idVuelo", nuevoId, "aplicado", true))
+                    : ResponseEntity.notFound().build();
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(409).body(Map.of("aplicado", false, "motivo", ex.getMessage()));
+        }
+    }
+
     /** POST .../vuelos/restaurar-horarios → 200 {restaurados:N} / 409 (simulación en curso). Devuelve los
-     *  horarios de TODOS los vuelos a su valor original de fábrica (BD + RAM) e invalida el grafo. */
+     *  horarios Y el destino de TODOS los vuelos a su valor original de fábrica (BD + RAM) e invalida el
+     *  grafo. */
     @PostMapping("/vuelos/restaurar-horarios")
     public ResponseEntity<Map<String, Object>> restaurarHorariosVuelos() {
         try {

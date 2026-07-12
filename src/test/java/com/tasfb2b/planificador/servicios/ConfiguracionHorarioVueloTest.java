@@ -43,20 +43,26 @@ class ConfiguracionHorarioVueloTest {
     private RegistroJobs registro;
     private ConfiguracionCapacidadesService servicio;
     private Vuelo vuelo;
+    private Aeropuerto scel;
+    private Aeropuerto sabe;
 
     @BeforeEach
     void setUp() throws Exception {
         Aeropuerto spim = aeropuerto("SPIM", -5);
-        Aeropuerto scel = aeropuerto("SCEL", -3);
+        scel = aeropuerto("SCEL", -3);
+        sabe = aeropuerto("SABE", -3);
         vuelo = vuelo("SPIM-SCEL-0830", spim, scel, 8, 30, 10, 30);
 
-        List<Aeropuerto> aeropuertos = List.of(spim, scel);
+        List<Aeropuerto> aeropuertos = List.of(spim, scel, sabe);
         List<Vuelo> vuelos = new ArrayList<>(List.of(vuelo));
 
         jdbc = new FakeJdbc();
         cargador = new CargadorDatos(jdbc);
         inyectar(cargador, "vuelos", vuelos);
         inyectar(cargador, "aeropuertos", aeropuertos);
+        Map<String, Aeropuerto> porIcao = new java.util.concurrent.ConcurrentHashMap<>();
+        for (Aeropuerto a : aeropuertos) porIcao.put(a.getCodigo(), a);
+        inyectar(cargador, "aeropuertoMapCache", porIcao);
 
         motorCache = new MotorGrafoCache();
         motorCache.obtenerGrafo(() -> new com.tasfb2b.planificador.utilidades.MapeadorAlgoritmo()
@@ -122,6 +128,63 @@ class ConfiguracionHorarioVueloTest {
         assertEquals(LocalTime.of(12, 0), vuelo.getFechaHoraLlegada().toLocalTime());
     }
 
+    // ─────────────────────────────────────────────── destino (PUT .../destino)
+
+    @Test
+    void destinoAusenteLanza400() {
+        assertThrows(ParametroInvalidoException.class,
+                () -> servicio.actualizarDestinoVuelo("SPIM-SCEL-0830", "  ", null));
+    }
+
+    @Test
+    void destinoDesconocidoLanza400() {
+        assertThrows(ParametroInvalidoException.class,
+                () -> servicio.actualizarDestinoVuelo("SPIM-SCEL-0830", "XXXX", null));
+        assertEquals(0, jdbc.updateCalls);
+    }
+
+    @Test
+    void destinoIgualAlOrigenLanza400() {
+        assertThrows(ParametroInvalidoException.class,
+                () -> servicio.actualizarDestinoVuelo("SPIM-SCEL-0830", "SPIM", null));
+    }
+
+    @Test
+    void destinoConSimulacionEnCursoLanza409() {
+        simularJobEnCurso();
+        assertThrows(IllegalStateException.class,
+                () -> servicio.actualizarDestinoVuelo("SPIM-SCEL-0830", "SABE", null));
+        assertEquals(0, jdbc.updateCalls, "en caliente no modifica el destino");
+    }
+
+    @Test
+    void destinoIdInexistenteDevuelveNull() {
+        assertNull(servicio.actualizarDestinoVuelo("NADA-NADA-0000", "SABE", null));
+        assertEquals(0, jdbc.updateCalls);
+    }
+
+    @Test
+    void enFrioCambiaDestinoRenombraIdYActualizaRam() {
+        assertNotNull(motorCache.grafoSiExiste());
+
+        String nuevoId = servicio.actualizarDestinoVuelo("SPIM-SCEL-08:30", "SABE", null);
+
+        assertEquals("SPIM-SABE-0830", nuevoId, "el id se renombra al destino nuevo");
+        assertEquals("SPIM-SABE-0830", vuelo.getIdVuelo());
+        assertEquals("SABE", vuelo.getDestino());
+        assertSame(sabe, vuelo.getAeropuertoDestino(), "el Aeropuerto destino en RAM es el nuevo");
+        assertEquals(LocalTime.of(10, 30), vuelo.getFechaHoraLlegada().toLocalTime(),
+                "sin parámetro llegada se conserva la hora local vigente");
+        assertNull(motorCache.grafoSiExiste(), "el grafo cacheado se invalidó");
+        assertTrue(jdbc.updateCalls > 0, "en frío escribe BD");
+    }
+
+    @Test
+    void destinoConLlegadaExplicitaLaAplica() {
+        servicio.actualizarDestinoVuelo("SPIM-SCEL-0830", "SABE", "12:45");
+        assertEquals(LocalTime.of(12, 45), vuelo.getFechaHoraLlegada().toLocalTime());
+    }
+
     // ─────────────────────────────────────────────── restaurar a fábrica
 
     @Test
@@ -136,6 +199,25 @@ class ConfiguracionHorarioVueloTest {
         assertEquals(1, restaurados);
         assertEquals("SPIM-SCEL-0830", vuelo.getIdVuelo(), "id restaurado al original");
         assertEquals(LocalTime.of(8, 30), vuelo.getFechaHoraSalida().toLocalTime());
+        assertNull(motorCache.grafoSiExiste(), "grafo invalidado");
+    }
+
+    @Test
+    void restaurarDevuelveDestinoOriginal() {
+        // El vuelo en RAM ya fue re-ruteado a SABE; la BD reporta su destino original SCEL.
+        vuelo.setIdVuelo("SPIM-SABE-0830");
+        vuelo.setDestino("SABE");
+        vuelo.setAeropuertoDestino(sabe);
+        Map<String, Object> f = fila("SPIM-SABE-0830", "SPIM", "SABE", "08:30", "10:30");
+        f.put("icao_destino_original", "SCEL");
+        jdbc.queryResult.add(f);
+
+        int restaurados = servicio.restaurarHorariosVuelosAFabrica();
+
+        assertEquals(1, restaurados);
+        assertEquals("SPIM-SCEL-0830", vuelo.getIdVuelo(), "id restaurado al destino original");
+        assertEquals("SCEL", vuelo.getDestino());
+        assertSame(scel, vuelo.getAeropuertoDestino());
         assertNull(motorCache.grafoSiExiste(), "grafo invalidado");
     }
 
