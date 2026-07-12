@@ -5,7 +5,7 @@ spring:
 #    username: postgres
 #    password: Furiousandfast.8
     # BD de PRUEBAS (AWS RDS): descomentar este bloque (y comentar el de arriba) para apuntar a pruebas.
-    url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b
+    url: jdbc:postgresql://host.docker.internal:5432/Tasf_b2b
     username: postgres
     password: Furiousandfast.8
     driver-class-name: org.postgresql.Driver
