@@ -7,8 +7,8 @@ public class Nodo {
     public String codigo;
     public double lat;
     public double lon;
-    public int capacidad; // capacidad máxima de almacén del aeropuerto
-    public int indice = -1; // índice entero asignado por OperadorReparacionVoraz (evita lookups HashMap)
+    public int capacidad;
+    public int indice = -1;
 
     public int capacidadAlmacen;
     public int ocupacionAlmacen = 0;

@@ -13,11 +13,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
-/**
- * Una hormiga del ACO: construye UNA solución del bloque recorriendo la frontera de envíos
- * pendientes, eligiendo en cada paso (vía {@link RuletaSeleccion}) qué envío atender y con qué
- * ruta, y aplicando la ocupación sobre una copia simulada del bloque. Se reutiliza entre hormigas.
- */
 final class ConstructorHormiga {
 
     private static final int MAX_CANDIDATOS_RUTA = 3;

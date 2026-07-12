@@ -20,15 +20,19 @@ public class PlanificadorProperties {
     private Consulta     consulta     = new Consulta();
     private Cache        cache        = new Cache();
     private Operativo    operativo    = new Operativo();
+    private Fragmentacion fragmentacion = new Fragmentacion();
+
+    @Data
+    public static class Fragmentacion {
+        private boolean habilitada = true;
+        private int maxMaletasPorSublote = 0;
+        private int maxSublotes = 64;
+    }
 
     @Data
     public static class Operativo {
-        /** Escala mínima (permanencia mín. de una maleta en un aeropuerto entre vuelos), en minutos.
-         *  Fuente única que respetan el ruteo (OperadorReparacionVoraz) y la auditoría (AuditoriaService). */
         private int tiempoMinEscalaMinutos = 10;
 
-        /** Tiempo de espera de la maleta en el almacén del destino FINAL hasta ser recogida (min).
-         *  Cuenta para el SLA (transit = llegada + este tiempo) y para la ocupación del almacén destino. */
         private int tiempoRecojoDestinoMinutos = 15;
     }
 

@@ -97,7 +97,6 @@ public class EscenarioController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
             @RequestParam(defaultValue = "false") boolean enVivo) {
         rechazarSiIngestaEnCurso();
-        // En operación EN VIVO el cursor es now() UTC: fechaInicio no aplica (no se valida vs dataset).
         if (!enVivo) {
             String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
             if (error != null) throw new ParametroInvalidoException(error);
@@ -138,7 +137,6 @@ public class EscenarioController {
         if (error != null) throw new ParametroInvalidoException(error);
 
         EjecucionParametros params = new EjecucionParametros();
-        // K no se propaga del request: iniciarEscenario2Async fija siempre el del yaml.
         params.setMotor(algoritmo);
         params.setSeed(seed);
         params.setFechaInicio(fechaInicio);
@@ -158,7 +156,7 @@ public class EscenarioController {
         if (sa != null)   body.put("sa", sa);
         if (ta != null)   body.put("ta", ta);
         if (dias != null) body.put("dias", dias);
-        body.put("procesamientoPrevio", false);   // forzado OFF: el warm-up está desactivado
+        body.put("procesamientoPrevio", false);
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }
@@ -320,8 +318,12 @@ public class EscenarioController {
                 throw new ParametroInvalidoException(
                         "Archivo sin ICAO de origen derivable del nombre: " + f.getOriginalFilename()
                       + " (use _envios_<ICAO>_.txt o el parámetro 'origen').");
+            // La fecha-hora del TXT está en hora LOCAL de la sede origen; el parser la convierte a UTC.
+            Integer offset = service.getOffsetAeropuerto(icao);
+            if (offset == null)
+                throw new ParametroInvalidoException("ICAO origen desconocido: " + icao);
             try (Reader r = new InputStreamReader(f.getInputStream(), StandardCharsets.UTF_8)) {
-                items.addAll(MigradorEnviosDb.parsearEnviosParaInyeccion(r, icao, registrador, sede));
+                items.addAll(MigradorEnviosDb.parsearEnviosParaInyeccion(r, icao, offset, registrador, sede));
             } catch (IOException ex) {
                 throw new ParametroInvalidoException(
                         "No se pudo leer " + f.getOriginalFilename() + ": " + ex.getMessage());
@@ -341,5 +343,76 @@ public class EscenarioController {
         }
         return ResponseEntity.accepted().body(Map.of(
                 "jobId", jobId, "encolado", true, "encolados", encolados));
+    }
+
+    /**
+     * Carga masiva de planes de vuelo EN CALIENTE desde TXT (formato del dataset:
+     * ORIG-DEST-HH:MM-HH:MM-CAPACIDAD, horas LOCALES; líneas "*"/"**"/"//" y cabecera ignoradas).
+     * Cada línea válida se encola por la misma tubería que agregar-vuelo (efímera por corrida,
+     * recurrente diaria, aplicada en la frontera del siguiente bloque). Los duplicados ("no se
+     * preocupe si coincide con algún vuelo existente") y las líneas inválidas se descartan POR
+     * LÍNEA y se reportan en la respuesta, sin abortar el lote — por eso el 202 puede traer
+     * encolados=0. El 202 refleja el ENCOLADO; la aplicación real se ve en /estado
+     * (vuelosAgregados / altasVueloNoAplicadas).
+     * 202 resumen / 400 sin archivos o sin ninguna línea de vuelo / 404 job inexistente / 409 job no activo.
+     */
+    @PostMapping(value = "/jobs/{jobId}/cargar-vuelos-txt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Map<String, Object>> cargarVuelosTxt(
+            @PathVariable String jobId,
+            @RequestParam("archivos") MultipartFile[] archivos) {
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
+        if (archivos == null || archivos.length == 0)
+            throw new ParametroInvalidoException("Se requiere al menos un archivo de vuelos.");
+
+        int encolados = 0;
+        List<Map<String, Object>> descartados = new ArrayList<>();
+        for (MultipartFile f : archivos) {
+            if (f == null || f.isEmpty()) continue;
+            List<AltasEnCalienteService.LineaVueloTxt> lineas;
+            try (Reader r = new InputStreamReader(f.getInputStream(), StandardCharsets.UTF_8)) {
+                lineas = AltasEnCalienteService.parsearAltasVueloTxt(r);
+            } catch (IOException ex) {
+                throw new ParametroInvalidoException(
+                        "No se pudo leer " + f.getOriginalFilename() + ": " + ex.getMessage());
+            }
+            for (AltasEnCalienteService.LineaVueloTxt linea : lineas) {
+                if (linea.motivoDescarte() != null) {
+                    descartados.add(descarteDe(f.getOriginalFilename(), linea, linea.motivoDescarte()));
+                    continue;
+                }
+                try {
+                    if (!service.solicitarAltaVuelo(jobId, linea.alta())) {
+                        return ResponseEntity.status(409).body(Map.of(
+                                "jobId", jobId, "encolado", false,
+                                "motivo", "el job no está activo (ya terminó o fue cancelado)"));
+                    }
+                    encolados++;
+                } catch (ParametroInvalidoException ex) {
+                    descartados.add(descarteDe(f.getOriginalFilename(), linea, ex.getMessage()));
+                }
+            }
+        }
+        if (encolados == 0 && descartados.isEmpty())
+            throw new ParametroInvalidoException("Ninguna línea de vuelo en los archivos "
+                    + "(formato esperado: ORIG-DEST-HH:MM-HH:MM-CAPACIDAD).");
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("jobId", jobId);
+        body.put("encolado", true);
+        body.put("encolados", encolados);
+        body.put("descartados", descartados.size());
+        body.put("detalleDescartados", descartados);
+        return ResponseEntity.accepted().body(body);
+    }
+
+    private static Map<String, Object> descarteDe(String archivo,
+                                                  AltasEnCalienteService.LineaVueloTxt linea,
+                                                  String motivo) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("archivo", archivo);
+        m.put("linea", linea.numeroLinea());
+        m.put("contenido", linea.contenido());
+        m.put("motivo", motivo);
+        return m;
     }
 }

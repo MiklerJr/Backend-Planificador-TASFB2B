@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tasfb2b.planificador.dto.datos.AeropuertoDTO;
 import com.tasfb2b.planificador.dto.jobs.TableroResponse;
 import com.tasfb2b.planificador.dto.jobs.EstadoJobResponse;
+import com.tasfb2b.planificador.dto.simulacion.AsignacionMaleta;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -75,6 +76,43 @@ class JsonContratoTest {
 
         assertTrue(json.contains("\"gmt\":-5.0"), "gmt debe serializarse con su valor y signo");
         assertTrue(json.contains("\"capacidadAlmacen\":440"), "los campos previos del DTO se conservan");
+    }
+
+    /**
+     * Fragmentación: un envío NO fragmentado debe serializar byte-idéntico a hoy — los tres campos
+     * nuevos ({@code idEnvioPadre}/{@code fragmento}/{@code totalFragmentos}) son {@code @JsonInclude
+     * (NON_NULL)} campo a campo y quedan omitidos cuando son null.
+     */
+    @Test
+    void asignacionNoFragmentadaOmiteLosCamposDeFragmentacion() throws Exception {
+        AsignacionMaleta a = new AsignacionMaleta();
+        a.setBatchId("SKBO-000000001");
+        a.setOrigen("SKBO");
+        a.setDestino("SEQM");
+        a.setCantidad(3);
+
+        String json = mapper.writeValueAsString(a);
+
+        assertFalse(json.contains("idEnvioPadre"), "idEnvioPadre null se omite");
+        assertFalse(json.contains("fragmento"), "fragmento null se omite");
+        assertFalse(json.contains("totalFragmentos"), "totalFragmentos null se omite");
+        assertTrue(json.contains("\"batchId\":\"SKBO-000000001\""), "los campos previos se conservan");
+    }
+
+    @Test
+    void asignacionFragmentadaEmiteLosCamposDeFragmentacion() throws Exception {
+        AsignacionMaleta a = new AsignacionMaleta();
+        a.setBatchId("SKBO-000000001-F2");
+        a.setCantidad(334);
+        a.setIdEnvioPadre("SKBO-000000001");
+        a.setFragmento(2);
+        a.setTotalFragmentos(3);
+
+        String json = mapper.writeValueAsString(a);
+
+        assertTrue(json.contains("\"idEnvioPadre\":\"SKBO-000000001\""));
+        assertTrue(json.contains("\"fragmento\":2"));
+        assertTrue(json.contains("\"totalFragmentos\":3"));
     }
 
     // ----------------------------------------------------------------------- helpers

@@ -63,9 +63,11 @@ CREATE TABLE IF NOT EXISTS ruta_asignada (
     fecha_calculo  TIMESTAMP        NOT NULL DEFAULT now()    -- el INSERT de la persistencia la omite
 );
 -- Índice por envío (lookups por id_envio) + invariante clave: como máximo una ruta activa por
--- envío (lo asume SolucionBdReader / PersistenciaSolucionService).
+-- (envío, sub_lote) (lo asume SolucionBdReader / PersistenciaSolucionService). El índice único
+-- lo crea la sección de fragmentación (más abajo): es COMPUESTO (id_envio, sub_lote) y no puede
+-- vivir aquí porque la columna sub_lote se agrega por ALTER después. NO recrear aquí el índice de
+-- una sola columna: chocaría con BD que ya tengan sub-lotes activos del mismo padre.
 CREATE INDEX        IF NOT EXISTS ix_ruta_por_envio        ON ruta_asignada (id_envio);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_activa_por_envio ON ruta_asignada (id_envio) WHERE activa;
 
 -- ── tramo_ruta ───────────────────────────────────────────────────────────────────────
 -- Un vuelo dentro de una ruta, ordenado por numero_orden (0,1,2...). id_vuelo en formato
@@ -139,9 +141,11 @@ CREATE TABLE IF NOT EXISTS ruta_inyectada (
     llegada_utc    TIMESTAMP,
     fecha_calculo  TIMESTAMP        NOT NULL DEFAULT now()     -- el INSERT de la persistencia la omite
 );
--- Lookups por envío + invariante: como máximo una ruta activa por envío sintético.
+-- Lookups por envío + invariante: como máximo una ruta activa por (envío sintético, sub_lote). El
+-- índice único COMPUESTO lo crea la sección de fragmentación (más abajo), tras el ALTER de sub_lote.
+-- NO recrear aquí el índice de una sola columna: chocaría con BD que ya tengan sub-lotes activos
+-- del mismo padre inyectado (p. ej. dos filas INV-1-0 con sub_lote 1 y 2).
 CREATE INDEX        IF NOT EXISTS ix_ruta_iny_por_envio        ON ruta_inyectada (id_envio);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_iny_activa_por_envio ON ruta_inyectada (id_envio) WHERE activa;
 
 CREATE TABLE IF NOT EXISTS tramo_inyectado (
     id_tramo_iny     INTEGER    GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -164,6 +168,21 @@ ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS capacidad_maxima_original INTEGER;
 UPDATE aeropuerto SET capacidad_almacen_original = capacidad_almacen WHERE capacidad_almacen_original IS NULL;
 UPDATE vuelo      SET capacidad_maxima_original  = capacidad_maxima  WHERE capacidad_maxima_original  IS NULL;
 
+-- ── Plan de vuelo modificable EN FRÍO (prueba E1 "día a día") ────────────────────────
+-- PUT /configuracion/vuelos/{id}/horario cambia hora_salida/hora_llegada y
+-- PUT /configuracion/vuelos/{id}/destino cambia icao_destino, ambos EN FRÍO (persistente, solo sin
+-- simulación en curso); estas columnas guardan el valor de fábrica para
+-- POST /configuracion/vuelos/restaurar-horarios. El id_vuelo SÍ se renombra al cambiar salida o
+-- destino (invariante id_vuelo ≡ ORIGEN-DESTINO-HHMM de la salida vigente); como la PK no tiene
+-- ON UPDATE CASCADE, el servicio despeja antes las FKs (tramo_*/cancelacion_vuelo de la corrida
+-- anterior) — ver ConfiguracionCapacidadesService.borrarReferenciasSolucion.
+ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS hora_salida_original   VARCHAR;
+ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS hora_llegada_original  VARCHAR;
+ALTER TABLE vuelo ADD COLUMN IF NOT EXISTS icao_destino_original  VARCHAR;
+UPDATE vuelo SET hora_salida_original   = hora_salida   WHERE hora_salida_original   IS NULL;
+UPDATE vuelo SET hora_llegada_original  = hora_llegada  WHERE hora_llegada_original  IS NULL;
+UPDATE vuelo SET icao_destino_original  = icao_destino  WHERE icao_destino_original  IS NULL;
+
 -- ── Altas EN CALIENTE (efímeras por corrida) ─────────────────────────────────────────
 -- Vuelos/aeropuertos agregados EN VIVO por el operador durante una corrida. Existen como fila
 -- real (las FKs de tramo_ruta/tramo_inyectado/cancelacion_vuelo exigen que el vuelo exista),
@@ -179,3 +198,26 @@ DELETE FROM envio_inyectado
     OR icao_destino IN (SELECT icao FROM aeropuerto WHERE efimero);
 DELETE FROM vuelo WHERE efimero;
 DELETE FROM aeropuerto WHERE efimero;
+
+-- ── Fragmentación de envíos en sub-lotes (caso E1: cantidad > capacidad de avión) ─────
+-- Un envío con cantidad mayor que la capacidad máxima de los aviones se parte en N sub-lotes AL
+-- NACER; cada sub-lote es una ruta activa propia. sub_lote = 0 ⇒ envío NO fragmentado (semántica
+-- previa exacta). Para fragmentados, id_envio = id del PADRE (conserva la FK a envio) y sub_lote =
+-- 1..total_sub_lotes; cantidad = maletas ruteadas por ESTE sub-lote (COALESCE con la cantidad del
+-- envío/inyección al leer, para las filas viejas donde la columna cantidad quedó NULL).
+ALTER TABLE ruta_asignada  ADD COLUMN IF NOT EXISTS sub_lote        SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_asignada  ADD COLUMN IF NOT EXISTS total_sub_lotes SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_asignada  ADD COLUMN IF NOT EXISTS cantidad        INTEGER;
+ALTER TABLE ruta_inyectada ADD COLUMN IF NOT EXISTS sub_lote        SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_inyectada ADD COLUMN IF NOT EXISTS total_sub_lotes SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE ruta_inyectada ADD COLUMN IF NOT EXISTS cantidad        INTEGER;
+
+-- Invariante: como máximo UNA ruta activa por (envío, sub_lote). Reemplaza al índice que sólo
+-- consideraba id_envio (rompería con 2 sub-lotes activos del mismo padre). Para envíos no
+-- fragmentados (sub_lote = 0 constante) equivale al índice anterior.
+DROP INDEX IF EXISTS ux_ruta_activa_por_envio;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_activa_por_envio_sublote
+    ON ruta_asignada (id_envio, sub_lote) WHERE activa;
+DROP INDEX IF EXISTS ux_ruta_iny_activa_por_envio;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ruta_iny_activa_por_envio_sublote
+    ON ruta_inyectada (id_envio, sub_lote) WHERE activa;

@@ -7,10 +7,6 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 
-/**
- * El rastro de feromonas τ del ACO: estado por bloque. Encapsula el mapa de feromonas y las
- * operaciones canónicas de la metaheurística: evaporación, depósito y peso (τ^α · η^β).
- */
 final class RastroFeromonas {
 
     private static final double FEROMONA_MIN = 0.10;

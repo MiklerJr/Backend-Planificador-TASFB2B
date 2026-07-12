@@ -17,6 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -28,24 +31,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/**
- * Altas EN CALIENTE de vuelos (y aeropuertos) durante una simulación, <b>efímeras por corrida</b>.
- *
- * <p>Mismo espíritu que el override en caliente de capacidades ({@link ConfiguracionCapacidadesService})
- * pero para topología: el alta se aplica en la frontera de bloque (hilo worker) sobre BD + RAM + grafo +
- * enrutador, y se revierte al iniciar la corrida siguiente ({@link #revertirAltasEfimeras()}).
- *
- * <p><b>Por qué BD-primero:</b> las FKs {@code tramo_ruta.id_vuelo → vuelo} y
- * {@code tramo_inyectado.id_vuelo → vuelo} exigen que el vuelo exista como fila; si no, la persistencia
- * del bloque entero falla en silencio. La fila se marca {@code efimero=TRUE} y la reversión la borra
- * ({@code ON DELETE CASCADE} limpia los tramos/cancelaciones que la referencien). Los residuos de un
- * crash los limpia el DELETE de arranque de schema.sql.
- *
- * <p><b>Por qué append-only:</b> el invariante del sistema es el mapeo posicional 1:1 entre
- * {@code CargadorDatos.getVuelos().get(i)} y {@code grafo.aristas.get(i)}. Agregar al final de ambas
- * listas lo preserva y no mueve ningún índice existente, así que las claves de ocupación y los
- * esqueletos acumulados siguen válidos; la reversión recorta el mismo tail de ambas.
- */
 @Slf4j
 @Service
 public class AltasEnCalienteService {
@@ -54,16 +39,13 @@ public class AltasEnCalienteService {
     private final CargadorDatos cargadorDatos;
     private final MotorGrafoCache motorCache;
 
-    // "H:mm" acepta "8:30" y "08:30"; al persistir/derivar el id siempre se normaliza a "HH:mm"/"HHmm".
     private static final DateTimeFormatter FORMATO_HORA_ENTRADA = DateTimeFormatter.ofPattern("H:mm");
     private static final DateTimeFormatter FORMATO_HORA_BD      = DateTimeFormatter.ofPattern("HH:mm");
 
     private static final Set<String> CONTINENTES_VALIDOS = Set.of("AM", "EU", "AS");
 
-    /** Ids de los vuelos efímeros aplicados en la corrida vigente (registro para reversión/estado). */
     private final List<String> vuelosEfimerosAplicados = new CopyOnWriteArrayList<>();
 
-    /** ICAOs de los aeropuertos efímeros aplicados en la corrida vigente. */
     private final List<String> aeropuertosEfimerosAplicados = new CopyOnWriteArrayList<>();
 
     public AltasEnCalienteService(JdbcTemplate jdbcTemplate,
@@ -78,18 +60,10 @@ public class AltasEnCalienteService {
         return !vuelosEfimerosAplicados.isEmpty() || !aeropuertosEfimerosAplicados.isEmpty();
     }
 
-    /**
-     * Validación del alta (la usa el encolado HTTP → 400, y la revalidación al aplicar).
-     * @throws ParametroInvalidoException si algún campo es inválido o el id ya existe.
-     */
     public void validarAltaVuelo(AltaVueloRequest req) {
         validarAltaVuelo(req, Collections.emptySet());
     }
 
-    /**
-     * @param icaosPendientes ICAOs de altas de aeropuerto aún en cola del mismo job: se aceptan como
-     *        origen/destino porque los aeropuertos se drenan ANTES que los vuelos en la misma frontera.
-     */
     public void validarAltaVuelo(AltaVueloRequest req, Set<String> icaosPendientes) {
         if (req == null) throw new ParametroInvalidoException("alta de vuelo vacía");
         if (!ValidadorEnvio.camposObligatoriosPresentes(req.getOrigen(), req.getDestino()))
@@ -112,10 +86,6 @@ public class AltasEnCalienteService {
             throw new ParametroInvalidoException("ya existe un vuelo con id " + idVuelo);
     }
 
-    /**
-     * Validación del alta de aeropuerto (encolado HTTP → 400, y revalidación al aplicar).
-     * @throws ParametroInvalidoException si algún campo es inválido o el ICAO ya existe.
-     */
     public void validarAltaAeropuerto(AltaAeropuertoRequest req) {
         if (req == null) throw new ParametroInvalidoException("alta de aeropuerto vacía");
         String icao = req.getIcao() == null ? "" : req.getIcao().trim();
@@ -130,14 +100,9 @@ public class AltasEnCalienteService {
         if (req.getCapacidad() < 1)
             throw new ParametroInvalidoException(
                     "la capacidad debe ser un entero >= 1 (recibido: " + req.getCapacidad() + ")");
-        continenteDe(req);   // valida el continente (explícito o derivable del prefijo ICAO)
+        continenteDe(req);
     }
 
-    /**
-     * Continente efectivo del alta: el explícito del request (AM/EU/AS) o el derivado del prefijo
-     * ICAO. Sin continente resoluble se rechaza: dos "UNKNOWN" derivarían INTRACONTINENTAL (SLA 24 h)
-     * erróneo en {@code TipoEnvio.derivar}.
-     */
     static String continenteDe(AltaAeropuertoRequest req) {
         String explicito = req.getContinente() == null ? "" : req.getContinente().trim().toUpperCase();
         if (!explicito.isEmpty()) {
@@ -153,13 +118,6 @@ public class AltasEnCalienteService {
         return derivado;
     }
 
-    /**
-     * Aplica un alta de vuelo EN CALIENTE (hilo worker, frontera de bloque). Orden: BD → RAM → grafo →
-     * enrutador → clear de esqueletos. Si el INSERT falla el motor no se toca; si la parte en memoria
-     * falla se compensa (RAM/grafo/BD quedan como estaban).
-     *
-     * @return null si se aplicó; motivo del rechazo si no.
-     */
     public synchronized String aplicarAltaVuelo(AltaVueloRequest req, Grafo grafo,
                                                 OperadorReparacionVoraz enrutador) {
         try {
@@ -203,7 +161,7 @@ public class AltasEnCalienteService {
         v.setAeropuertoOrigen(origen);
         v.setAeropuertoDestino(destino);
 
-        int indice = grafo.aristas.size();   // append-only: índice nuevo al final
+        int indice = grafo.aristas.size();
         try {
             cargadorDatos.agregarVueloEfimero(v);
             Arista e = MapeadorAlgoritmo.construirArista(v, grafo, indice);
@@ -211,8 +169,6 @@ public class AltasEnCalienteService {
             if (!enrutador.incorporarArista(e)) {
                 throw new IllegalStateException("incorporarArista rechazó la arista (índice " + indice + ")");
             }
-            // Un esqueleto cacheado para un par OD "tapa" el descubrimiento del vuelo nuevo (en hit no
-            // se re-corre Dijkstra): clear total en memoria; recompute lazy en los bloques siguientes.
             motorCache.cacheEsqueletos().clear();
             vuelosEfimerosAplicados.add(idVuelo);
             log.info("Alta EN CALIENTE aplicada: vuelo {} ({}→{}, {}–{} local, cap {}), arista idx {} — efímero por corrida.",
@@ -231,13 +187,6 @@ public class AltasEnCalienteService {
         }
     }
 
-    /**
-     * Aplica un alta de aeropuerto EN CALIENTE (hilo worker, frontera de bloque). Orden: BD → RAM →
-     * grafo → enrutador. No limpia esqueletos: un aeropuerto sin vuelos no cambia ninguna ruta
-     * alcanzable (los vuelos hacia/desde él entran por {@link #aplicarAltaVuelo}, que sí limpia).
-     *
-     * @return null si se aplicó; motivo del rechazo si no.
-     */
     public synchronized String aplicarAltaAeropuerto(AltaAeropuertoRequest req, Grafo grafo,
                                                      OperadorReparacionVoraz enrutador) {
         try {
@@ -296,11 +245,6 @@ public class AltasEnCalienteService {
         }
     }
 
-    /**
-     * Reversión anti-contaminación: borra las altas efímeras de BD + RAM + grafo + caché de esqueletos.
-     * Se invoca al INICIO de la corrida siguiente (no al terminar el job, para que auditoría y consultas
-     * post-corrida sigan funcionando). Idempotente; no-op rápido si no hay altas.
-     */
     public synchronized void revertirAltasEfimeras() {
         boolean habiaRegistro = hayAltasActivas();
         int enBd = 0;
@@ -316,7 +260,6 @@ public class AltasEnCalienteService {
         }
         if (!habiaRegistro && enBd == 0) return;
 
-        // 1) BD, en orden FK: envio_inyectado→aeropuerto NO cascadea; vuelo→tramo_*/cancelacion_vuelo SÍ.
         if (jdbcTemplate != null) {
             try {
                 jdbcTemplate.update("DELETE FROM envio_inyectado "
@@ -330,8 +273,6 @@ public class AltasEnCalienteService {
             }
         }
 
-        // 2) Cortes baseline ANTES de mutar la RAM: nº de vuelos y de aeropuertos no efímeros. Los
-        //    efímeros son siempre tail (aristas append-only; nodos con índice >= baseline).
         int baseVuelos = 0;
         for (Vuelo v : cargadorDatos.getVuelos()) if (!v.isEfimero()) baseVuelos++;
         int baseNodos = 0;
@@ -341,20 +282,15 @@ public class AltasEnCalienteService {
             else baseNodos++;
         }
 
-        // 3) Grafo: recortar el tail de aristas y quitar los nodos efímeros.
         Grafo grafo = motorCache.grafoSiExiste();
         if (grafo != null) {
             grafo.recortarAristasDesde(baseVuelos);
             for (String icao : icaosEfimeros) grafo.eliminarNodo(icao);
         }
 
-        // 4) RAM (mismo tail que el grafo ⇒ el invariante 1:1 queda restaurado).
         cargadorDatos.quitarVuelosEfimeros();
         cargadorDatos.quitarAeropuertosEfimeros();
 
-        // 5) Esqueletos en memoria: fuera los que referencien aristas recortadas y las claves cuyos
-        //    índices de nodo (skeletonKey = startIdx<<40 | targetIdx<<24 | ...) apunten a nodos
-        //    efímeros. El archivo persistido se filtra en AlmacenCacheEsqueletos al guardar.
         purgarEsqueletosConIndiceDesde(baseVuelos);
         if (!icaosEfimeros.isEmpty()) purgarClavesConNodoDesde(baseNodos);
 
@@ -364,7 +300,6 @@ public class AltasEnCalienteService {
         aeropuertosEfimerosAplicados.clear();
     }
 
-    /** Quita las claves de esqueleto cuyo índice de nodo (origen o destino) sea >= {@code nodoBase}. */
     private void purgarClavesConNodoDesde(int nodoBase) {
         motorCache.cacheEsqueletos().keySet().removeIf(key ->
                 (int) (key >>> 40) >= nodoBase || (int) ((key >> 24) & 0xFFFF) >= nodoBase);
@@ -392,7 +327,6 @@ public class AltasEnCalienteService {
         return false;
     }
 
-    /** Id normalizado "ORIGEN-DESTINO-HHMM" (p. ej. "SKBO-SEQM-0830"). */
     public static String idVueloDe(AltaVueloRequest req) {
         LocalTime hs = parseHora(req.getHoraSalida(), "horaSalida");
         return req.getOrigen().trim() + "-" + req.getDestino().trim() + "-"
@@ -408,6 +342,40 @@ public class AltasEnCalienteService {
             throw new ParametroInvalidoException(
                     campo + " inválida: '" + valor + "' (formato esperado \"HH:mm\")");
         }
+    }
+
+    public record LineaVueloTxt(int numeroLinea, String contenido,
+                                AltaVueloRequest alta, String motivoDescarte) { }
+
+    public static List<LineaVueloTxt> parsearAltasVueloTxt(Reader reader) throws IOException {
+        BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
+        List<LineaVueloTxt> lineas = new ArrayList<>();
+        String linea;
+        int n = 0;
+        while ((linea = br.readLine()) != null) {
+            n++;
+            String s = linea.replace(String.valueOf((char) 0xFEFF), "").trim();   // BOM defensivo (TXT del curso)
+            if (s.isEmpty() || s.startsWith("*") || s.startsWith("//") || s.contains("ORIG-DEST"))
+                continue;
+            String[] parts = s.split("[\\s-]+");
+            if (parts.length < 5) {
+                lineas.add(new LineaVueloTxt(n, s, null,
+                        "formato inválido (se esperan 5 campos ORIG-DEST-HH:MM-HH:MM-CAPACIDAD)"));
+                continue;
+            }
+            if (!parts[4].matches("\\d+")) {
+                lineas.add(new LineaVueloTxt(n, s, null, "capacidad no numérica: '" + parts[4] + "'"));
+                continue;
+            }
+            AltaVueloRequest alta = new AltaVueloRequest();
+            alta.setOrigen(parts[0].trim());
+            alta.setDestino(parts[1].trim());
+            alta.setHoraSalida(parts[2].trim());
+            alta.setHoraLlegada(parts[3].trim());
+            alta.setCapacidad(Integer.parseInt(parts[4]));
+            lineas.add(new LineaVueloTxt(n, s, alta, null));
+        }
+        return lineas;
     }
 
     private boolean existeIdVuelo(String idVuelo) {

@@ -13,7 +13,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Component
 public class MapeadorAlgoritmo {
@@ -22,7 +21,6 @@ public class MapeadorAlgoritmo {
     public Grafo mapearAGrafo(List<Aeropuerto> aeropuertos, List<Vuelo> vuelos) {
         Grafo graph = new Grafo();
 
-        // 1. Mapear Nodos (Aeropuertos)
         for (Aeropuerto a : aeropuertos) {
             graph.agregarNodo(a.getCodigo());
             Nodo nodo = graph.nodos.get(a.getCodigo());
@@ -31,7 +29,6 @@ public class MapeadorAlgoritmo {
             nodo.capacidadAlmacen = capacidadAlmacen;
         }
 
-        // 2. Mapear Aristas (Vuelos)
         int edgeIdx = 0;
         for (Vuelo v : vuelos) {
             graph.agregarArista(construirArista(v, graph, edgeIdx++));
@@ -40,12 +37,6 @@ public class MapeadorAlgoritmo {
         return graph;
     }
 
-    /**
-     * Construye la arista de un vuelo con la normalización UTC canónica (depUtc = salida − offset del
-     * origen; duración real con módulo 24 h). Única fuente del mapeo vuelo→arista: la usa el bucle de
-     * {@link #mapearAGrafo} y las altas EN CALIENTE (AltasEnCalienteService), que deben producir una
-     * arista idéntica a la que saldría de reconstruir el grafo. No agrega la arista al grafo.
-     */
     public static Arista construirArista(Vuelo v, Grafo graph, int indice) {
         Arista edge = new Arista();
 
@@ -87,8 +78,12 @@ public class MapeadorAlgoritmo {
     }
 
     public List<LoteEnvio> mapearALotes(List<Envio> maletas) {
-        return maletas.stream().map(m -> {
+        return mapearALotes(maletas, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
 
+    public List<LoteEnvio> mapearALotes(List<Envio> maletas, int umbral, int maxSublotes) {
+        List<LoteEnvio> out = new ArrayList<>();
+        for (Envio m : maletas) {
             int offset = m.getAeropuertoOrigen().getOffsetHorario();
             LocalDateTime readyTimeUtc = m.getFechaHoraRegistro().minusHours(offset);
             LoteEnvio b = new LoteEnvio(
@@ -100,7 +95,8 @@ public class MapeadorAlgoritmo {
                     readyTimeUtc
             );
             if (m.getCliente() != null) b.setClienteId(m.getCliente().getId());
-            return b;
-        }).collect(Collectors.toList());
+            out.addAll(FragmentadorEnvios.fragmentar(b, umbral, maxSublotes));
+        }
+        return out;
     }
 }

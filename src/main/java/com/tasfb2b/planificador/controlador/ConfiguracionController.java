@@ -4,6 +4,8 @@ import com.tasfb2b.planificador.servicios.ConfiguracionCapacidadesService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/planificador/configuracion")
 public class ConfiguracionController {
@@ -14,8 +16,6 @@ public class ConfiguracionController {
         this.capacidades = capacidades;
     }
 
-    /** PUT .../aeropuertos/{icao}/capacidad?valor=1500 → 200 / 400 (valor<1) / 404 (icao inexistente).
-     *  El modo (frío/caliente) se decide automáticamente según si hay una simulación en curso. */
     @PutMapping("/aeropuertos/{icao}/capacidad")
     public ResponseEntity<Void> actualizarCapacidadAeropuerto(@PathVariable String icao, @RequestParam int valor) {
         return capacidades.actualizarCapacidadAeropuerto(icao, valor)
@@ -23,8 +23,6 @@ public class ConfiguracionController {
                 : ResponseEntity.notFound().build();
     }
 
-    /** PUT .../vuelos/{idVuelo}/capacidad?valor=450 → 200 / 400 (valor<1) / 404 (id inexistente).
-     *  idVuelo puede venir como "SKBO-SEQM-08:30" (con o sin los dos puntos). */
     @PutMapping("/vuelos/{idVuelo}/capacidad")
     public ResponseEntity<Void> actualizarCapacidadVuelo(@PathVariable String idVuelo, @RequestParam int valor) {
         return capacidades.actualizarCapacidadVuelo(idVuelo, valor)
@@ -32,11 +30,49 @@ public class ConfiguracionController {
                 : ResponseEntity.notFound().build();
     }
 
-    /** POST .../capacidades/restaurar → 200. Devuelve TODAS las capacidades (aeropuertos y vuelos) a su
-     *  valor original de fábrica en BD + RAM + grafo, con efecto inmediato en el job en curso si lo hay. */
     @PostMapping("/capacidades/restaurar")
     public ResponseEntity<Void> restaurarCapacidades() {
         capacidades.restaurarCapacidadesAFabrica();
         return ResponseEntity.ok().build();
+    }
+
+    @PutMapping("/vuelos/{idVuelo}/horario")
+    public ResponseEntity<Map<String, Object>> actualizarHorarioVuelo(
+            @PathVariable String idVuelo,
+            @RequestParam(required = false) String salida,
+            @RequestParam(required = false) String llegada) {
+        try {
+            String nuevoId = capacidades.actualizarHorarioVuelo(idVuelo, salida, llegada);
+            return nuevoId != null
+                    ? ResponseEntity.ok(Map.of("idVuelo", nuevoId, "aplicado", true))
+                    : ResponseEntity.notFound().build();
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(409).body(Map.of("aplicado", false, "motivo", ex.getMessage()));
+        }
+    }
+
+    @PutMapping("/vuelos/{idVuelo}/destino")
+    public ResponseEntity<Map<String, Object>> actualizarDestinoVuelo(
+            @PathVariable String idVuelo,
+            @RequestParam String valor,
+            @RequestParam(required = false) String llegada) {
+        try {
+            String nuevoId = capacidades.actualizarDestinoVuelo(idVuelo, valor, llegada);
+            return nuevoId != null
+                    ? ResponseEntity.ok(Map.of("idVuelo", nuevoId, "aplicado", true))
+                    : ResponseEntity.notFound().build();
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(409).body(Map.of("aplicado", false, "motivo", ex.getMessage()));
+        }
+    }
+
+    @PostMapping("/vuelos/restaurar-horarios")
+    public ResponseEntity<Map<String, Object>> restaurarHorariosVuelos() {
+        try {
+            int restaurados = capacidades.restaurarHorariosVuelosAFabrica();
+            return ResponseEntity.ok(Map.of("restaurados", restaurados));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(409).body(Map.of("restaurados", 0, "motivo", ex.getMessage()));
+        }
     }
 }

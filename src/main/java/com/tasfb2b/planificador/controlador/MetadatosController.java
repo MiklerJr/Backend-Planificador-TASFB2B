@@ -33,8 +33,6 @@ public class MetadatosController {
         return ResponseEntity.ok(datasetMetadata.getDatosInfo());
     }
 
-    // Cache-Control corto: las altas EN CALIENTE (efímeras por corrida) agregan aeropuertos/vuelos en
-    // vivo; un max-age largo haría que el front tardara en verlos. no-cache ⇒ revalida siempre.
     @GetMapping("/aeropuertos")
     public ResponseEntity<Map<String, AeropuertoDTO>> aeropuertos() {
         return ResponseEntity.ok()

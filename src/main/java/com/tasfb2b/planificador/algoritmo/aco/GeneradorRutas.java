@@ -13,10 +13,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/**
- * Provee las rutas candidatas de cada envío llamando al {@link OperadorReparacionVoraz} (Dijkstra
- * multicriterio) y las reutiliza vía una caché de paths por bloque. Es el "hijo Dijkstra" del ACO.
- */
 final class GeneradorRutas {
 
     static final long CACHE_BUCKET_MIN = 60L;

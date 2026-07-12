@@ -146,13 +146,19 @@ public class PersistenciaSolucionService {
 
     public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
-    private void escribirBloque(List<LoteEnvio> enrutados, TablasSolucion t) {
-        // 1. Desactivar la ruta activa previa de estos envíos (no-op para los nuevos).
-        List<Object[]> desactivar = new ArrayList<>(enrutados.size());
-        for (LoteEnvio b : enrutados) desactivar.add(new Object[]{ b.getId() });
-        jdbc.batchUpdate("UPDATE " + t.rutaTabla() + " SET activa = FALSE WHERE id_envio = ? AND activa", desactivar);
+    // ── Identidad de fila para la persistencia (fragmentación) ────────────────────────────
+    private static String idEnvioBd(LoteEnvio b) { return b.getIdPadre() != null ? b.getIdPadre() : b.getId(); }
+    private static int    subLote(LoteEnvio b)   { return b.esFragmento() ? b.getFragmento() : 0; }
+    private static String claveRuta(LoteEnvio b) { return idEnvioBd(b) + "|" + subLote(b); }
 
-        // 2. Insertar las rutas nuevas (activa=true) por lotes, recuperando id_ruta por id_envio.
+    private void escribirBloque(List<LoteEnvio> enrutados, TablasSolucion t) {
+        // 1. Desactivar la ruta activa previa de estos (envío, sub_lote) (no-op para los nuevos).
+        List<Object[]> desactivar = new ArrayList<>(enrutados.size());
+        for (LoteEnvio b : enrutados) desactivar.add(new Object[]{ idEnvioBd(b), subLote(b) });
+        jdbc.batchUpdate("UPDATE " + t.rutaTabla()
+                + " SET activa = FALSE WHERE id_envio = ? AND sub_lote = ? AND activa", desactivar);
+
+        // 2. Insertar las rutas nuevas (activa=true) por lotes, recuperando id_ruta por (envío, sub_lote).
         Map<String, Long> idRutaPorEnvio = new HashMap<>();
         for (int i = 0; i < enrutados.size(); i += LOTE_RUTAS) {
             insertarRutasLote(enrutados.subList(i, Math.min(i + LOTE_RUTAS, enrutados.size())), idRutaPorEnvio, t);
@@ -161,7 +167,7 @@ public class PersistenciaSolucionService {
         // 3. Insertar todos los tramos del bloque en un único batch.
         List<Object[]> tramos = new ArrayList<>();
         for (LoteEnvio b : enrutados) {
-            Long idRuta = idRutaPorEnvio.get(b.getId());
+            Long idRuta = idRutaPorEnvio.get(claveRuta(b));
             if (idRuta == null) continue;
             List<Arista> ruta = b.getRutaCompleta();
             List<Long> deps = b.getSalidasCompletas();
@@ -182,12 +188,13 @@ public class PersistenciaSolucionService {
 
     private void insertarRutasLote(List<LoteEnvio> lote, Map<String, Long> idRutaPorEnvio, TablasSolucion t) {
         StringBuilder sql = new StringBuilder(
-                "INSERT INTO " + t.rutaTabla() + " (id_envio, activa, costo_total, duracion_horas, cumple_sla, slack_sla_min, llegada_utc) VALUES ");
-        List<Object> args = new ArrayList<>(lote.size() * 6);
+                "INSERT INTO " + t.rutaTabla() + " (id_envio, activa, costo_total, duracion_horas, "
+                + "cumple_sla, slack_sla_min, llegada_utc, sub_lote, total_sub_lotes, cantidad) VALUES ");
+        List<Object> args = new ArrayList<>(lote.size() * 9);
         for (int i = 0; i < lote.size(); i++) {
             LoteEnvio b = lote.get(i);
             if (i > 0) sql.append(',');
-            sql.append("(?, TRUE, ?, ?, ?, ?, ?)");
+            sql.append("(?, TRUE, ?, ?, ?, ?, ?, ?, ?, ?)");
 
             List<Arista> ruta = b.getRutaCompleta();
             List<Long> deps = b.getSalidasCompletas();
@@ -196,16 +203,20 @@ public class PersistenciaSolucionService {
             double transitMin = llegadaMin - readyMin;
             double slackMin = b.getHorasLimiteSla() * 60.0 - transitMin;
 
-            args.add(b.getId());
-            args.add(transitMin);          // costo_total (proxy = tránsito total en min)
-            args.add(transitMin / 60.0);   // duracion_horas
+            args.add(idEnvioBd(b));
+            args.add(transitMin);
+            args.add(transitMin / 60.0);
             args.add(b.isCumpleSLA());
             args.add((int) Math.round(slackMin));
             args.add(epochMinToLdt(llegadaMin));
+            args.add(subLote(b));
+            args.add(b.esFragmento() ? b.getTotalFragmentos() : 0);
+            args.add(b.getCantidad());
         }
-        sql.append(" RETURNING ").append(t.idRutaCol()).append(" AS id_ruta, id_envio");
+        sql.append(" RETURNING ").append(t.idRutaCol()).append(" AS id_ruta, id_envio, sub_lote");
         jdbc.query(sql.toString(),
-                (RowCallbackHandler) rs -> idRutaPorEnvio.put(rs.getString("id_envio"), rs.getLong("id_ruta")),
+                (RowCallbackHandler) rs -> idRutaPorEnvio.put(
+                        rs.getString("id_envio") + "|" + rs.getInt("sub_lote"), rs.getLong("id_ruta")),
                 args.toArray());
     }
 

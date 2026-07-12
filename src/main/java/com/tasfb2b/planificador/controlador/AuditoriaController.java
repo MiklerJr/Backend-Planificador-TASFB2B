@@ -48,7 +48,6 @@ public class AuditoriaController {
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename=\"auditoria_" + jobId + ".zip\"");
         headers.set("X-Audit-Rows", String.valueOf(r.filas()));
-        // Si el rango pedido se recortó a la ventana realmente simulada, se informa el rango efectivo.
         if (r.recortado()) {
             headers.set("X-Audit-Range", r.desdeEfectivo() + "/" + r.hastaEfectivo());
         }

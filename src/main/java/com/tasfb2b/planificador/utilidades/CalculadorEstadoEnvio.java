@@ -5,6 +5,7 @@ import com.tasfb2b.planificador.dto.simulacion.EnvioEstadoResponse;
 import com.tasfb2b.planificador.dto.simulacion.TramoRuta;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 public final class CalculadorEstadoEnvio {
@@ -51,16 +52,16 @@ public final class CalculadorEstadoEnvio {
             LocalDateTime salida = parse(t.getSalidaUtc());
             LocalDateTime llegada = parse(t.getLlegadaUtc());
             if (salida == null || llegada == null) {
-                continue;   // tramo sin tiempos parseables: se deja sin estado
+                continue;
             }
-            if (!llegada.isAfter(ahoraUtc)) {                 // llegada <= ahora
+            if (!llegada.isAfter(ahoraUtc)) {
                 t.setEstado(COMPLETADO);
                 completados++;
                 ultimoCompletadoIdx = i;
-            } else if (!salida.isAfter(ahoraUtc)) {           // salida <= ahora < llegada
+            } else if (!salida.isAfter(ahoraUtc)) {
                 t.setEstado(EN_CURSO);
                 if (enCursoIdx == null) enCursoIdx = i;
-            } else {                                          // salida > ahora
+            } else {
                 t.setEstado(PENDIENTE);
             }
         }
@@ -72,10 +73,10 @@ public final class CalculadorEstadoEnvio {
         LocalDateTime llegadaUlt = parse(tramos.get(total - 1).getLlegadaUtc());
 
         if (enCursoIdx != null) {
-            r.setEstado(E_EN_VUELO);                          // en el aire: ubicación = null
+            r.setEstado(E_EN_VUELO);
         } else if (salida0 != null && ahoraUtc.isBefore(salida0)) {
             r.setEstado(E_PROGRAMADO);
-            r.setUbicacionActual(tramos.get(0).getOrigen()); // esperando en origen
+            r.setUbicacionActual(tramos.get(0).getOrigen());
         } else if (llegadaUlt != null && !ahoraUtc.isBefore(llegadaUlt)) {
             String destinoFinal = asig != null ? asig.getDestino() : null;
             String destinoUltTramo = tramos.get(total - 1).getDestino();
@@ -84,12 +85,61 @@ public final class CalculadorEstadoEnvio {
             r.setEstado(llegaAlDestino ? E_ENTREGADO : E_EN_ESCALA);
             r.setUbicacionActual(destinoUltTramo);
         } else {
-            r.setEstado(E_EN_ESCALA);                         // entre tramos, en una escala
+            r.setEstado(E_EN_ESCALA);
             if (ultimoCompletadoIdx >= 0) {
                 r.setUbicacionActual(tramos.get(ultimoCompletadoIdx).getDestino());
             }
         }
         return r;
+    }
+
+    public static EnvioEstadoResponse agregarFragmentos(List<AsignacionMaleta> asigs, LocalDateTime ahoraUtc) {
+        EnvioEstadoResponse agg = new EnvioEstadoResponse();
+        agg.setInstanteReferencia(ahoraUtc != null ? ahoraUtc.toString() : null);
+
+        List<EnvioEstadoResponse> fragmentos = new ArrayList<>(asigs.size());
+        int tramosTotales = 0, tramosCompletados = 0;
+        String llegadaMax = null;
+        int rankMin = Integer.MAX_VALUE;
+        String estadoMenosAvanzado = E_DESCONOCIDO;
+
+        for (AsignacionMaleta a : asigs) {
+            EnvioEstadoResponse f = calcular(a, ahoraUtc);
+            fragmentos.add(f);
+            tramosTotales += f.getTramosTotales();
+            tramosCompletados += f.getTramosCompletados();
+            llegadaMax = maxIso(llegadaMax, f.getLlegadaFinalUtc());
+            int rank = rangoEstado(f.getEstado());
+            if (rank < rankMin) {
+                rankMin = rank;
+                estadoMenosAvanzado = f.getEstado();
+            }
+        }
+
+        agg.setFragmentos(fragmentos);
+        agg.setTramosTotales(tramosTotales);
+        agg.setTramosCompletados(tramosCompletados);
+        agg.setLlegadaFinalUtc(llegadaMax);
+        agg.setEstado(estadoMenosAvanzado);
+        return agg;
+    }
+
+    private static int rangoEstado(String estado) {
+        if (estado == null) return 0;
+        switch (estado) {
+            case E_DESCONOCIDO: return 0;
+            case E_PROGRAMADO:  return 1;
+            case E_EN_ESCALA:   return 2;
+            case E_EN_VUELO:    return 3;
+            case E_ENTREGADO:   return 4;
+            default:            return 1;
+        }
+    }
+
+    private static String maxIso(String a, String b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.compareTo(b) >= 0 ? a : b;
     }
 
     private static LocalDateTime parse(String iso) {

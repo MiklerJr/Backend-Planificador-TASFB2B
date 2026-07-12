@@ -18,8 +18,8 @@ public class AnalizadorAeropuertos {
             "^\\s*(\\d{2})\\s+" +           // 1: número
                     "([A-Z]{4})\\s+" +              // 2: código ICAO
                     "(.+?)\\s{2,}" +                // 3: ciudad
-                    "(.+?)\\s{2,}" +                // 4: país ← era (\\S+), ahora captura varias palabras
-                    "(\\w{4})\\s+" +                // 5: código corto (bogo, quit...)
+                    "(.+?)\\s{2,}" +                // 4: país
+                    "(\\w{4})\\s+" +                // 5: código corto
                     "([+-]\\d+)\\s+" +              // 6: GMT
                     "(\\d+)\\s+" +                  // 7: capacidad
                     "Latitude:\\s*([\\d°'\"NSns .]+)\\s+" +

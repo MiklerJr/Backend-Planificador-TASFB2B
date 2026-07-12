@@ -107,13 +107,13 @@ planificador:
     demanda-max-dias: 31        # span máximo (días) de /demanda/resumen (acota el escaneo de BD)
 
   operativo:
-    # Escala mínima = permanencia mínima de una maleta en un aeropuerto entre dos vuelos (min).
-    # Fuente única para el ruteo (OperadorReparacionVoraz) y la auditoría (AuditoriaService).
-    # Cambiar cualquiera de estos invalida la caché de esqueletos persistida (huella distinta) → se recalcula.
     tiempo-min-escala-minutos: 10
-    # Tiempo de espera en el almacén del destino FINAL hasta que el cliente recoge la maleta (min).
-    # Cuenta para el SLA (transit = llegada + este tiempo) y para la ocupación del almacén destino.
     tiempo-recojo-destino-minutos: 15
 
   cache:
     skeleton-file: data/skeleton-cache.bin
+
+  fragmentacion:
+    habilitada: true                 # false = comportamiento actual exacto
+    max-maletas-por-sublote: 150     # 0 = auto = max(capacidad de avión) del grafo de la corrida
+    max-sublotes: 64                 # tope de sub-lotes por envío (anti-abuso ante cantidad absurda)

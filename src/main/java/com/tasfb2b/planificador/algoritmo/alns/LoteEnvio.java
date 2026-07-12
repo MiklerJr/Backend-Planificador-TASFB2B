@@ -16,8 +16,12 @@ public class LoteEnvio {
     private Integer clienteId;
     private boolean sintetico;
 
+    private String idPadre;
+    private int fragmento;
+    private int totalFragmentos;
+
     private List<Arista> rutaAsignada;
-    private List<Long> salidasAsignadas; // epoch-minutes, paralelo a rutaAsignada
+    private List<Long> salidasAsignadas;
     private boolean cumpleSLA;
 
     private List<Arista> prefijoFijo;
@@ -73,7 +77,7 @@ public class LoteEnvio {
         return (slaMin - transitMin) / slaMin;
     }
 
-    // ── Prefijo fijo / posición actual ────────────────────────────────
+    // Prefijo fijo
     public boolean tienePrefijo() {
         return prefijoFijo != null && !prefijoFijo.isEmpty();
     }
@@ -118,6 +122,9 @@ public class LoteEnvio {
                                                codigoOrigen, codigoDestino, tiempoListo);
         clone.setClienteId(this.clienteId);
         clone.setSintetico(this.sintetico);
+        clone.setIdPadre(this.idPadre);
+        clone.setFragmento(this.fragmento);
+        clone.setTotalFragmentos(this.totalFragmentos);
         clone.setRutaAsignada(new ArrayList<>(this.rutaAsignada));
         clone.setSalidasAsignadas(
                 salidasAsignadas != null ? new ArrayList<>(salidasAsignadas) : null);
@@ -149,4 +156,12 @@ public class LoteEnvio {
     public void setClienteId(Integer id)      { this.clienteId = id; }
     public boolean isSintetico()              { return sintetico; }
     public void setSintetico(boolean v)       { this.sintetico = v; }
+    public String getIdPadre()                { return idPadre; }
+    public void setIdPadre(String p)          { this.idPadre = p; }
+    public int getFragmento()                 { return fragmento; }
+    public void setFragmento(int f)           { this.fragmento = f; }
+    public int getTotalFragmentos()           { return totalFragmentos; }
+    public void setTotalFragmentos(int n)     { this.totalFragmentos = n; }
+
+    public boolean esFragmento()              { return idPadre != null; }
 }

@@ -138,9 +138,6 @@ public class RegistroJobs {
         return activos;
     }
 
-    /** True si hay un job cuyo motor está usando el grafo ahora mismo (calentando o ejecutando).
-     *  Distingue la edición de capacidad EN CALIENTE (solo grafo del run) de la EN FRÍO (BD+RAM+grafo).
-     *  "encolado" NO cuenta: aún no arrancó, así que un cambio en frío debe persistir para ese job. */
     public boolean haySimulacionEnCurso() {
         for (EstadoJob j : jobs.values()) {
             if ("ejecutando".equals(j.estado) || "calentando".equals(j.estado)) return true;

@@ -30,8 +30,6 @@ public class CargadorDatos {
 
     private final JdbcTemplate jdbcTemplate;
 
-    // Estructuras concurrentes: las altas EN CALIENTE (AltasEnCalienteService, hilo worker) hacen
-    // append/remove mientras los endpoints HTTP las leen. Escrituras rarísimas ⇒ copy-on-write.
     private List<Aeropuerto> aeropuertos = new CopyOnWriteArrayList<>();
     private List<Vuelo> vuelos = new CopyOnWriteArrayList<>();
 
@@ -53,7 +51,7 @@ public class CargadorDatos {
         String sqlAeropuertos = "SELECT icao, ciudad, huso_horario, capacidad_almacen, capacidad_almacen_original, latitud, longitud FROM AEROPUERTO ORDER BY icao";
         aeropuertos = new CopyOnWriteArrayList<>(jdbcTemplate.query(sqlAeropuertos, (rs, rowNum) -> {
             Aeropuerto a = new Aeropuerto();
-            a.setCodigo(rs.getString("icao")); // Usa setIcao() si así se llama en tu modelo
+            a.setCodigo(rs.getString("icao"));
             String codigo = a.getCodigo();
             a.setCiudad(rs.getString("ciudad"));
             a.setOffsetHorario(rs.getInt("huso_horario"));
@@ -306,9 +304,6 @@ public class CargadorDatos {
         return icao == null ? null : aeropuertoMapCache.get(icao);
     }
 
-    // ── Altas EN CALIENTE (efímeras por corrida; ver AltasEnCalienteService) ────────────
-    // Append-only al final de la lista: preserva el mapeo posicional 1:1 vuelo↔arista del grafo.
-
     public void agregarVueloEfimero(Vuelo v) {
         if (v != null) vuelos.add(v);
     }
@@ -323,7 +318,6 @@ public class CargadorDatos {
         aeropuertoMapCache.put(a.getCodigo(), a);
     }
 
-    /** Compensación puntual de un alta fallida: quita exactamente ese aeropuerto (lista + mapa). */
     public void quitarAeropuertoEfimero(Aeropuerto a) {
         if (a == null || !a.isEfimero()) return;
         aeropuertos.remove(a);

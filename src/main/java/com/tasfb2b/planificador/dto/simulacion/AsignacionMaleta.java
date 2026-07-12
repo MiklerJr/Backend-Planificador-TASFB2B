@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.dto.simulacion;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 import java.util.List;
 
@@ -15,4 +16,8 @@ public class AsignacionMaleta {
     private List<TramoRuta> tramos;
     private String registroLocal;
     private String registroUtc;
+
+    @JsonInclude(JsonInclude.Include.NON_NULL) private String  idEnvioPadre;
+    @JsonInclude(JsonInclude.Include.NON_NULL) private Integer fragmento;
+    @JsonInclude(JsonInclude.Include.NON_NULL) private Integer totalFragmentos;
 }

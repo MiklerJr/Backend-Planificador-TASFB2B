@@ -33,7 +33,6 @@ import java.util.zip.ZipOutputStream;
 @Service
 public class AuditoriaService {
 
-    // Escala mínima y recojo en destino (min): fuente única en yaml (planificador.operativo.*).
     private final int tiempoMinEscala;
     private final long tiempoRecojoDestino;
 
@@ -68,7 +67,7 @@ public class AuditoriaService {
         int slaMin = batch.getHorasLimiteSla() * 60;
         audit.setDeadlineMin(slaMin);
 
-        List<Arista> ruta = batch.getRutaCompleta();   // ruta real = prefijo volado + sufijo
+        List<Arista> ruta = batch.getRutaCompleta();
         boolean enrutada = ruta != null && !ruta.isEmpty();
 
         if (!enrutada) {
@@ -186,7 +185,6 @@ public class AuditoriaService {
                 new BufferedOutputStream(Files.newOutputStream(zipPath)), StandardCharsets.UTF_8)) {
 
             if (ordenados.isEmpty()) {
-                // CSV de envíos vacío (solo cabecera) para no devolver un archivo corrupto.
                 zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, null, null, nombresUsados)));
                 Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
                 w.write(CSV_HEADER);
@@ -206,13 +204,11 @@ public class AuditoriaService {
                         w.write(lineaCsv(construir(ordenados.get(i))));
                         totalFilas++;
                     }
-                    // flush (no close) para no cerrar el ZipOutputStream subyacente.
                     w.flush();
                     zos.closeEntry();
                 }
             }
 
-            // CSV de vuelos cancelados (siempre presente, aunque solo lleve la cabecera).
             escribirCsvVuelosCancelados(zos, jobId, vuelosCancelados);
         }
         return totalFilas;
@@ -241,9 +237,8 @@ public class AuditoriaService {
                 orden.sort(Comparator.comparing(LoteEnvio::getTiempoListo));
                 for (LoteEnvio b : orden) sink.accept(b);
             }
-            esc.cerrar();   // vuelca lo pendiente; si no hubo filas, deja un CSV solo-cabecera
+            esc.cerrar();
 
-            // CSV de vuelos cancelados (siempre presente, aunque solo lleve la cabecera).
             escribirCsvVuelosCancelados(zos, jobId, vuelosCancelados);
         }
         return total[0];
@@ -297,7 +292,6 @@ public class AuditoriaService {
         void cerrar() {
             volcar();
             if (!algoEscrito) {
-                // Ningún envío: CSV vacío (solo cabecera) para no devolver un ZIP corrupto.
                 try {
                     zos.putNextEntry(new ZipEntry(nombreArchivo(jobId, null, null, nombresUsados)));
                     Writer w = new OutputStreamWriter(zos, StandardCharsets.UTF_8);
