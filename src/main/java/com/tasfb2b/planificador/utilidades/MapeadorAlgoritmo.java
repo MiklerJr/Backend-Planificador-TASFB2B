@@ -21,7 +21,6 @@ public class MapeadorAlgoritmo {
     public Grafo mapearAGrafo(List<Aeropuerto> aeropuertos, List<Vuelo> vuelos) {
         Grafo graph = new Grafo();
 
-        // 1. Mapear Nodos (Aeropuertos)
         for (Aeropuerto a : aeropuertos) {
             graph.agregarNodo(a.getCodigo());
             Nodo nodo = graph.nodos.get(a.getCodigo());
@@ -30,7 +29,6 @@ public class MapeadorAlgoritmo {
             nodo.capacidadAlmacen = capacidadAlmacen;
         }
 
-        // 2. Mapear Aristas (Vuelos)
         int edgeIdx = 0;
         for (Vuelo v : vuelos) {
             graph.agregarArista(construirArista(v, graph, edgeIdx++));
@@ -39,12 +37,6 @@ public class MapeadorAlgoritmo {
         return graph;
     }
 
-    /**
-     * Construye la arista de un vuelo con la normalización UTC canónica (depUtc = salida − offset del
-     * origen; duración real con módulo 24 h). Única fuente del mapeo vuelo→arista: la usa el bucle de
-     * {@link #mapearAGrafo} y las altas EN CALIENTE (AltasEnCalienteService), que deben producir una
-     * arista idéntica a la que saldría de reconstruir el grafo. No agrega la arista al grafo.
-     */
     public static Arista construirArista(Vuelo v, Grafo graph, int indice) {
         Arista edge = new Arista();
 
@@ -85,18 +77,10 @@ public class MapeadorAlgoritmo {
         return edge;
     }
 
-    /** Mapeo sin fragmentación (comportamiento previo exacto): delega con umbral infinito. */
     public List<LoteEnvio> mapearALotes(List<Envio> maletas) {
         return mapearALotes(maletas, Integer.MAX_VALUE, Integer.MAX_VALUE);
     }
 
-    /**
-     * Mapea la demanda a lotes fragmentando AL NACER los envíos cuya cantidad supera {@code umbral}
-     * (caso E1: cantidad &gt; capacidad de avión). Con {@code umbral = Integer.MAX_VALUE} nadie se
-     * fragmenta (equivale al mapeo previo). El reparto es puro y determinista
-     * ({@link FragmentadorEnvios#fragmentar}), imprescindible porque procesarBloque re-mapea la demanda
-     * dos veces por bloque y ambas pasadas deben producir ids/cantidades idénticos.
-     */
     public List<LoteEnvio> mapearALotes(List<Envio> maletas, int umbral, int maxSublotes) {
         List<LoteEnvio> out = new ArrayList<>();
         for (Envio m : maletas) {

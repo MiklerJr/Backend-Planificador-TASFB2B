@@ -52,16 +52,16 @@ public final class CalculadorEstadoEnvio {
             LocalDateTime salida = parse(t.getSalidaUtc());
             LocalDateTime llegada = parse(t.getLlegadaUtc());
             if (salida == null || llegada == null) {
-                continue;   // tramo sin tiempos parseables: se deja sin estado
+                continue;
             }
-            if (!llegada.isAfter(ahoraUtc)) {                 // llegada <= ahora
+            if (!llegada.isAfter(ahoraUtc)) {
                 t.setEstado(COMPLETADO);
                 completados++;
                 ultimoCompletadoIdx = i;
-            } else if (!salida.isAfter(ahoraUtc)) {           // salida <= ahora < llegada
+            } else if (!salida.isAfter(ahoraUtc)) {
                 t.setEstado(EN_CURSO);
                 if (enCursoIdx == null) enCursoIdx = i;
-            } else {                                          // salida > ahora
+            } else {
                 t.setEstado(PENDIENTE);
             }
         }
@@ -73,10 +73,10 @@ public final class CalculadorEstadoEnvio {
         LocalDateTime llegadaUlt = parse(tramos.get(total - 1).getLlegadaUtc());
 
         if (enCursoIdx != null) {
-            r.setEstado(E_EN_VUELO);                          // en el aire: ubicación = null
+            r.setEstado(E_EN_VUELO);
         } else if (salida0 != null && ahoraUtc.isBefore(salida0)) {
             r.setEstado(E_PROGRAMADO);
-            r.setUbicacionActual(tramos.get(0).getOrigen()); // esperando en origen
+            r.setUbicacionActual(tramos.get(0).getOrigen());
         } else if (llegadaUlt != null && !ahoraUtc.isBefore(llegadaUlt)) {
             String destinoFinal = asig != null ? asig.getDestino() : null;
             String destinoUltTramo = tramos.get(total - 1).getDestino();
@@ -85,7 +85,7 @@ public final class CalculadorEstadoEnvio {
             r.setEstado(llegaAlDestino ? E_ENTREGADO : E_EN_ESCALA);
             r.setUbicacionActual(destinoUltTramo);
         } else {
-            r.setEstado(E_EN_ESCALA);                         // entre tramos, en una escala
+            r.setEstado(E_EN_ESCALA);
             if (ultimoCompletadoIdx >= 0) {
                 r.setUbicacionActual(tramos.get(ultimoCompletadoIdx).getDestino());
             }
@@ -93,12 +93,6 @@ public final class CalculadorEstadoEnvio {
         return r;
     }
 
-    /**
-     * Estado agregado de un envío FRAGMENTADO a partir del estado de cada sub-lote. El estado global es
-     * el del sub-lote MENOS avanzado (ENTREGADO sólo si todos lo están); {@code tramosTotales} y
-     * {@code tramosCompletados} son sumas; {@code llegadaFinalUtc} es el máximo. La {@code asignacion}
-     * global va null (cada fragmento lleva la suya en {@code fragmentos}).
-     */
     public static EnvioEstadoResponse agregarFragmentos(List<AsignacionMaleta> asigs, LocalDateTime ahoraUtc) {
         EnvioEstadoResponse agg = new EnvioEstadoResponse();
         agg.setInstanteReferencia(ahoraUtc != null ? ahoraUtc.toString() : null);
@@ -130,7 +124,6 @@ public final class CalculadorEstadoEnvio {
         return agg;
     }
 
-    /** Orden de avance de un envío (menor = menos avanzado): controla el estado agregado. */
     private static int rangoEstado(String estado) {
         if (estado == null) return 0;
         switch (estado) {
@@ -146,7 +139,7 @@ public final class CalculadorEstadoEnvio {
     private static String maxIso(String a, String b) {
         if (a == null) return b;
         if (b == null) return a;
-        return a.compareTo(b) >= 0 ? a : b;   // ISO-8601 es comparable lexicográficamente
+        return a.compareTo(b) >= 0 ? a : b;
     }
 
     private static LocalDateTime parse(String iso) {
