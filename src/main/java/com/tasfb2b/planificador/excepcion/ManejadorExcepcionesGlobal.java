@@ -46,18 +46,6 @@ public class ManejadorExcepcionesGlobal {
         return build(HttpStatus.NOT_FOUND, "Recurso no encontrado", request);
     }
 
-    /**
-     * Fallos al escribir la respuesta. El caso frecuente en {@code /jobs/{id}/resultado} es una
-     * <em>desconexión del cliente</em> a mitad de la descarga (navegación, F5, cierre de pestaña,
-     * corte de red): el navegador cierra el socket y Tomcat lanza {@link ClientAbortException} —
-     * envuelto en {@link AsyncRequestNotUsableException}/{@link HttpMessageNotWritableException}—
-     * al seguir escribiendo. Es un evento benigno, no un bug: la respuesta ya está comprometida y
-     * reintentar escribir vuelve a fallar. Se loguea como {@code WARN} de una línea (sin stacktrace)
-     * y se retorna {@code null} para que Spring no reintente escribir en el socket cerrado.
-     *
-     * <p>Un {@link HttpMessageNotWritableException} que NO sea desconexión (error real de
-     * serialización) mantiene el tratamiento de siempre: {@code 500} con stacktrace en {@code ERROR}.
-     */
     @ExceptionHandler({HttpMessageNotWritableException.class,
                        ClientAbortException.class,
                        AsyncRequestNotUsableException.class})
@@ -65,7 +53,7 @@ public class ManejadorExcepcionesGlobal {
                                                                     HttpServletRequest request) {
         if (DisconnectedClientHelper.isClientDisconnectedException(ex)) {
             log.warn("Cliente cerró la conexión durante {}", pathDe(request));
-            return null; // no-op: HttpEntityMethodProcessor no reescribe si el retorno es null
+            return null;
         }
         log.error("Error no controlado en {}", pathDe(request), ex);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "Error interno del servidor", request);
@@ -76,8 +64,6 @@ public class ManejadorExcepcionesGlobal {
         log.error("Error no controlado en {}", pathDe(request), ex);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "Error interno del servidor", request);
     }
-
-    // ----------------------------------------------------------------------- helpers
 
     private static ResponseEntity<ErrorResponse> build(HttpStatus status, String mensaje,
                                                        HttpServletRequest request) {

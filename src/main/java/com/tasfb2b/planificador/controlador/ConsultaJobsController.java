@@ -132,15 +132,15 @@ public class ConsultaJobsController {
     public ResponseEntity<EnvioEstadoResponse> envioJob(
             @PathVariable String jobId, @PathVariable String idEnvio,
             @RequestParam(required = false) String en) {
-        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();   // 404 job
+        if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
         java.time.LocalDateTime instante;
         try {
             instante = (en == null || en.isBlank()) ? null : java.time.LocalDateTime.parse(en);
         } catch (java.time.format.DateTimeParseException e) {
-            return ResponseEntity.badRequest().build();                                // 400 'en' inválido
+            return ResponseEntity.badRequest().build();
         }
         EnvioEstadoResponse estado = service.buscarEstadoEnvio(jobId, idEnvio, instante);
-        if (estado == null) return ResponseEntity.notFound().build();                  // 404 envío
+        if (estado == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(estado);
     }
 
@@ -152,7 +152,7 @@ public class ConsultaJobsController {
         if (job == null) return ResponseEntity.notFound().build();
 
         Map<String, Object> body = new HashMap<>();
-        body.put("bloques",   job.bloquesDesdeExacto(desde));   // desde purgado ⇒ vacío, no bloques viejos
+        body.put("bloques",   job.bloquesDesdeExacto(desde));
         body.put("total",     job.bloquesPublicados());
         body.put("primerBloqueDisponible", job.primerBloqueDisponible());
         Long duracionRealMs = job.getDuracionRealMs();
@@ -169,19 +169,13 @@ public class ConsultaJobsController {
             @RequestParam(defaultValue = "true") boolean incluirVuelosPlaneados) {
         EstadoJob job = service.getJob(jobId);
         if (job == null)             return ResponseEntity.notFound().build();
-        if (job.resultado == null)   return ResponseEntity.noContent().build(); // 204 = aún ejecutando
-        // La lista vuelosPlaneados es grande (~miles de VueloBackend) y lenta de serializar; el
-        // cliente que no la necesita puede pedir el resultado sin ella (payload chico, menos abortos).
+        if (job.resultado == null)   return ResponseEntity.noContent().build();
         SimulacionResponse body = incluirVuelosPlaneados
                 ? job.resultado
                 : sinVuelosPlaneados(job.resultado);
         return ResponseEntity.ok(body);
     }
 
-    /**
-     * Copia superficial de {@link SimulacionResponse} sin {@code vuelosPlaneados}. No se muta la
-     * instancia compartida cacheada en el {@code EstadoJob} (la sirven varios clientes).
-     */
     private static SimulacionResponse sinVuelosPlaneados(SimulacionResponse full) {
         SimulacionResponse copia = new SimulacionResponse();
         copia.setMetricas(full.getMetricas());
@@ -189,7 +183,6 @@ public class ConsultaJobsController {
         copia.setAeropuertosInfo(full.getAeropuertosInfo());
         copia.setK(full.getK());
         copia.setSaMinutos(full.getSaMinutos());
-        // vuelosPlaneados queda null a propósito (el cliente lo omitió).
         return copia;
     }
 }

@@ -159,11 +159,6 @@ public class MigradorEnviosDb {
         return new int[]{ insertados, descartados };
     }
 
-    /**
-     * La fecha-hora de cada línea (YYYYMMDD-HH-MM) está en hora LOCAL del aeropuerto origen (misma
-     * convención que los TXT del dataset maestro); se convierte a UTC con {@code offsetOrigenHoras}
-     * (registroUtc = local − offset) porque la inyección en vivo consume tiempos UTC.
-     */
     public static List<InyeccionEnviosRequest.Item> parsearEnviosParaInyeccion(
             Reader reader, String origenIcao, int offsetOrigenHoras,
             String registrador, String sede) throws IOException {

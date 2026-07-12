@@ -31,9 +31,9 @@ public final class UtilidadesArchivo {
 
     private static List<String> limpiarLineas(List<String> lineas) {
         return lineas.stream()
-                .map(l -> l.replace("\u0000", "")  // Caracteres nulos UTF-16
-                        .replace("\uFEFF", "")  // BOM invisible al final de línea
-                        .replace("\u200B", "")  // Zero-width space
+                .map(l -> l.replace("\u0000", "")
+                        .replace("\uFEFF", "")
+                        .replace("\u200B", "")
                         .trim())
                 .collect(Collectors.toList());
     }

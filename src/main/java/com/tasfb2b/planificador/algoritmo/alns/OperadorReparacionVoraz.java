@@ -13,35 +13,29 @@ import java.util.function.BooleanSupplier;
 @Slf4j
 public class OperadorReparacionVoraz implements OperadorReparacion {
 
-    // Escala mínima (permanencia mín. en un aeropuerto entre vuelos), en minutos. Configurable por yaml
-    // (planificador.operativo.tiempo-min-escala-minutos) vía configurarTiempoMinEscala; default 10.
     private long conexionMin = 10L;
-    // Tiempo de espera en el destino final hasta el recojo (min). Configurable por yaml
-    // (planificador.operativo.tiempo-recojo-destino-minutos) vía configurarTiempoRecojoDestino; default 15.
     private long tiempoRecojoDestino = 15L;
     public static final long SLOT_ALMACEN_MIN = 60L;
     private static final long HORIZONTE_MAX_MIN  = 3 * 24 * 60L;
     private static final long MIN_DIA          = CodificadorClaveVuelo.MIN_DIA;
     private static final int  BITS_DIA         = CodificadorClaveVuelo.BITS_DIA;
     private static final int  MAX_TRAMOS_CANDIDATO = 10;
-    private static final long BUCKET_ESQUELETO_MIN = 60L;   // bucket de hora-del-dÃ­a para la cache cross-bloque
-    private static final int  MAX_ESQUELETOS_POR_CLAVE = 8;   // sitio para esqueletos hub-avoiding
-    private static final int    HUB_RECLASIFICAR_CADA = 10;   // bloques entre reclasificaciones
-    private double umbralHubPico      = 0.65;   // fracciÃ³n de cap a la que un nodo pasa a hub
-    private double precioHubExponente = 2.0;    // exponente p de u^p/(1âˆ’u) en el precio de hub
-    private boolean[] hubPorIndice;          // consulta O(1) en el bucle caliente; arranca vacÃ­o
+    private static final long BUCKET_ESQUELETO_MIN = 60L;
+    private static final int  MAX_ESQUELETOS_POR_CLAVE = 8;
+    private static final int    HUB_RECLASIFICAR_CADA = 10;
+    private double umbralHubPico      = 0.65;
+    private double precioHubExponente = 2.0;
+    private boolean[] hubPorIndice;
     private int confirmacionesDesdeReclasificar = 0;
 
     private final Grafo grafo;
 
-    // NO finales: las altas EN CALIENTE (incorporarArista/incorporarNodo) los reemplazan por
-    // copias ampliadas (append-only: ningún índice existente se mueve).
     private int                  conteoNodos;
     private static final int SLOTS_DIA = (int)(HORIZONTE_MAX_MIN / MIN_DIA) + 1; // 4
 
     private Arista[]             aristaPorIndice;
     private String[]             nodoPorIndice;
-    private List<Arista>[]       adyacenciaPorIndice;   // adyacenciaPorIndice[node.indice] â†’ vecinos salientes
+    private List<Arista>[]       adyacenciaPorIndice;
 
     private final ConcurrentHashMap<Long, Integer> ocupacionVuelo  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> ocupacionAeropuerto = new ConcurrentHashMap<>();
@@ -52,7 +46,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     private long relojUtcMin = Long.MIN_VALUE;
     private final Set<String> origenAdmitidos = new HashSet<>();
 
-    final Map<Long, List<int[]>> rutaCacheEsqueleto;   // package-private para tests; se asigna en el constructor
+    final Map<Long, List<int[]>> rutaCacheEsqueleto;
     private final Set<Long> reSeeded = new HashSet<>();
 
     public OperadorReparacionVoraz(Grafo grafo) {
@@ -63,10 +57,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.rutaCacheEsqueleto = rutaCacheEsqueleto;
         this.grafo = grafo;
 
-        // Asignar idx entero a cada nodo, en orden lexicogrÃ¡fico de ICAO (TreeMap): determinista y
-        // estable entre corridas/reinicios aunque el mapa de nodos cambie de implementaciÃ³n o las
-        // altas EN CALIENTE agreguen/quiten nodos (siempre revertidas antes de construir el operador).
-        // Sostiene las claves de la cachÃ© de esqueletos persistida (skeletonKey empaqueta Ã­ndices).
         Map<String, Integer> nodeIndex = new HashMap<>(grafo.nodos.size() * 2);
         int i = 0;
         for (Map.Entry<String, Nodo> entry : new TreeMap<>(grafo.nodos).entrySet()) {
@@ -84,7 +74,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         aristaPorIndice = new Arista[maxIdx + 1];
         for (Arista e : grafo.aristas) aristaPorIndice[e.indice] = e;
 
-        // Lista de adyacencia indexada por node.indice (evita HashMap lookup en inner loop)
         @SuppressWarnings("unchecked")
         List<Arista>[] adj = new List[conteoNodos];
         for (int j = 0; j < conteoNodos; j++) adj[j] = new ArrayList<>();
@@ -96,14 +85,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.hubPorIndice = new boolean[conteoNodos];
     }
 
-    /**
-     * Alta EN CALIENTE de un vuelo (frontera de bloque, hilo worker): incorpora una arista nueva a las
-     * estructuras congeladas en el constructor. Solo acepta append-only ({@code indice} nuevo, mayor que
-     * todos los existentes): así ningún índice existente se mueve y las claves de ocupación/esqueletos
-     * acumuladas siguen válidas. La ocupación es un mapa disperso, no requiere redimensionar.
-     *
-     * @return true si se incorporó; false si el índice no es append-only o el origen es desconocido.
-     */
     public boolean incorporarArista(Arista e) {
         if (e == null || e.indice < aristaPorIndice.length) return false;   // solo append-only
         if (e.origen == null || e.origen.indice < 0 || e.origen.indice >= adyacenciaPorIndice.length) {
@@ -116,14 +97,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return true;
     }
 
-    /**
-     * Alta EN CALIENTE de un aeropuerto (frontera de bloque, hilo worker): incorpora un nodo nuevo
-     * al final de las estructuras congeladas en el constructor (append-only: los índices existentes
-     * no se mueven). Las búsquedas dimensionan sus arrays por {@code conteoNodos} en cada llamada,
-     * así que el nodo participa desde la siguiente búsqueda sin más cambios.
-     *
-     * @return el índice asignado al nodo (o el que ya tenía si ya estaba incorporado).
-     */
     public int incorporarNodo(Nodo nodo) {
         if (nodo == null) return -1;
         if (nodo.indice >= 0 && nodo.indice < conteoNodos) return nodo.indice;   // ya incorporado
@@ -147,12 +120,10 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (precioHubExponente > 0.0) this.precioHubExponente = precioHubExponente;
     }
 
-    /** Escala mínima (permanencia mín. en aeropuerto entre vuelos), en minutos. Se aplica en el ruteo. */
     public void configurarTiempoMinEscala(long minutos) {
         if (minutos >= 0) this.conexionMin = minutos;
     }
 
-    /** Tiempo de espera en el destino final hasta el recojo (min). Cuenta para SLA y ocupación destino. */
     public void configurarTiempoRecojoDestino(long minutos) {
         if (minutos >= 0) this.tiempoRecojoDestino = minutos;
     }
@@ -243,7 +214,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             EstadoRuta current = pq.poll();
             if (current.nodeIdx == targetIdx) {
                 long transitMinutes = (current.arrivalMin + tiempoRecojoDestino) - readyMin;
-                if (transitMinutes > slaMaxMinutes) return null;   // la mejor llegada ya es tardÃ­a
+                if (transitMinutes > slaMaxMinutes) return null;
                 int[] sk = new int[current.legs];
                 int i = current.legs - 1;
                 for (EstadoRuta s = current; s.edge != null; s = s.parent) sk[i--] = s.edge.indice;
@@ -253,14 +224,13 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             for (Arista flight : adyacenciaPorIndice[current.nodeIdx]) {
                 int nextIdx = (flight.destino == null) ? -1 : flight.destino.indice;
                 if (nextIdx < 0) continue;
-                if (nextIdx != targetIdx && esHub(nextIdx)) continue;   // no transitar por hubs
+                if (nextIdx != targetIdx && esHub(nextIdx)) continue;
                 long minWait  = (current.edge == null) ? 0L : conexionMin;
                 long actualDep = proximaSalidaMin(flight.minutoDelDiaSalida, current.arrivalMin + minWait);
                 long actualArr = actualDep + flight.duracionMinutos;
                 long dayOffset = actualArr / MIN_DIA - readyDay;
                 if (dayOffset < 0 || dayOffset >= SLOTS_DIA) continue;
                 if (actualArr - readyMin > HORIZONTE_MAX_MIN) continue;
-                // capacity-free: NO se chequea vuelo ni almacÃ©n (plantilla cross-bloque).
                 int cell = nextIdx * SLOTS_DIA + (int) dayOffset;
                 if (actualArr < bestTimes[cell]) {
                     bestTimes[cell] = actualArr;
@@ -277,7 +247,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         for (Map.Entry<Long, List<int[]>> e : rutaCacheEsqueleto.entrySet()) {
             if (procesadas >= maxClaves || System.nanoTime() >= deadlineNs) break;
             long key = e.getKey();
-            if (!reSeeded.add(key)) continue;        // ya intentada
+            if (!reSeeded.add(key)) continue;
             procesadas++;
             int startIdx   = (int) (key >>> 40);
             int targetIdx  = (int) ((key >>> 24) & 0xFFFFL);
@@ -293,10 +263,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Interface OperadorReparacion
-    // -----------------------------------------------------------------------
-
     @Override
     public void reparar(SolucionAlns solution, List<LoteEnvio> unassigned,
                        Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
@@ -308,10 +274,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             aplicarABloque(batch, result, blockFlight, blockAirport);
         }
     }
-
-    // -----------------------------------------------------------------------
-    // MÃ©todos de gestiÃ³n de ocupaciÃ³n por bloque
-    // -----------------------------------------------------------------------
 
     public void liberarDeBloque(LoteEnvio batch,
                                   Map<Long, Integer> blockFlight,
@@ -328,7 +290,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             blockFlight.merge(claveVuelo(e.indice, depMin), -batch.getCantidad(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
-            // Libera exactamente los slots de estadÃ­a que cargÃ³ aplicarABloque.
             if (!esFinalLeg && e.destino.indice >= 0) {
                 cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, deps.get(i + 1),
                         -batch.getCantidad());
@@ -337,7 +298,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                         -batch.getCantidad());
             }
         }
-        // Libera la ocupaciÃ³n de origen (espejo de aplicarABloque).
         cargarOrigen(blockAirport, batch, route, deps, -1);
     }
 
@@ -386,10 +346,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return cabeAlmacenPierna(origen, desde, firstDep, batch.getCantidad(), blockAirport);
     }
 
-    // -----------------------------------------------------------------------
-    // OcupaciÃ³n de origen por el backlog (envÃ­os sinRuta en espera)
-    // -----------------------------------------------------------------------
-
     public LoteEnvio reconstruirEsperaOrigenBacklog(Collection<LoteEnvio> pendientes,
                                                        Collection<LoteEnvio> bloqueLote) {
         if (bloqueLote != null) {
@@ -405,7 +361,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         List<LoteEnvio> orden = new ArrayList<>();
         for (LoteEnvio b : pendientes) {
             if (b == null || b.getTiempoListo() == null) continue;
-            if (b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty()) continue; // con ruta â‡’ ya contabilizado
+            if (b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty()) continue;
             orden.add(b);
         }
         orden.sort(Comparator.comparingLong(b -> aMinutoEpoch(b.tiempoListoEfectivo())));
@@ -415,7 +371,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 acumularEsperaOrigen(b, +1);
                 origenAdmitidos.add(b.getId());
             } else if (desbordado == null) {
-                desbordado = b;   // primera maleta que no cabe en su origen â‡’ colapso
+                desbordado = b;
             }
         }
         return desbordado;
@@ -453,8 +409,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         blockAirport.forEach((key, qty) -> {
             if (qty != 0) ocupacionAeropuerto.merge(key, qty, Integer::sum);
         });
-        // Redescubrir hubs desde la ocupaciÃ³n real cada N bloques (todos los escenarios).
-        // Fuera del bucle caliente por-batch â†’ Ta-safe; el conjunto solo crece (sin flapping).
         if (++confirmacionesDesdeReclasificar >= HUB_RECLASIFICAR_CADA) {
             confirmacionesDesdeReclasificar = 0;
             reclasificarHubsPorUtilizacion(umbralHubPico);
@@ -474,7 +428,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             ocupacionVuelo.merge(claveVuelo(e.indice, depMin), -batch.getCantidad(), Integer::sum);
 
             boolean esFinalLeg = (i == route.size() - 1);
-            // Libera por slots de estadÃ­a (mismo intervalo que cargÃ³ aplicarABloque).
             if (!esFinalLeg && e.destino.indice >= 0) {
                 cargarAlmacenPierna(ocupacionAeropuerto, e.destino.indice, arrMin, deps.get(i + 1),
                         -batch.getCantidad());
@@ -483,7 +436,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                         -batch.getCantidad());
             }
         }
-        // Libera la ocupaciÃ³n de origen en la ocupaciÃ³n global (espejo de aplicarABloque).
         cargarOrigen(ocupacionAeropuerto, batch, route, deps, -1);
     }
 
@@ -494,14 +446,12 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         int n = route.size();
         if (k <= 0 || k >= n) return;
 
-        // EstadÃ­a vieja del nodo de corte k-1: [arr_{k-1}, deps[k]).
         Arista corte = route.get(k - 1);
         if (corte.destino != null && corte.destino.indice >= 0) {
             long arrCorte = deps.get(k - 1) + corte.duracionMinutos;
             cargarAlmacenPierna(ocupacionAeropuerto, corte.destino.indice, arrCorte, deps.get(k),
                     -batch.getCantidad());
         }
-        // Sufijo: vuelos y estadÃ­as de destino, desde k.
         for (int i = k; i < n; i++) {
             Arista e      = route.get(i);
             long depMin = deps.get(i);
@@ -524,10 +474,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return (sufijo.getLlegadaMin() + tiempoRecojoDestino) <= deadlineMin;
     }
 
-    // -----------------------------------------------------------------------
-    // Dijkstra earliest-arrival con capacidad global + bloque
-    // -----------------------------------------------------------------------
-
     private ResultadoRuta buscarRutaMasCorta(LoteEnvio batch,
                                           Map<Long, Integer> blockFlight,
                                           Map<Long, Integer> blockAirport) {
@@ -537,7 +483,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     public boolean sinRutaPorAlmacenLleno(LoteEnvio batch) {
         if (batch == null) return false;
         ResultadoRuta con = buscarRutaMasCorta(batch, Map.of(), Map.of(), false);
-        if (con.cumpleSLA && !con.aristas.isEmpty()) return false;  // sÃ­ habÃ­a ruta on-time â†’ no fue almacÃ©n
+        if (con.cumpleSLA && !con.aristas.isEmpty()) return false;
         ResultadoRuta sin = buscarRutaMasCorta(batch, Map.of(), Map.of(), true);
         return sin.cumpleSLA && !sin.aristas.isEmpty();
     }
@@ -724,7 +670,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                         && (actualArr + tiempoRecojoDestino) - readyMin > slaMaxMinutes) {
                     continue;
                 }
-                // Primer vuelo viable solo si la espera en almacÃ©n de origen cabe.
                 if (current.edge == null
                         && !cabeAlmacenPierna(startNodeObj, readyMin, actualDep,
                                 batch.getCantidad(), blockAirport)) continue;
@@ -746,7 +691,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
         candidatos.sort(OperadorReparacionVoraz::compararCandidatosRuta);
 
-        // Guardar los esqueletos hallados para reusarlos en bloques futuros.
         if (!candidatos.isEmpty()) {
             List<int[]> sks = new ArrayList<>(Math.min(candidatos.size(), MAX_ESQUELETOS_POR_CLAVE));
             for (RutaCandidata c : candidatos) {
@@ -770,7 +714,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     public int precalentarEsqueletos(Iterable<LoteEnvio> batches, int maxCandidatos,
                                      BooleanSupplier cancelado) {
         if (batches == null || maxCandidatos <= 0) return 0;
-        Map<Long, Integer> bf = new HashMap<>();   // mapas de bloque vacÃ­os: generarCandidatosRuta solo los lee
+        Map<Long, Integer> bf = new HashMap<>();
         Map<Long, Integer> ba = new HashMap<>();
         Set<Long> vistas = new HashSet<>();
         int calentadas = 0;
@@ -781,15 +725,15 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             Nodo d = grafo.nodos.get(b.getCodigoDestino());
             if (o == null || d == null || o.indice < 0 || d.indice < 0) continue;
             long key = skeletonKey(o.indice, d.indice, aMinutoEpoch(b.getTiempoListo()), b.getHorasLimiteSla());
-            if (!vistas.add(key)) continue;                  // un intento por clave Ãºnica
-            generarCandidatosRuta(b, bf, ba, maxCandidatos); // popula rutaCacheEsqueleto en el miss
+            if (!vistas.add(key)) continue;
+            generarCandidatosRuta(b, bf, ba, maxCandidatos);
             calentadas++;
         }
         return calentadas;
     }
 
-    static long skeletonKey(int startIdx, int targetIdx, long readyMin, int slaHours) {   // package-private para tests
-        long hourBucket = (readyMin % MIN_DIA) / BUCKET_ESQUELETO_MIN;   // 0..23
+    static long skeletonKey(int startIdx, int targetIdx, long readyMin, int slaHours) {
+        long hourBucket = (readyMin % MIN_DIA) / BUCKET_ESQUELETO_MIN;
         return ((long) startIdx << 40)
                 | ((long) targetIdx << 24)
                 | (hourBucket << 8)
@@ -811,10 +755,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return materializarRutaCandidata(batch, ruta, blockFlight, blockAirport);
     }
 
-    // -----------------------------------------------------------------------
-    // Helpers privados
-    // -----------------------------------------------------------------------
-
     private void aplicarABloque(LoteEnvio batch, ResultadoRuta result,
                                Map<Long, Integer> blockFlight, Map<Long, Integer> blockAirport) {
         for (int i = 0; i < result.aristas.size(); i++) {
@@ -825,12 +765,10 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             blockFlight.merge(claveVuelo(e.indice, depMin), batch.getCantidad(), Integer::sum);
 
             boolean esFinalLeg = (i == result.aristas.size() - 1);
-            // Carga por OCUPACIÃ“N concurrente: cada slot de la estadÃ­a real de la pierna.
             if (!esFinalLeg && e.destino.indice >= 0) {
-                long salida = result.salidasReales.get(i + 1);   // hasta que sale el siguiente vuelo
+                long salida = result.salidasReales.get(i + 1);
                 cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, salida, batch.getCantidad());
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
-                // Destino final: la maleta se retira ~tiempoRecojoDestino tras aterrizar (1 slot).
                 cargarAlmacenPierna(blockAirport, e.destino.indice, arrMin, arrMin + tiempoRecojoDestino,
                         batch.getCantidad());
             }
@@ -846,7 +784,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private int vueloRestante(Arista flight, long depMin, Map<Long, Integer> blockFlight) {
         long key = claveVuelo(flight.indice, depMin);
-        if (vueloDiasCancelados.contains(key)) return 0;  // vuelo cancelado ese dÃ­a
+        if (vueloDiasCancelados.contains(key)) return 0;
         return flight.capacidad
              - ocupacionVuelo.getOrDefault(key, 0)
              - blockFlight.getOrDefault(key, 0);
@@ -993,13 +931,12 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (edges.isEmpty() || deps.size() != edges.size()) return false;
 
         long readyMin = aMinutoEpoch(batch.getTiempoListo());
-        if (deps.get(0) < readyMin) return false;   // el envÃ­o aÃºn no estaba listo
+        if (deps.get(0) < readyMin) return false;
 
         long arrMin = deps.get(deps.size() - 1) + edges.get(edges.size() - 1).duracionMinutos;
         long transitMin = (arrMin + tiempoRecojoDestino) - readyMin;
         if (transitMin > (long) batch.getHorasLimiteSla() * 60L) return false;   // tardarÃ­a
 
-        // ColchÃ³n de reserva proporcional a la holgura (urgente â‡’ 0 â‡’ sin reserva).
         double slackRatio = 0.0;
         if (reservaBase > 0.0 || reservaAlmacenBase > 0.0) {
             double slaMin = Math.max(1.0, batch.getHorasLimiteSla() * 60.0);
@@ -1017,14 +954,10 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             if (vueloRestante(e, depMin, blockFlight) < qty + colchonVuelo) return false;
             boolean finalLeg = (i == edges.size() - 1);
             long llegada = depMin + e.duracionMinutos;
-            // Capacidad CONCURRENTE: la estadÃ­a real ocupa [llegada, salida); cada slot
-            // del intervalo debe caber. Destino final â‰ˆ tiempoRecojoDestino; escala = hasta salir.
             long salida = finalLeg ? llegada + tiempoRecojoDestino : deps.get(i + 1);
             if (!cabeAlmacenPierna(e.destino, llegada, salida, qty, blockAirport)) {
                 return false;
             }
-            // ColchÃ³n en almacÃ©n de HUB para la estadÃ­a de una ESCALA (no destino final).
-            // Protege el storage concurrente de hub para los envÃ­os urgentes/24h.
             if (!finalLeg && reservaAlmacen > 0.0 && e.destino != null && e.destino.capacidad > 0
                     && esHub(e.destino.indice)) {
                 int colchonAlm = (int) Math.ceil(reservaAlmacen * e.destino.capacidad);
@@ -1033,7 +966,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 }
             }
         }
-        // La espera en el almacÃ©n de origen tambiÃ©n debe caber.
         if (!cabeOrigen(batch, edges, deps, blockAirport)) return false;
         return true;
     }
@@ -1045,7 +977,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (edges.isEmpty() || deps.size() != edges.size()) return Collections.emptySet();
 
         Set<Long> keys = new HashSet<>(edges.size() * 3);
-        // Incluye los slots de espera en el almacÃ©n de origen.
         if (batch != null) {
             Nodo origen = edges.get(0).origen;
             if (origen != null && origen.indice >= 0 && origen.capacidad > 0) {
@@ -1062,7 +993,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             keys.add(claveVuelo(e.indice, depMin));
 
             boolean esFinalLeg = (i == edges.size() - 1);
-            // Claves por SLOT de la estadÃ­a concurrente (mismo intervalo que aplicarABloque).
             if (!esFinalLeg && e.destino.indice >= 0) {
                 agregarSlotsEstadia(keys, e.destino.indice, arrMin, deps.get(i + 1));
             } else if (esFinalLeg && e.destino.indice >= 0 && e.destino.capacidad > 0) {
@@ -1189,7 +1119,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         double u = (double) usado / capacidad;
         if (u <= 0.0) return 0.0;
         if (u >= 1.0) return 1000.0;
-        return (u * u * u) / Math.max(0.02, 1.0 - u);   // â‰ˆ0 hasta ~0.6, explota cerca de 1
+        return (u * u * u) / Math.max(0.02, 1.0 - u);
     }
 
     double precioCongestionAlmacenHub(int usado, int capacidad) {
@@ -1215,8 +1145,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             if (e.destino != null && e.destino.indice >= 0 && e.destino.capacidad > 0) {
                 long arrMin = depMin + e.duracionMinutos;
                 boolean transito = i < edges.size() - 1;   // escala (no destino final)
-                // L1: en una escala de HUB el almacÃ©n es el cuello â†’ curva que muerde antes.
-                // El destino final (delivery) y las escalas no-hub conservan la curva base.
                 boolean hubTransito = transito && esHub(e.destino.indice);
                 int remaining = capacidadAlmacen(e.destino, arrMin, blockAirport);
                 int usadoArr = e.destino.capacidad - remaining;
@@ -1224,7 +1152,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                         ? precioCongestionAlmacenHub(usadoArr, e.destino.capacidad)
                         : precioCongestion(usadoArr, e.destino.capacidad);
                 if (transito) {
-                    // Fase R â€” muestrea el slot de fin de estadÃ­a (salida del siguiente vuelo).
                     int remNext = capacidadAlmacen(e.destino, deps.get(i + 1), blockAirport);
                     int usadoNext = e.destino.capacidad - remNext;
                     sum += hubTransito
@@ -1252,7 +1179,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             int remaining = capacidadAlmacen(edge.destino, arrMin, blockAirport);
             max = Math.max(max, (double) (edge.destino.capacidad - remaining + qty) / edge.destino.capacidad);
             if (!destinoFinal) {
-                // Fase R â€” proxy de presencia continua: muestrea el slot siguiente al de llegada.
                 int remainingNextDay = capacidadAlmacen(edge.destino, arrMin + SLOT_ALMACEN_MIN, blockAirport);
                 max = Math.max(max, (double) (edge.destino.capacidad - remainingNextDay + qty) / edge.destino.capacidad);
             }
@@ -1280,7 +1206,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 int remaining = capacidadAlmacen(e.destino, arrMin, blockAirport);
                 max = Math.max(max, (double) (e.destino.capacidad - remaining + qty) / e.destino.capacidad);
                 if (i < edges.size() - 1) {
-                    // Fase R â€” muestrea el slot de fin de estadÃ­a (salida del siguiente vuelo).
                     int remainingNextDay = capacidadAlmacen(e.destino, deps.get(i + 1), blockAirport);
                     max = Math.max(max, (double) (e.destino.capacidad - remainingNextDay + qty) / e.destino.capacidad);
                 }
@@ -1357,10 +1282,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return Long.compare(b.slackMin, a.slackMin);
     }
 
-    // -----------------------------------------------------------------------
-    // DiagnÃ³stico
-    // -----------------------------------------------------------------------
-
     public void logEstadisticasCapacidad() {
         log.info("--- Capacidad de vuelos ---");
         long flightDaysUsados = ocupacionVuelo.size();
@@ -1412,7 +1333,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 if (asignado > cap)  airportDaysSobre++;
             }
         }
-        // Fase R â€” claves por SLOT de tiempo: estos contadores miden PICO CONCURRENTE, no suma diaria.
         log.info("  Airport-slots con ocupaciÃ³n : {}", airportDaysUsados);
         log.info("  Airport-slots al 100 %       : {}", airportDaysLlenos);
         log.info("  Airport-slots sobre capacidad: {}", airportDaysSobre);
@@ -1430,9 +1350,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
                 });
     }
 
-    // -----------------------------------------------------------------------
-    // Clases internas
-    // -----------------------------------------------------------------------
 
     private static class EstadoRuta {
         final int        nodeIdx;

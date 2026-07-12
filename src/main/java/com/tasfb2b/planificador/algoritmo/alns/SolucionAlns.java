@@ -44,12 +44,10 @@ public class SolucionAlns {
             double transitTime = batch.getTiempoTransitoTotalMin();
             totalCost += pesoTransit * transitTime;
 
-            // Penalización fija si supera el SLA (24h o 48h).
             if (transitTime > batch.getHorasLimiteSla() * 60) {
                 totalCost += pesoTarde;
             }
 
-            // Penalización por uso de almacén: # escalas intermedias × cantidad.
             if (pesoUsoAlmacen > 0 && batch.getRutaAsignada() != null
                     && batch.getRutaAsignada().size() > 1) {
                 int escalas = batch.getRutaAsignada().size() - 1;

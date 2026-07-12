@@ -147,8 +147,6 @@ public class PersistenciaSolucionService {
     public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
     // ── Identidad de fila para la persistencia (fragmentación) ────────────────────────────
-    // Un sub-lote se persiste bajo el id de su PADRE (conserva la FK a envio) + su nº de sub_lote;
-    // un envío no fragmentado va con su propio id y sub_lote = 0 (semántica previa exacta).
     private static String idEnvioBd(LoteEnvio b) { return b.getIdPadre() != null ? b.getIdPadre() : b.getId(); }
     private static int    subLote(LoteEnvio b)   { return b.esFragmento() ? b.getFragmento() : 0; }
     private static String claveRuta(LoteEnvio b) { return idEnvioBd(b) + "|" + subLote(b); }
@@ -205,15 +203,15 @@ public class PersistenciaSolucionService {
             double transitMin = llegadaMin - readyMin;
             double slackMin = b.getHorasLimiteSla() * 60.0 - transitMin;
 
-            args.add(idEnvioBd(b));        // id del padre si es sub-lote (FK a envio); si no, su id
-            args.add(transitMin);          // costo_total (proxy = tránsito total en min)
-            args.add(transitMin / 60.0);   // duracion_horas
+            args.add(idEnvioBd(b));
+            args.add(transitMin);
+            args.add(transitMin / 60.0);
             args.add(b.isCumpleSLA());
             args.add((int) Math.round(slackMin));
             args.add(epochMinToLdt(llegadaMin));
-            args.add(subLote(b));                                  // 0 si no fragmentado
+            args.add(subLote(b));
             args.add(b.esFragmento() ? b.getTotalFragmentos() : 0);
-            args.add(b.getCantidad());     // SIEMPRE la cantidad de ESTE (sub)lote, también sub_lote=0
+            args.add(b.getCantidad());
         }
         sql.append(" RETURNING ").append(t.idRutaCol()).append(" AS id_ruta, id_envio, sub_lote");
         jdbc.query(sql.toString(),

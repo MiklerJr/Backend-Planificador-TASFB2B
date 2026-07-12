@@ -24,22 +24,15 @@ public class PlanificadorProperties {
 
     @Data
     public static class Fragmentacion {
-        /** false = comportamiento actual exacto (un envío nunca se fragmenta). */
         private boolean habilitada = true;
-        /** Maletas máximas por sub-lote. 0 = auto = max(capacidad de avión) del grafo de la corrida. */
         private int maxMaletasPorSublote = 0;
-        /** Tope de sub-lotes por envío (anti-abuso ante inyecciones con cantidad absurda). */
         private int maxSublotes = 64;
     }
 
     @Data
     public static class Operativo {
-        /** Escala mínima (permanencia mín. de una maleta en un aeropuerto entre vuelos), en minutos.
-         *  Fuente única que respetan el ruteo (OperadorReparacionVoraz) y la auditoría (AuditoriaService). */
         private int tiempoMinEscalaMinutos = 10;
 
-        /** Tiempo de espera de la maleta en el almacén del destino FINAL hasta ser recogida (min).
-         *  Cuenta para el SLA (transit = llegada + este tiempo) y para la ocupación del almacén destino. */
         private int tiempoRecojoDestinoMinutos = 15;
     }
 

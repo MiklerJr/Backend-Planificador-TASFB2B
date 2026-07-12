@@ -31,7 +31,6 @@ public class MotorGrafoCache {
         return g;
     }
 
-    /** Grafo ya construido, o null si aún no se materializó. No lo construye (a diferencia de {@link #obtenerGrafo}). */
     public Grafo grafoSiExiste() {
         return grafo;
     }

@@ -248,7 +248,6 @@ public class LectorSolucionBd {
         if (hasta != null) { sql.append("AND ").append(readyExpr).append(" < ? ");  args.add(hasta); }
         Long n = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
 
-        // + inyectados EN VIVO (INV-*): mismo rango, pero su readyTime ya es UTC (ready_time_utc).
         StringBuilder sqlIny = new StringBuilder(
                 "SELECT COUNT(*) FROM ruta_inyectada r "
               + "JOIN envio_inyectado i ON i.id_envio = r.id_envio "
@@ -283,9 +282,6 @@ public class LectorSolucionBd {
 
     public List<VuelosUsadosResponse.VueloUsado> reconstruirVuelosUsados() {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
-        // COUNT(DISTINCT r.id_ruta): cada sub-lote es una ruta activa (con id_envio del padre repetido,
-        // DISTINCT r.id_envio subcontaría). SUM(COALESCE(r.cantidad, e.cantidad_maletas)): la cantidad de
-        // ESTE sub-lote (con e.cantidad_maletas — la del padre — cada sub-lote doblaría las maletas).
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
                 + "COUNT(DISTINCT r.id_ruta) AS envios, "
                 + "COALESCE(SUM(COALESCE(r.cantidad, e.cantidad_maletas)), 0) AS maletas "
@@ -379,17 +375,10 @@ public class LectorSolucionBd {
         }
     }
 
-    /**
-     * Rutas activas de un envío del dataset. Devuelve una lista porque un envío fragmentado tiene N
-     * sub-lotes (cada uno una ruta activa). Si {@code idEnvio} es un id de sub-lote ("PADRE-Fn") filtra
-     * ese sub-lote; si es el id del padre devuelve TODOS sus sub-lotes; si no está fragmentado, uno.
-     * Segmenta por {@code id_ruta} (agrupar por id_envio fusionaría rutas distintas del mismo padre).
-     */
     public List<LoteEnvio> buscarPorEnvio(String idEnvio, Map<String, Arista> indiceVuelo) {
         return buscarRutasActivas(idEnvio, indiceVuelo, false);
     }
 
-    /** Como {@link #buscarPorEnvio} pero en el carril de los envíos INYECTADOS EN VIVO (INV-*). */
     public List<LoteEnvio> buscarPorEnvioInyectado(String idEnvio, Map<String, Arista> indiceVuelo) {
         return buscarRutasActivas(idEnvio, indiceVuelo, true);
     }
@@ -478,9 +467,6 @@ public class LectorSolucionBd {
                 : acc.registroLocal.minusHours(origen.getOffsetHorario());
         int sla = TipoEnvio.derivar(origen, destino) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
 
-        // Fragmentación: si es un sub-lote (sub_lote > 0), reconstruir su id "PADRE-Fn" y su identidad.
-        // Imprescindible: sin esto el reenrutado tras cancelación reconstruye con la cantidad del PADRE
-        // (COALESCE ya la corrige a la del sub-lote) y re-persistir escribiría id_envio="PADRE-Fn" → FK rota.
         String id = acc.subLote > 0 ? acc.idEnvio + FragmentadorEnvios.SUFIJO + acc.subLote : acc.idEnvio;
         LoteEnvio b = new LoteEnvio(id, acc.cantidad, sla,
                 origen.getCodigo(), destino.getCodigo(), readyUtc);
@@ -518,7 +504,7 @@ public class LectorSolucionBd {
         String origen;
         String destino;
         int cantidad;
-        int subLote;          // 0 si el envío no está fragmentado
+        int subLote;
         int totalSubLotes;
         LocalDateTime registroLocal;
         boolean cumpleSla;

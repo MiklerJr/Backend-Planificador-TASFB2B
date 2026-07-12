@@ -99,7 +99,7 @@ public class IngestaService {
         return e;
     }
 
-    // ── Worker async ────────────────────────────────────────────────────────────
+    // Worker async
 
     private void ejecutar(Path aero, Path vuelos, List<EnvioTemp> envios, IngestaEstado e) {
         try {
@@ -139,8 +139,6 @@ public class IngestaService {
             e.setFase("recargando");
             cargadorDatos.load();
             motorCache.invalidar();
-            // Los esqueletos persistidos también son del dataset viejo: borrar el archivo (la
-            // huella de AlmacenCacheEsqueletos lo descartaría igual, pero así no quedan huérfanos).
             almacenEsqueletos.borrar();
 
             e.setFase("completada");
@@ -179,7 +177,7 @@ public class IngestaService {
         try {
             Files.deleteIfExists(p);
         } catch (IOException ignored) {
-            // archivo temporal; se limpiará al salir de la JVM
+            // archivo temporal
         }
     }
 

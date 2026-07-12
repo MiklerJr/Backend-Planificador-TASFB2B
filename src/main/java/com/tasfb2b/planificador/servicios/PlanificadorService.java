@@ -47,7 +47,7 @@ import java.nio.file.Path;
 @Service
 public class PlanificadorService {
 
-    // ── DEPENDENCIAS NUEVAS (ALNS Y ESCENARIOS) ─────────────────────────
+    // DEPENDENCIA
     private final CargadorDatos cargadorDatos;
     private final MapeadorAlgoritmo mapper;
     private final PlanificadorProperties props;
@@ -72,7 +72,7 @@ public class PlanificadorService {
 
     private volatile List<BloqueSimulacion> bloquesCacheados = null;
 
-    // ── CONSTRUCTOR UNIFICADO (VITAL PARA SPRING BOOT) ──────────────────
+    // CONSTRUCTOR UNIFICADO
     @org.springframework.beans.factory.annotation.Autowired
     public PlanificadorService(CargadorDatos cargadorDatos,
                                MapeadorAlgoritmo mapper,
@@ -108,14 +108,6 @@ public class PlanificadorService {
                 new MotorGrafoCache(), new AlmacenCacheEsqueletos(null, null, ""), null, null);
     }
 
-    /**
-     * Al comenzar cada corrida: (1) revierte las altas EN CALIENTE efímeras de la corrida anterior
-     * (vuelos/aeropuertos agregados en vivo — BD+RAM+grafo+esqueletos) y (2) repone en el grafo el
-     * baseline EN FRÍO (capacidades persistidas), descartando los overrides EN CALIENTE. Así las
-     * ediciones en caliente son por-corrida y las de en frío persisten. El orden importa: primero el
-     * recorte topológico, para que la resincronización itere listas ya alineadas 1:1.
-     * Null-safe: en el constructor de tests ambas dependencias son null.
-     */
     private void resetearCapacidadesAlIniciarCorrida() {
         if (altasEnCaliente != null) {
             altasEnCaliente.revertirAltasEfimeras();
@@ -127,16 +119,15 @@ public class PlanificadorService {
 
     public EstadoJob iniciarEscenario2Async(EjecucionParametros params) {
         if (params == null) params = new EjecucionParametros();
-        int k = props.getScenario().getKDefault2();   // K fijo del escenario, no negociable
+        int k = props.getScenario().getKDefault2();
         String motorRes = resolverMotor(params.getMotor());
         long seedRes = resolverSeed(params.getSeed());
 
         EstadoJob job = jobs.crear("2", k);
-        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
+        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = params.getFechaInicio();
-        // Persistir los overrides para poder reiniciar idéntico (ver reiniciarJob).
         job.saMin = params.getSaMin();
         job.taSegundos = params.getTaSegundos();
         job.dias = params.getDias();
@@ -165,21 +156,21 @@ public class PlanificadorService {
 
     public EstadoJob iniciarEscenario3Async(double umbralColapso, String motor, Long seed,
                                            LocalDateTime fechaInicio) {
-        int k = props.getScenario().getKDefault3();   // K fijo del escenario, no negociable
+        int k = props.getScenario().getKDefault3();
         String motorRes = resolverMotor(motor);
         long seedRes = resolverSeed(seed);
         EstadoJob job = jobs.crear("3", k);
-        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
+        job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
-        job.umbralColapso = umbralColapso;   // persistir para reiniciar idéntico (ver reiniciarJob)
+        job.umbralColapso = umbralColapso;
         jobs.ejecutar(job, () -> {
             try {
                 SimulacionResponse res = ejecutarHastaColapso(k, umbralColapso, job, motorRes, seedRes, fechaInicio);
                 job.resultado = res;
             } finally {
-                almacenEsqueletos.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
+                almacenEsqueletos.guardarSiCrecio();
             }
         });
         return job;
@@ -202,7 +193,6 @@ public class PlanificadorService {
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
         job.algoritmo = motorRes;
         job.seed = seedRes;
-        // En operación EN VIVO el cursor es now() UTC: fechaInicio no aplica (se ignora).
         job.fechaInicio = enVivo ? null : fechaInicio;
         job.enVivo = enVivo;
         final LocalDateTime fechaEff = job.fechaInicio;
@@ -211,7 +201,7 @@ public class PlanificadorService {
                 SimulacionResponse res = ejecutarEscenario1(job, motorRes, seedRes, fechaEff, enVivo);
                 job.resultado = res;
             } finally {
-                almacenEsqueletos.guardarSiCrecio();   // esqueletos aprendidos durante la corrida
+                almacenEsqueletos.guardarSiCrecio();
             }
         });
         return job;
@@ -334,7 +324,7 @@ public class PlanificadorService {
             log.debug("Cancelación de vuelo duplicada ya pendiente (job {}): {}->{} salida {} — ignorada",
                     jobId, orden.getOrigen(), orden.getDestino(), orden.getFechaHoraSalida());
         }
-        return true;   // aceptada para el front (encolada o ya pendiente)
+        return true;
     }
 
     public int solicitarInyeccionEnvios(String jobId, InyeccionEnviosRequest req) {
@@ -360,30 +350,17 @@ public class PlanificadorService {
         return req.getEnvios().size();
     }
 
-    /**
-     * Offset GMT (horas) del aeropuerto o null si el ICAO no existe. Lo usa la carga de envíos por TXT
-     * para convertir la hora LOCAL de la sede a UTC. No confundir con el privado offsetHoras(String):
-     * aquel cachea al primer uso (stale con aeropuertos efímeros) y devuelve 0 para ICAO desconocido,
-     * mientras que "desconocido" debe distinguirse de "offset 0" (→ 400 en el controlador).
-     */
     public Integer getOffsetAeropuerto(String icao) {
         if (cargadorDatos == null || icao == null) return null;
         Aeropuerto a = cargadorDatos.getAeropuerto(icao.trim());
         return (a == null) ? null : a.getOffsetHorario();
     }
 
-    /**
-     * Encola un alta de vuelo EN CALIENTE (efímera por corrida). Mismo contrato que
-     * {@link #solicitarCancelacionVuelo}: false ⇒ job inexistente/inactivo (404/409 en el controller);
-     * {@link ParametroInvalidoException} ⇒ 400. El worker la aplica en la frontera del siguiente bloque.
-     */
     public boolean solicitarAltaVuelo(String jobId, AltaVueloRequest alta) {
         EstadoJob job = jobs.get(jobId);
         if (job == null) return false;
         if (altasEnCaliente == null)
             throw new ParametroInvalidoException("altas en caliente no disponibles");
-        // Como origen/destino valen también las altas de aeropuerto aún en cola del mismo job:
-        // se drenan ANTES que los vuelos en la misma frontera de bloque.
         Set<String> icaosPendientes = new HashSet<>();
         for (AltaAeropuertoRequest p : job.getAltasAeropuertoPendientes()) {
             if (p.getIcao() != null) icaosPendientes.add(p.getIcao().trim());
@@ -401,7 +378,7 @@ public class PlanificadorService {
         } else {
             log.debug("Alta de vuelo duplicada ya pendiente (job {}): {} — ignorada", jobId, idVuelo);
         }
-        return true;   // aceptada para el front (encolada o ya pendiente)
+        return true;
     }
 
     public boolean solicitarAltaAeropuerto(String jobId, AltaAeropuertoRequest alta) {
@@ -423,14 +400,9 @@ public class PlanificadorService {
         } else {
             log.debug("Alta de aeropuerto duplicada ya pendiente (job {}): {} — ignorada", jobId, icao);
         }
-        return true;   // aceptada para el front (encolada o ya pendiente)
+        return true;
     }
 
-    /**
-     * Drena y aplica las altas EN CALIENTE pendientes en la frontera de bloque (hilo worker):
-     * primero aeropuertos, luego vuelos — así un aeropuerto y sus vuelos encolados juntos se
-     * aplican en el mismo bloque.
-     */
     private void aplicarAltasEnCaliente(EstadoJob job, Grafo graph, OperadorReparacionVoraz enrutador,
                                         int bloqueIdx) {
         if (job == null || altasEnCaliente == null) return;
@@ -539,8 +511,6 @@ public class PlanificadorService {
         InyeccionEnviosRequest.Item it;
         while ((it = job.getInyeccionesPendientes().poll()) != null) buffer.add(it);
         if (buffer.isEmpty()) return 0;
-        // Mismo umbral que procesarBloque (sobre el grafo del run): el caso E1 del profesor (cantidad >
-        // capacidad de avión) entra por aquí cuando la corrida es enVivo / hay inyección/carga TXT.
         int umbralFrag = FragmentadorEnvios.umbralEfectivo(props.getFragmentacion(), graph);
         int maxSublotes = props.getFragmentacion().getMaxSublotes();
         List<EnvioInyectadoInfo> liberados = new ArrayList<>();
@@ -548,32 +518,30 @@ public class PlanificadorService {
         int n = 0;
         while (itr.hasNext()) {
             InyeccionEnviosRequest.Item x = itr.next();
-            LocalDateTime ready = x.getFechaHoraRegistro();              // UTC o null
-            if (ready != null && !ready.isBefore(ctx.scFin)) continue;   // aún futura → esperar
-            LocalDateTime readyEff = (ready != null) ? ready : ctx.scInicio;  // honra el pasado para el SLA
+            LocalDateTime ready = x.getFechaHoraRegistro();
+            if (ready != null && !ready.isBefore(ctx.scFin)) continue;
+            LocalDateTime readyEff = (ready != null) ? ready : ctx.scInicio;
             Aeropuerto o = cargadorDatos.getAeropuerto(x.getOrigen());
             Aeropuerto d = cargadorDatos.getAeropuerto(x.getDestino());
-            if (o == null || d == null) { itr.remove(); continue; }      // defensivo (ya validado al encolar)
+            if (o == null || d == null) { itr.remove(); continue; }
             int sla = TipoEnvio.derivar(o, d) == TipoEnvio.INTRACONTINENTAL ? 24 : 48;
-            String id = "INV-" + ctx.bloqueIdx + "-" + (n++);            // sintético; NO existe en ENVIO
+            String id = "INV-" + ctx.bloqueIdx + "-" + (n++);
             LoteEnvio b = new LoteEnvio(id, x.getCantidad(), sla,
                     o.getCodigo(), d.getCodigo(), readyEff);
             b.setSintetico(true);
             if (x.getClienteId() != null) b.setClienteId(x.getClienteId());
-            // Fragmenta si supera el umbral: cada sub-lote entra al backlog, pero se registra UNA
-            // sola fila envio_inyectado por el padre (id sintético) — su cantidad total.
             for (LoteEnvio sub : FragmentadorEnvios.fragmentar(b, umbralFrag, maxSublotes)) {
-                backlog.agregarSinRuta(sub);                                 // el flujo estándar lo recoge
+                backlog.agregarSinRuta(sub);
             }
             EnvioInyectadoInfo info = new EnvioInyectadoInfo(id, o.getCodigo(), d.getCodigo(),
                     x.getCantidad(), x.getClienteId(), sla, readyEff.toString(), ctx.bloqueIdx,
                     x.getRegistrador(), x.getSede());
-            job.getEnviosInyectados().add(info);                         // siempre (para /estado, en RAM)
+            job.getEnviosInyectados().add(info);
             liberados.add(info);
             itr.remove();
         }
         if (!liberados.isEmpty()) {
-            persistencia.persistirInyecciones(job.getJobId(), liberados);   // BD activa, best-effort
+            persistencia.persistirInyecciones(job.getJobId(), liberados);
             log.info("Inyección: {} envío(s) liberado(s) al bloque {} (job {})",
                     liberados.size(), ctx.bloqueIdx, job.getJobId());
         }
@@ -603,7 +571,7 @@ public class PlanificadorService {
                 "Planificación viva: cada corrida cubre un único bloque Sa. " +
                 "El wall-clock por bloque es Sa real, sin aceleración.");
         esc1.put("kDefault", sc.getKDefault1());
-        esc1.put("kFijo", true);   // K inmutable por regla de negocio (E1=1)
+        esc1.put("kFijo", true);
         esc1.put("simulaTiempoReal", sc.isSimularTiempoReal1());
         esc1.put("endpoints", Map.of(
                 "iniciar", "POST /api/planificador/escenario1/iniciar"
@@ -616,7 +584,7 @@ public class PlanificadorService {
                 "Replays/simulaciones de un período cerrado. Entre bloques duerme " +
                 "(Sa - Ta) cuando simularTiempoReal2=true, para imitar el ritmo real.");
         esc2.put("kDefault", sc.getKDefault2());
-        esc2.put("kFijo", true);   // K inmutable por regla de negocio (E2=144)
+        esc2.put("kFijo", true);
         esc2.put("simulaTiempoReal", sc.isSimularTiempoReal2());
         esc2.put("endpoints", Map.of(
                 "iniciar", "POST /api/planificador/escenario2/iniciar"
@@ -629,7 +597,7 @@ public class PlanificadorService {
                 "Estrés / capacity planning. Avanza lo más rápido posible (a menos " +
                 "que simularTiempoReal3=true) hasta que se dispara la condición de colapso.");
         esc3.put("kDefault", sc.getKDefault3());
-        esc3.put("kFijo", true);   // K inmutable por regla de negocio (E3=144)
+        esc3.put("kFijo", true);
         esc3.put("simulaTiempoReal", sc.isSimularTiempoReal3());
         esc3.put("umbralColapso", sc.getUmbralColapso());
         esc3.put("umbralColapsoBacklog", sc.getUmbralColapsoBacklog());
@@ -841,14 +809,14 @@ public class PlanificadorService {
 
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
 
-        boolean colapsoAlmacenDetectado = false;   // E2 se detiene ante colapso de almacén.
+        boolean colapsoAlmacenDetectado = false;
         int bloqueColapsoAlmacen = -1;
-        String detalleColapsoE2 = null;            // detalle (qué/dónde) e instante UTC del colapso.
+        String detalleColapsoE2 = null;
         LocalDateTime instanteColapsoE2 = null;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
-            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);   // antes de cancelar: permite alta+cancelación en la misma frontera
+            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
@@ -871,7 +839,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);   // ventana realmente simulada
+                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
@@ -1034,9 +1002,9 @@ public class PlanificadorService {
         int intervaloReporte = Math.max(1, totalBloques / 10);
         persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
 
-        boolean colapsoAlmacenDetectado = false;   // E1 se detiene ante colapso de almacén.
+        boolean colapsoAlmacenDetectado = false;
         int bloqueColapsoAlmacen = -1;
-        String detalleColapsoE1 = null;            // detalle (qué/dónde) e instante UTC del colapso.
+        String detalleColapsoE1 = null;
         LocalDateTime instanteColapsoE1 = null;
         String nivelAlertaPrevio = AlertaColapso.VERDE;
 
@@ -1046,7 +1014,7 @@ public class PlanificadorService {
 
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
-            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);   // antes de cancelar: permite alta+cancelación en la misma frontera
+            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);
             totalVuelosCancelados += aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
@@ -1073,7 +1041,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);   // ventana realmente simulada
+                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
@@ -1224,7 +1192,7 @@ public class PlanificadorService {
         long totalMaletas = 0L;
         boolean collapsoDetectado = false;
         int bloqueColapso = -1;
-        String detalleColapsoE3 = null;            // detalle (qué/dónde) e instante UTC del colapso.
+        String detalleColapsoE3 = null;
         LocalDateTime instanteColapsoE3 = null;
         String motivoParada = "falta_datos";
         String nivelAlertaPrevio = AlertaColapso.VERDE;
@@ -1244,7 +1212,7 @@ public class PlanificadorService {
 
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
-            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);   // antes de cancelar: permite alta+cancelación en la misma frontera
+            aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);
             aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
@@ -1270,8 +1238,7 @@ public class PlanificadorService {
                 job.bloqueActual = bloqueActual;
                 job.totalBloques = totalBloques;
                 job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);   // ventana realmente simulada
-                // Publicación incremental para dibujo en tiempo real desde el front.
+                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
                 job.publicarBloque(rv.bloque);
                 job.publicarSerieAlmacenes(rv.serieAlmacenes());
                 job.metricasSnapshot = metricasSnapshotDe(totales, taStats.promedio());
@@ -1366,13 +1333,9 @@ public class PlanificadorService {
         String jobId = job != null ? job.getJobId() : null;
         try {
             if (job != null && auditAcc != null) {
-                // Sin-ruta: no llegan a BD (Fase 5a solo persiste enrutados) ⇒ se retienen en RAM
-                // (ligeros, sin Edges) para incluirlos en el ZIP cuando se solicite.
                 job.auditoriaSinRuta = new ArrayList<>(auditAcc.sinRuta());
             }
         } finally {
-            // Libera el lock de persistencia. NO se toca corridaPersistidaEnBd: la solución sigue en BD
-            // para la auditoría on-demand hasta que otra corrida haga TRUNCATE.
             persistencia.finalizarCorrida(jobId);
         }
     }
@@ -1443,8 +1406,8 @@ public class PlanificadorService {
             java.util.function.Consumer<java.util.function.Consumer<LoteEnvio>> fuenteEnrutados =
                     sink -> solucionBdReader.paraCadaEnrutado(indiceVuelo, rango.desde(), rango.hasta(), sink);
 
-            Thread.interrupted();   // defensivo: el hilo HTTP no debería traer el flag, pero el ZIP usa NIO
-            job.borrarZip();        // descarta el ZIP anterior de este job (regeneración) antes del nuevo
+            Thread.interrupted();
+            job.borrarZip();
             Path path = Files.createTempFile("planificador-auditoria-" + jobId + "-", ".zip");
             path.toFile().deleteOnExit();
             log.info("Generando auditoria ZIP on-demand (job {}, desde={}, hasta={}, recortado={})",
@@ -1461,7 +1424,6 @@ public class PlanificadorService {
             log.error("No se pudo generar auditoria ZIP on-demand (job {}): {}", jobId, e.getMessage());
             return ResultadoAuditoria.error("error generando la auditoría: " + e.getMessage());
         } finally {
-            // Libera el lock de lectura (no toca corridaPersistidaEnBd ⇒ se puede volver a pedir).
             persistencia.finalizarCorrida(jobId);
         }
     }
@@ -1476,14 +1438,14 @@ public class PlanificadorService {
             return ResultadoEstimacion.error(
                     "la solución de este job ya fue reemplazada por una corrida posterior; auditoría no disponible");
         }
-        RangoAuditoria rango = resolverRangoAuditoria(job, desde, hasta);   // 400 si el rango es inválido
+        RangoAuditoria rango = resolverRangoAuditoria(job, desde, hasta);
         long enrutados = solucionBdReader.contarEnrutados(rango.desde(), rango.hasta());
         long sinRuta = filtrarSinRutaPorRango(job.auditoriaSinRuta, rango.desde(), rango.hasta()).size();
         long filasEnvios = enrutados + sinRuta;
         long cancelaciones = solucionBdReader.contarCancelaciones(rango.desde(), rango.hasta());
         int filasPorArchivo = AuditoriaService.FILAS_POR_ARCHIVO;
         int csvEnvios = (int) Math.ceil(filasEnvios / (double) filasPorArchivo);
-        int csvCancelaciones = 1;   // el CSV de cancelaciones siempre se emite, aun vacío
+        int csvCancelaciones = 1;
         EstimacionAuditoria est = new EstimacionAuditoria(
                 filasEnvios, csvEnvios, cancelaciones, csvCancelaciones,
                 csvEnvios + csvCancelaciones, filasPorArchivo,
@@ -1502,7 +1464,7 @@ public class PlanificadorService {
             LocalDateTime ready = b.getTiempoListo();
             if (ready == null) continue;
             if (desde != null && ready.isBefore(desde)) continue;
-            if (hasta != null && !ready.isBefore(hasta)) continue;   // hasta exclusivo
+            if (hasta != null && !ready.isBefore(hasta)) continue;
             out.add(b);
         }
         return out;
@@ -1581,9 +1543,6 @@ public class PlanificadorService {
         List<Envio> maletasVentana = demandaEnVivo
                 ? Collections.emptyList()
                 : cargadorDatos.getMaletasEnRango(ctx.scInicio, ctx.scFin);
-        // Umbral de fragmentación de ESTE bloque: sobre el grafo del run (incluye overrides de
-        // capacidad EN CALIENTE y altas append-only). O(nº aristas), trivial. Un envío cuya cantidad
-        // supera el umbral se parte en sub-lotes AL NACER (mismos ids/cantidades en ambos mapeos).
         int umbralFrag = FragmentadorEnvios.umbralEfectivo(props.getFragmentacion(), graph);
         int maxSublotes = props.getFragmentacion().getMaxSublotes();
         List<LoteEnvio> bloqueBatches = mapper.mapearALotes(maletasVentana, umbralFrag, maxSublotes);
@@ -1597,7 +1556,7 @@ public class PlanificadorService {
             for (LoteEnvio b : pendientes) {
                 enrutador.removerEsperaOrigenBacklog(b);
                 if (b.tienePrefijo() || enrutador.rutaUsaVueloCancelado(b)) {
-                    afectadosCrudos.add(b);   // carril Fase 2 (NO entra al motor)
+                    afectadosCrudos.add(b);
                 } else {
                     if (b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty()) {
                         enrutador.liberarDeGlobal(b);
@@ -1724,7 +1683,7 @@ public class PlanificadorService {
         String detalleColapso = null;
         for (LoteEnvio b : finalBatches) {
             boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
-            if (enrutada && b.isCumpleSLA()) continue;   // on-time: ningún almacén lo bloqueó
+            if (enrutada && b.isCumpleSLA()) continue;
             if (enrutador.sinRutaPorAlmacenLleno(b)) {
                 colapsoAlmacen = true;
                 detalleColapso = b.getId() + " " + b.getCodigoOrigen() + "->" + b.getCodigoDestino()
@@ -1741,7 +1700,6 @@ public class PlanificadorService {
                 if (!enrutada) {
                     backlog.agregarSinRuta(b);
                 } else if (!motorAco && b.isCumpleSLA() && b.getRatioHolguraSla() < umbralSlack) {
-                    // Próximo a tardar — candidato a replanificación preventiva.
                     backlog.agregarReplanificable(b);
                 }
             }
@@ -2003,11 +1961,9 @@ public class PlanificadorService {
 
     public EnvioEstadoResponse buscarEstadoEnvio(String jobId, String idEnvio, LocalDateTime instante) {
         List<AsignacionMaleta> asigs = construirAsignacionesDesdeBd(jobId, idEnvio);
-        if (asigs.isEmpty()) asigs = construirAsignacionesSinteticas(jobId, idEnvio);  // inyectados/registrados EN VIVO
+        if (asigs.isEmpty()) asigs = construirAsignacionesSinteticas(jobId, idEnvio);
         if (asigs.isEmpty()) return null;
         LocalDateTime ahora = (instante != null) ? instante : ahoraDelJob(jobId);
-        // Un solo (sub)lote → estado directo (envío no fragmentado o consulta por id de sub-lote);
-        // varios → envío fragmentado consultado por su id de padre → estado agregado + fragmentos[].
         EnvioEstadoResponse resp = asigs.size() == 1
                 ? CalculadorEstadoEnvio.calcular(asigs.get(0), ahora)
                 : CalculadorEstadoEnvio.agregarFragmentos(asigs, ahora);
@@ -2041,7 +1997,6 @@ public class PlanificadorService {
                 .collect(Collectors.toList()));
     }
 
-    /** Ordena las asignaciones de una familia por número de fragmento (estable para la respuesta). */
     private static List<AsignacionMaleta> ordenarPorFragmento(List<AsignacionMaleta> asigs) {
         asigs.sort(Comparator.comparingInt(a -> FragmentadorEnvios.numeroFragmentoDe(a.getBatchId())));
         return asigs;
@@ -2068,7 +2023,7 @@ public class PlanificadorService {
             if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) {
                 enrutador.liberarDeGlobal(b);
                 b.limpiarRuta();
-                return enrutarSufijo(b, enrutador, blockFlight, blockAirport);   // desde el origen
+                return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
             }
             long ahoraMin = OperadorReparacionVoraz.aMinutoEpochPublico(ctx.scFin);
             int n = route.size();
@@ -2077,10 +2032,10 @@ public class PlanificadorService {
                 if (deps.get(i) > ahoraMin) { k = i; break; }   // primer tramo PENDIENTE
             }
             if (k == n) {
-                return b;   // ya en el último vuelo / entregado: no tocar (el cancelado ya se voló)
+                return b;
             }
             if (k == 0) {
-                enrutador.liberarDeGlobal(b);   // aún no salió: re-enrutar completo desde el origen
+                enrutador.liberarDeGlobal(b);
                 b.limpiarRuta();
                 return enrutarSufijo(b, enrutador, blockFlight, blockAirport);
             }
@@ -2113,7 +2068,7 @@ public class PlanificadorService {
         enrutador.aplicarCandidatoBloque(sintetico, elegido, blockFlight, blockAirport);
         b.setRutaAsignada(new ArrayList<>(elegido.getAristas()));
         b.setSalidasAsignadas(new ArrayList<>(elegido.getSalidasReales()));
-        b.setCumpleSLA(enrutador.cumpleSlaDesdeOrigen(elegido, b));   // SLA desde el origen ORIGINAL
+        b.setCumpleSLA(enrutador.cumpleSlaDesdeOrigen(elegido, b));
         return b;
     }
 
@@ -2150,7 +2105,7 @@ public class PlanificadorService {
             asig.setOrigen(b.getCodigoOrigen());
             asig.setDestino(b.getCodigoDestino());
             asig.setCantidad(b.getCantidad());
-            if (b.esFragmento()) {                 // sub-lote de un envío fragmentado
+            if (b.esFragmento()) {
                 asig.setIdEnvioPadre(b.getIdPadre());
                 asig.setFragmento(b.getFragmento());
                 asig.setTotalFragmentos(b.getTotalFragmentos());
@@ -2175,8 +2130,8 @@ public class PlanificadorService {
                 tramos = new ArrayList<>();
                 for (int ti = 0; ti < route.size(); ti++) {
                     var edge = route.get(ti);
-                    long depMin = deps.get(ti);          // UTC (epoch-min)
-                    long arrMin = depMin + edge.duracionMinutos; // UTC; duración real de vuelo
+                    long depMin = deps.get(ti);
+                    long arrMin = depMin + edge.duracionMinutos;
                     String origen  = edge.origen != null ? edge.origen.codigo : "";
                     String destino = edge.destino != null ? edge.destino.codigo : "";
                     TramoRuta tr = new TramoRuta();
@@ -2268,14 +2223,14 @@ public class PlanificadorService {
         Map<Integer, Nodo> nodesByIdx = new HashMap<>();
         for (Nodo node : graph.nodos.values()) nodesByIdx.put(node.indice, node);
 
-        Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();   // clave (nodeIdx, epochDay) → pico
+        Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
             int ocupacion = enrutador != null
                     ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
                     : entry.getValue();
             if (ocupacion <= 0) continue;
             int nodeIdx = resourceIdx(entry.getKey());
-            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;   // índice de slot (epochMin/60)
+            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
             long epochDia = (slot * OperadorReparacionVoraz.SLOT_ALMACEN_MIN) / CodificadorClaveVuelo.MIN_DIA;
             long claveAeroDia = (((long) nodeIdx) << CodificadorClaveVuelo.BITS_DIA) | (epochDia & CodificadorClaveVuelo.MASCARA_DIA);
             picoPorAeroDia.merge(claveAeroDia, ocupacion, Integer::max);
@@ -2290,7 +2245,7 @@ public class PlanificadorService {
             dto.setAeropuerto(node.codigo);
             dto.setFecha(LocalDate.ofEpochDay(epochDay(entry.getKey())).toString());
             dto.setCapacidadMaxima(node.capacidad);
-            dto.setOcupacionAsignada(entry.getValue());   // pico concurrente del día
+            dto.setOcupacionAsignada(entry.getValue());
             FormatoSimulacion.completarOcupacionAlmacen(dto);
             out.add(dto);
         }
@@ -2316,7 +2271,7 @@ public class PlanificadorService {
             Nodo node = nodesByIdx.get(resourceIdx(entry.getKey()));
             if (node == null) continue;
 
-            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;   // índice de slot (epochMin/60)
+            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
             long epochMin = slot * OperadorReparacionVoraz.SLOT_ALMACEN_MIN;
 
             OcupacionAlmacenSlot dto = new OcupacionAlmacenSlot();
@@ -2418,7 +2373,6 @@ public class PlanificadorService {
         m.setVuelosCancelados(vuelosCancelados);
         m.setCollapsoDetectado(collapso);
         m.setBloqueColapso(bloqueCollapso);
-        // Detalle del colapso real (null si no hubo): causa, dónde/qué e instante UTC.
         m.setMotivoColapso(motivoColapso);
         m.setDetalleColapso(detalleColapso);
         m.setInstanteColapsoUtc(instanteColapso != null ? instanteColapso.toString() : null);
@@ -2454,8 +2408,6 @@ public class PlanificadorService {
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
             ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
                     auditWarmup, motorRes, rngBloque, taFijoMs, true, false);
-            // El warm-up NO persiste a BD: solo reconstruye el estado en memoria (ocupaciones,
-            // backlog) para que la simulación desde fechaInicio sea exacta. A BD va solo lo visible.
             if (job != null) {
                 job.bloqueWarmup = wIdx;
                 if (("cancelado".equals(job.estado) || job.canceladoPorUsuario)) break;
@@ -2463,8 +2415,6 @@ public class PlanificadorService {
             log.info("Warm-up {}/{} [{}] | ventana {}→{} | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta real:{}ms | backlog:{}",
                     wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taRealMs, backlog.tamaño());
-            // Cadencia Ta fija (E3): cada bloque consume su Ta completo antes de avanzar,
-            // igual que una corrida desde el inicio del dataset, solo que sin publicar al front.
             if (cadenciaTaFija && taFijoMs > 0) {
                 long restanteMs = taFijoMs - ctx.taRealMs;
                 if (restanteMs > 0) {
@@ -2546,16 +2496,16 @@ public class PlanificadorService {
 
         void registrar(LoteEnvio b) {
             String key = claveLoteAuditoria(b);
-            if (completos != null) { completos.put(key, b); return; }   // warm-up: solo completos
+            if (completos != null) { completos.put(key, b); return; }
             resumen.put(key, ResumenEnvio.de(b));
             boolean enrutada = b.getRutaAsignada() != null && !b.getRutaAsignada().isEmpty();
-            if (enrutada) sinRuta.remove(key);              // pasó de sin-ruta a enrutado
-            else sinRuta.put(key, b.clonar());          // snapshot ligero (sin ruta) para el ZIP
+            if (enrutada) sinRuta.remove(key);
+            else sinRuta.put(key, b.clonar());
         }
 
         boolean isEmpty()                    { return resumen.isEmpty(); }
         Collection<LoteEnvio> sinRuta()   { return sinRuta.values(); }
-        int sinRutaSize()                    { return sinRuta.size(); }   // Fase 0/E3: medición de huella
+        int sinRutaSize()                    { return sinRuta.size(); }
         Collection<LoteEnvio> completos() { return completos != null ? completos.values() : List.of(); }
 
         TotalesUnicos totalesUnicos() {
@@ -2646,7 +2596,6 @@ public class PlanificadorService {
         Map<String, Integer> mapa = offsetPorCodigo;
         if (mapa == null) {
             mapa = new HashMap<>();
-            // cargadorDatos puede ser null en tests unitarios sin Spring: offset 0 (UTC = local).
             List<Aeropuerto> aeropuertos = cargadorDatos != null ? cargadorDatos.getAeropuertos() : List.of();
             for (Aeropuerto a : aeropuertos) {
                 if (a.getCodigo() != null && a.getOffsetHorario() != null) {
@@ -2666,7 +2615,6 @@ public class PlanificadorService {
             dto.setLatitud(a.getLatitud());
             dto.setLongitud(a.getLongitud());
             dto.setCapacidadAlmacen(a.getCapacidad());
-            // Mismo gmt que /aeropuertos: el front recibe el offset por cualquiera de los dos caminos.
             dto.setGmt(a.getOffsetHorario() != null ? a.getOffsetHorario().doubleValue() : 0.0);
             map.put(cod, dto);
         }
@@ -2678,7 +2626,6 @@ public class PlanificadorService {
         log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
                 bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
                 colapso ? " | COLAPSO" : "");
-        // Fase 0 (medición anti-OOM): huella de memoria periódica (heap + acumuladores del job).
         if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam);
     }
 

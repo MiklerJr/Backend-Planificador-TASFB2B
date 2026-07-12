@@ -5,17 +5,11 @@ import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 import java.util.List;
 
-/**
- * La visibilidad η del ACO: mide la deseabilidad de una ruta para un envío, más el regret
- * (cuánto se pierde si no se le da su mejor ruta) y el costo de selección de la semilla greedy.
- */
 final class Heuristica {
 
     double heuristica(LoteEnvio batch, RutaCandidata route, int alternativasATiempo) {
         double slaMin = Math.max(1.0, batch.getHorasLimiteSla() * 60.0);
         double slackRatio = Math.max(0.0, Math.min(1.0, route.getHolguraMin() / slaMin));
-        // J1: NO premiar velocidad/holgura (eso desperdiciaba capacidad escasa). En su
-        // lugar, premiar rutas de baja congestión, y MÁS cuanto más holgado el envío.
         double slaScore = route.isCumpleSLA()
                 ? 4.0
                 : 0.05 / (1.0 + Math.max(0L, -route.getHolguraMin()) / 60.0);

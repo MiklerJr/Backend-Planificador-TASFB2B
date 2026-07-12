@@ -1,8 +1,8 @@
 package com.tasfb2b.planificador.algoritmo.aco;
 
 public class ConfiguracionACO {
-    public double alpha = 2.0;   // peso de la feromona (α)
-    public double beta = 1.0;    // peso de la heurística (β)
+    public double alpha = 2.0;
+    public double beta = 1.0;
     public double evaporacion = 0.15;
     public double feromonaInicial = 1.0;
     public double q = 100.0;

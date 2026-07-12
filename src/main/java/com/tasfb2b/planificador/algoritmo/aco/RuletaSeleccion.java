@@ -6,11 +6,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-/**
- * Selección probabilística estilo ACO: ruleta ponderada por τ^α · η^β (feromona × heurística),
- * con una tasa de exploración que ocasionalmente elige al azar. Decide qué envío atender y qué
- * ruta darle en cada paso de una hormiga.
- */
 final class RuletaSeleccion {
 
     private static final double EXPLORATION_RATE = 0.15;

@@ -62,7 +62,6 @@ public class EstadoJob {
     public final LocalDateTime inicio = LocalDateTime.now();
     public volatile LocalDateTime fin;
 
-    // Desempate estable cuando dos jobs se crean en el mismo instante (inicio empatado).
     private static final java.util.concurrent.atomic.AtomicLong SECUENCIA_CREACION =
             new java.util.concurrent.atomic.AtomicLong();
     public final long ordenCreacion = SECUENCIA_CREACION.incrementAndGet();
@@ -83,7 +82,6 @@ public class EstadoJob {
         ventanaFinUtc = scFin;
     }
 
-    // Temporizador real compartido entre clientes: epoch ms del primer bloque publicado y del fin.
     public volatile Long primerBloqueRealMs;
     public volatile Long finRealMs;
 
@@ -157,8 +155,6 @@ public class EstadoJob {
         return inyeccionesPendientes;
     }
 
-    // Altas de vuelo EN CALIENTE (efímeras por corrida): mismo patrón que las cancelaciones —
-    // se encolan aquí y el worker las aplica en la frontera del siguiente bloque.
     private final Queue<AltaVueloRequest> altasVueloPendientes = new ConcurrentLinkedQueue<>();
 
     public boolean encolarAltaVuelo(AltaVueloRequest alta) {
@@ -175,8 +171,6 @@ public class EstadoJob {
 
     private final List<VueloAgregado> altasVueloNoAplicadas = new CopyOnWriteArrayList<>();
 
-    // Altas de aeropuerto EN CALIENTE (efímeras por corrida). Se drenan ANTES que las de vuelo,
-    // para poder encolar un aeropuerto y vuelos hacia él en el mismo bloque.
     private final Queue<AltaAeropuertoRequest> altasAeropuertoPendientes = new ConcurrentLinkedQueue<>();
 
     public boolean encolarAltaAeropuerto(AltaAeropuertoRequest alta) {
@@ -204,8 +198,8 @@ public class EstadoJob {
     public void publicarBloque(BloqueSimulacion bloque) {
         if (bloque == null) return;
         if (primerBloqueRealMs == null) primerBloqueRealMs = System.currentTimeMillis();
-        acumularVuelosUsados(bloque);          // extraer el agregado ANTES de purgar
-        indexarRutasSinteticas(bloque);        // idem: rastreo de los INV-* ANTES de purgar
+        acumularVuelosUsados(bloque);
+        indexarRutasSinteticas(bloque);
         synchronized (bloquesLock) {
             bloquesParciales.add(bloque);
             while (bloquesParciales.size() > maxBloquesConAsignaciones) {
@@ -213,11 +207,11 @@ public class EstadoJob {
                 baseBloquesPurgados++;
             }
         }
-        purgarVuelosUsadosViejos();   // acota vuelosUsadosAcum a la ventana (histórico → BD)
+        purgarVuelosUsadosViejos();
     }
 
     private void purgarVuelosUsadosViejos() {
-        int corte = bloquesPublicados() - maxBloquesConAsignaciones;   // total, no solo la ventana
+        int corte = bloquesPublicados() - maxBloquesConAsignaciones;
         if (corte <= 0) return;
         synchronized (vuelosUsadosAcum) {
             Iterator<VueloUsadoAcc> it = vuelosUsadosAcum.values().iterator();
@@ -239,15 +233,13 @@ public class EstadoJob {
 
     public List<List<OcupacionAlmacenSlot>> seriesDesde(int desde) {
         synchronized (seriesLock) {
-            if (desde < baseSeriesPurgadas) desde = baseSeriesPurgadas;  // ya purgadas: arranca en la base
+            if (desde < baseSeriesPurgadas) desde = baseSeriesPurgadas;
             int rel = desde - baseSeriesPurgadas;
             if (rel < 0 || rel >= seriesAlmacenes.size()) return List.of();
             return List.copyOf(seriesAlmacenes.subList(rel, seriesAlmacenes.size()));
         }
     }
 
-    /** Variante para la API: si {@code desde} ya fue purgado devuelve vacío (sin realinear),
-     *  para que el cliente detecte el hueco y se resincronice en vez de recibir series viejas. */
     public List<List<OcupacionAlmacenSlot>> seriesDesdeExacto(int desde) {
         synchronized (seriesLock) {
             if (Math.max(desde, 0) < baseSeriesPurgadas) return List.of();
@@ -276,8 +268,7 @@ public class EstadoJob {
         }
     }
 
-    /** Variante para la API: si {@code desde} ya fue purgado devuelve vacío (sin realinear),
-     *  para que el cliente detecte el hueco y se resincronice en vez de recibir bloques viejos. */
+
     public List<BloqueSimulacion> bloquesDesdeExacto(int desde) {
         synchronized (bloquesLock) {
             if (Math.max(desde, 0) < baseBloquesPurgados) return List.of();
@@ -359,12 +350,6 @@ public class EstadoJob {
         return idEnvio == null ? null : rutasSinteticas.get(idEnvio);
     }
 
-    /**
-     * Rutas sintéticas de la "familia" de {@code idEnvio}: si es el id de un padre fragmentado, todos
-     * sus sub-lotes {@code INV-...-Fn}; si es un id de sub-lote o un envío no fragmentado, esa única
-     * ruta. Necesario porque {@link #getRutaSintetica} busca por id exacto y no hallaría el padre de un
-     * inyectado fragmentado (cuyas rutas viven bajo los ids de sub-lote).
-     */
     public List<AsignacionMaleta> getRutasSinteticasFamilia(String idEnvio) {
         if (idEnvio == null) return List.of();
         List<AsignacionMaleta> out = new ArrayList<>();
@@ -394,10 +379,10 @@ public class EstadoJob {
         synchronized (bloquesLock) { bloquesParciales.clear(); }
         synchronized (vuelosUsadosAcum) { vuelosUsadosAcum.clear(); }
         synchronized (seriesLock) { seriesAlmacenes.clear(); }
-        rutasSinteticas.clear();   // el job evictado ya no rastrea sus INV-* (nunca estuvieron en BD)
+        rutasSinteticas.clear();
         estadoInicial = null;
         resultado = null;
-        auditoriaSinRuta = null;   // los sin-ruta retenidos para la auditoría on-demand ya no se necesitan
+        auditoriaSinRuta = null;
     }
 
     public List<VuelosUsadosResponse.VueloUsado> vuelosUsadosDesde(int desde) {

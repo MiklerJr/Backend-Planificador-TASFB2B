@@ -16,12 +16,12 @@ public class Arista {
 
     public LocalDateTime horaSalida;
     public LocalDateTime horaLlegada;
-    public Duration      duracion;          // precomputado en MapeadorAlgoritmo (maneja medianoche)
-    public LocalTime     horaSalidaLocal; // precomputado para evitar toLocalTime() en el bucle
-    public int           minutoDelDiaSalida;     // hora*60+min, evita LocalTime en el loop caliente
-    public int           duracionMinutos;    // duración en minutos, evita Duration en el loop caliente
+    public Duration      duracion;
+    public LocalTime     horaSalidaLocal;
+    public int           minutoDelDiaSalida;
+    public int           duracionMinutos;
 
-    public int    indice;              // índice único asignado por MapeadorAlgoritmo (para claves long)
+    public int    indice;
     public double feromona = 1.0;
     public double cacheHeuristica;
 

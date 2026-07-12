@@ -16,15 +16,12 @@ public class LoteEnvio {
     private Integer clienteId;
     private boolean sintetico;
 
-    // Fragmentación de envíos (caso E1: cantidad > capacidad de avión). Un envío se parte en N
-    // sub-lotes AL NACER (MapeadorAlgoritmo/inyección); el motor sólo ve LoteEnvio independientes.
-    // idPadre == null y totalFragmentos == 0 ⇒ lote NO fragmentado (semántica previa exacta).
-    private String idPadre;         // id del envío padre; null si no fragmentado
-    private int fragmento;          // 1..N; 0 si no fragmentado
-    private int totalFragmentos;    // N; 0 si no fragmentado
+    private String idPadre;
+    private int fragmento;
+    private int totalFragmentos;
 
     private List<Arista> rutaAsignada;
-    private List<Long> salidasAsignadas; // epoch-minutes, paralelo a rutaAsignada
+    private List<Long> salidasAsignadas;
     private boolean cumpleSLA;
 
     private List<Arista> prefijoFijo;
@@ -80,7 +77,7 @@ public class LoteEnvio {
         return (slaMin - transitMin) / slaMin;
     }
 
-    // ── Prefijo fijo / posición actual ────────────────────────────────
+    // Prefijo fijo
     public boolean tienePrefijo() {
         return prefijoFijo != null && !prefijoFijo.isEmpty();
     }
@@ -166,6 +163,5 @@ public class LoteEnvio {
     public int getTotalFragmentos()           { return totalFragmentos; }
     public void setTotalFragmentos(int n)     { this.totalFragmentos = n; }
 
-    /** true si este lote es un sub-lote de un envío fragmentado (tiene padre). */
     public boolean esFragmento()              { return idPadre != null; }
 }

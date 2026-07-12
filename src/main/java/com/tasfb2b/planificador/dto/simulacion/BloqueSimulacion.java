@@ -23,7 +23,6 @@ public class BloqueSimulacion {
     private List<OcupacionAlmacen> ocupacionAlmacenes;
     private AlertaAlmacen alertaAlmacen;
 
-    // ── Modelo Ta/Sa: campos del eje real ──────────────────────────────
     private int    bloqueIdx;
     private long   taMs;
     private int    scMinutos;

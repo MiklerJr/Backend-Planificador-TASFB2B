@@ -67,8 +67,6 @@ public class ConsultaJobsService {
         return jobs.get(jobId);
     }
 
-    /** Reenganche: el job en curso (a lo sumo uno ejecuta a la vez) o, si solo hay
-     *  encolados, el más antiguo (el próximo a ejecutar). Sin jobs activos ⇒ activo=false. */
     public JobActivoResponse getJobActivo() {
         JobActivoResponse body = new JobActivoResponse();
         List<EstadoJob> activos = jobs.listarActivos();   // ordenados por inicio ascendente

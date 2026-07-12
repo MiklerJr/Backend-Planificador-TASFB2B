@@ -6,10 +6,10 @@ import java.util.List;
 
 @Data
 public class AsignacionMaleta {
-    private String batchId;              // fragmentado: id del sub-lote "<idEnvio>-F<n>"
+    private String batchId;
     private String origen;
     private String destino;
-    private int cantidad;                // fragmentado: maletas de ESTE sub-lote
+    private int cantidad;
     private boolean enrutada;
     private boolean cumpleSLA;
     private List<String> rutaVuelos;
@@ -17,10 +17,7 @@ public class AsignacionMaleta {
     private String registroLocal;
     private String registroUtc;
 
-    // Fragmentación (caso E1: cantidad > capacidad de avión). Sólo presentes si el envío se fragmentó;
-    // NON_NULL campo a campo (NO a nivel de clase: eso suprimiría nulls ya existentes del contrato). Un
-    // envío no fragmentado serializa byte-idéntico a hoy.
-    @JsonInclude(JsonInclude.Include.NON_NULL) private String  idEnvioPadre;    // id del envío padre
-    @JsonInclude(JsonInclude.Include.NON_NULL) private Integer fragmento;       // 1..N
-    @JsonInclude(JsonInclude.Include.NON_NULL) private Integer totalFragmentos; // N
+    @JsonInclude(JsonInclude.Include.NON_NULL) private String  idEnvioPadre;
+    @JsonInclude(JsonInclude.Include.NON_NULL) private Integer fragmento;
+    @JsonInclude(JsonInclude.Include.NON_NULL) private Integer totalFragmentos;
 }

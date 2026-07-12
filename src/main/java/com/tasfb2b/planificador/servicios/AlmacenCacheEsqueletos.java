@@ -40,10 +40,8 @@ public class AlmacenCacheEsqueletos {
 
     private final CargadorDatos cargadorDatos;
     private final MotorGrafoCache motorCache;
-    private final String archivo;   // vacío ⇒ persistencia desactivada (no-op)
+    private final String archivo;
 
-    // Escala mínima y recojo en destino (min): entran en la huella para que cambiarlos invalide la caché
-    // persistida (los esqueletos son topológicos, pero su factibilidad SLA depende de estos tiempos).
     private int tiempoMinEscala = 10;
     private int tiempoRecojoDestino = 15;
 
@@ -88,9 +86,6 @@ public class AlmacenCacheEsqueletos {
         int claves = motorCache.cacheEsqueletos().size();
         if (claves <= clavesUltimoGuardado) return;
         try {
-            // El guardado corre al FIN de cada corrida, cuando las altas EN CALIENTE aún viven (se
-            // revierten al iniciar la siguiente): se filtran los esqueletos que referencien aristas
-            // efímeras (índices >= nº de vuelos baseline) para que el archivo sea siempre el baseline.
             escribir(path(), huellaDataset(), sinEsqueletosEfimeros(motorCache.cacheEsqueletos()));
             clavesUltimoGuardado = claves;
             log.info("Caché de esqueletos persistida en {} ({} claves).", archivo, claves);
@@ -99,7 +94,6 @@ public class AlmacenCacheEsqueletos {
         }
     }
 
-    /** Copia de la caché sin los esqueletos que usan aristas efímeras (índice >= vuelos baseline). */
     Map<Long, List<int[]>> sinEsqueletosEfimeros(Map<Long, List<int[]>> cache) {
         List<Vuelo> vuelos = cargadorDatos != null ? cargadorDatos.getVuelos() : null;
         if (vuelos == null) return cache;
@@ -141,14 +135,8 @@ public class AlmacenCacheEsqueletos {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 no disponible", ex);   // imposible en un JRE estándar
         }
-        // La escala mínima SÍ entra (cambia la factibilidad de los esqueletos). Las capacidades NO:
-        // los esqueletos son topológicos (índices de aristas; la capacidad se valida en runtime contra la
-        // ocupación) y son mutables por corrida (ConfiguracionCapacidadesService) — incluirlas invalidaría
-        // la caché tras cada PUT/reset.
         md.update(("escala|" + tiempoMinEscala + "|recojo|" + tiempoRecojoDestino + "\n")
                 .getBytes(StandardCharsets.UTF_8));
-        // Las altas EN CALIENTE (efímeras por corrida) tampoco entran: la huella es siempre la del
-        // dataset baseline, para que un guardado con altas vivas no invalide el archivo al reiniciar.
         List<Aeropuerto> aeropuertos = cargadorDatos != null ? cargadorDatos.getAeropuertos() : null;
         if (aeropuertos != null) {
             for (Aeropuerto a : aeropuertos) {

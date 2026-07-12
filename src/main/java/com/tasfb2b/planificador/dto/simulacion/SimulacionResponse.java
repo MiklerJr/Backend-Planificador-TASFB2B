@@ -16,7 +16,6 @@ public class SimulacionResponse {
     private List<VueloBackend> vuelosPlaneados;
     private Map<String, AeropuertoDTO> aeropuertosInfo;
 
-    // Parámetros de simulación para el frontend
-    private int k;           // factor de aceleración
-    private int saMinutos;   // tamaño de ventana del planificador (Sa)
+    private int k;
+    private int saMinutos;
 }

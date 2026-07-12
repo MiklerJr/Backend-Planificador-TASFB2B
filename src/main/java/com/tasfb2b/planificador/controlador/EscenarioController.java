@@ -97,7 +97,6 @@ public class EscenarioController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaInicio,
             @RequestParam(defaultValue = "false") boolean enVivo) {
         rechazarSiIngestaEnCurso();
-        // En operación EN VIVO el cursor es now() UTC: fechaInicio no aplica (no se valida vs dataset).
         if (!enVivo) {
             String error = service.validarParametrosEscenario(null, null, null, fechaInicio);
             if (error != null) throw new ParametroInvalidoException(error);
@@ -138,7 +137,6 @@ public class EscenarioController {
         if (error != null) throw new ParametroInvalidoException(error);
 
         EjecucionParametros params = new EjecucionParametros();
-        // K no se propaga del request: iniciarEscenario2Async fija siempre el del yaml.
         params.setMotor(algoritmo);
         params.setSeed(seed);
         params.setFechaInicio(fechaInicio);
@@ -158,7 +156,7 @@ public class EscenarioController {
         if (sa != null)   body.put("sa", sa);
         if (ta != null)   body.put("ta", ta);
         if (dias != null) body.put("dias", dias);
-        body.put("procesamientoPrevio", false);   // forzado OFF: el warm-up está desactivado
+        body.put("procesamientoPrevio", false);
         if (job.fechaInicio != null) body.put("fechaInicio", job.fechaInicio.toString());
         return ResponseEntity.accepted().body(body);
     }

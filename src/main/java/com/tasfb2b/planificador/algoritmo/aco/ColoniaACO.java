@@ -19,27 +19,19 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
-/**
- * Optimización por Colonia de Hormigas (ACO) por bloque: el "ACO padre" que orquesta una colonia
- * de hormigas ({@link ConstructorHormiga}) sobre un rastro de feromonas ({@link RastroFeromonas}),
- * una heurística ({@link Heuristica}), una ruleta de selección ({@link RuletaSeleccion}) y un
- * generador de rutas Dijkstra ({@link GeneradorRutas}). Cada bloque: siembra una solución greedy
- * determinista, itera colonias de hormigas evaporando y depositando feromona, y aplica la mejor
- * solución encontrada al enrutador real.
- */
 @Slf4j
 @Component
 public class ColoniaACO {
 
     private static final double IMPULSO_FEROMONA_BASE = 2.0;
-    private static final double RESERVA_BASE = 0.15;              // colchón en vuelos para flexibles
-    private static final double UMBRAL_CONGESTION_DEFER = 2.0;    // ruta "cara" en congestión
-    private static final long   MARGEN_DIFERIR_MIN = 1440L;         // solo diferir si slack > 24h (urgentes nunca)
-    private static final int    CANDIDATOS_RUTA_GRUPO = 5;       // más candidatos por grupo → más diversidad de congestión
+    private static final double RESERVA_BASE = 0.15;
+    private static final double UMBRAL_CONGESTION_DEFER = 2.0;
+    private static final long   MARGEN_DIFERIR_MIN = 1440L;
+    private static final int    CANDIDATOS_RUTA_GRUPO = 5;
     private static final boolean ENABLE_J3_DEFER = false;
 
     private final PlanificadorProperties props;
-    private int diagSeq = 0;   // N1: secuencia de bloques para throttlear el diagnóstico a INFO
+    private int diagSeq = 0;
 
     public ColoniaACO(PlanificadorProperties props) {
         this.props = props;
@@ -232,12 +224,11 @@ public class ColoniaACO {
 
                 RutaCandidata elegida = seleccionarRuta(enrutador, heuristica, batch, rutasGrupo, simFlight, simAirport);
                 if (elegida == null) {
-                    // Ninguna ruta del grupo le sirve: recomputar para este envío.
                     List<RutaCandidata> propias = generador.obtenerRutas(
                             batch, simFlight, simAirport, CANDIDATOS_RUTA_GRUPO);
                     elegida = seleccionarRuta(enrutador, heuristica, batch, propias, simFlight, simAirport);
                 }
-                if (elegida == null) continue;   // sinRuta → se difiere al backlog
+                if (elegida == null) continue;
 
                 if (ENABLE_J3_DEFER
                         && elegida.getHolguraMin() > MARGEN_DIFERIR_MIN
