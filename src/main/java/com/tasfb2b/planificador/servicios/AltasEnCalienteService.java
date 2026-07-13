@@ -245,6 +245,99 @@ public class AltasEnCalienteService {
         }
     }
 
+    /**
+     * Alta de vuelo EN FRÍO (sin corrida en curso): BD + catálogo en RAM, sin grafo ni
+     * enrutador — la arista entra en la próxima construcción del grafo, por lo que el
+     * llamador debe invalidar el MotorGrafoCache al cerrar el lote. El vuelo queda
+     * efímero: persiste entre corridas hasta "restaurar plan de vuelos" o el reinicio
+     * del backend (limpieza de schema.sql).
+     *
+     * @return null si se aplicó; el motivo del descarte en caso contrario.
+     */
+    public synchronized String aplicarAltaVueloEnFrio(AltaVueloRequest req) {
+        try {
+            validarAltaVuelo(req);
+        } catch (ParametroInvalidoException ex) {
+            return ex.getMessage();
+        }
+
+        Aeropuerto origen  = cargadorDatos.getAeropuerto(req.getOrigen().trim());
+        Aeropuerto destino = cargadorDatos.getAeropuerto(req.getDestino().trim());
+        LocalTime hSalida  = parseHora(req.getHoraSalida(), "horaSalida");
+        LocalTime hLlegada = parseHora(req.getHoraLlegada(), "horaLlegada");
+        String idVuelo = idVueloDe(req);
+
+        if (jdbcTemplate != null) {
+            try {
+                int filas = jdbcTemplate.update(
+                        "INSERT INTO vuelo (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, "
+                      + "capacidad_maxima, capacidad_maxima_original, efimero) "
+                      + "VALUES (?, ?, ?, ?, ?, ?, ?, TRUE) ON CONFLICT DO NOTHING",
+                        idVuelo, origen.getCodigo(), destino.getCodigo(),
+                        hSalida.format(FORMATO_HORA_BD), hLlegada.format(FORMATO_HORA_BD),
+                        req.getCapacidad(), req.getCapacidad());
+                if (filas == 0) return "el id " + idVuelo + " ya existe en la BD";
+            } catch (Exception ex) {
+                return "INSERT del vuelo en BD falló: " + ex.getMessage();
+            }
+        }
+
+        Vuelo v = new Vuelo();
+        v.setIdVuelo(idVuelo);
+        v.setOrigen(origen.getCodigo());
+        v.setDestino(destino.getCodigo());
+        v.setCapacidad(req.getCapacidad());
+        v.setCapacidadOriginal(req.getCapacidad());
+        v.setEfimero(true);
+        LocalDateTime fechaSalida = LocalDateTime.of(AnalizadorVuelos.FLIGHT_BASE_DATE, hSalida);
+        v.setFechaHoraSalida(fechaSalida);
+        v.setFechaHoraLlegada(CargadorDatos.fechaLlegadaLocal(fechaSalida, hLlegada, origen, destino));
+        v.setAeropuertoOrigen(origen);
+        v.setAeropuertoDestino(destino);
+
+        cargadorDatos.agregarVueloEfimero(v);
+        vuelosEfimerosAplicados.add(idVuelo);
+        log.info("Alta EN FRÍO aplicada: vuelo {} ({}→{}, {}–{} local, cap {}) — entra al grafo en la próxima corrida.",
+                idVuelo, origen.getCodigo(), destino.getCodigo(),
+                req.getHoraSalida(), req.getHoraLlegada(), req.getCapacidad());
+        return null;
+    }
+
+    /**
+     * Elimina del catálogo (BD + RAM) los vuelos agregados (efímeros) y sus referencias
+     * en la solución persistida, e invalida el grafo. Es la pata "quitar los vuelos
+     * agregados" de restaurar plan de vuelos; solo debe llamarse EN FRÍO. No toca los
+     * aeropuertos efímeros.
+     *
+     * @return número de vuelos eliminados.
+     */
+    public synchronized int eliminarVuelosEfimeros() {
+        int enBd = 0;
+        if (jdbcTemplate != null) {
+            try {
+                jdbcTemplate.update("DELETE FROM tramo_ruta "
+                        + "WHERE id_vuelo IN (SELECT id_vuelo FROM vuelo WHERE efimero)");
+                jdbcTemplate.update("DELETE FROM tramo_inyectado "
+                        + "WHERE id_vuelo IN (SELECT id_vuelo FROM vuelo WHERE efimero)");
+                jdbcTemplate.update("DELETE FROM cancelacion_vuelo "
+                        + "WHERE id_vuelo IN (SELECT id_vuelo FROM vuelo WHERE efimero)");
+                enBd = jdbcTemplate.update("DELETE FROM vuelo WHERE efimero");
+            } catch (Exception ex) {
+                log.warn("Eliminación BD de vuelos efímeros falló: {}", ex.getMessage());
+            }
+        }
+        int enRam = 0;
+        for (Vuelo v : cargadorDatos.getVuelos()) if (v.isEfimero()) enRam++;
+        if (enBd == 0 && enRam == 0) return 0;
+
+        cargadorDatos.quitarVuelosEfimeros();
+        vuelosEfimerosAplicados.clear();
+        motorCache.invalidar();
+        log.info("Vuelos agregados eliminados: {} en BD / {} en RAM (grafo y esqueletos invalidados).",
+                enBd, enRam);
+        return Math.max(enBd, enRam);
+    }
+
     public synchronized void revertirAltasEfimeras() {
         boolean habiaRegistro = hayAltasActivas();
         int enBd = 0;

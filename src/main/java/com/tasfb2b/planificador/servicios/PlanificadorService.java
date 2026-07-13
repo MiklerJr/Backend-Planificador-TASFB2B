@@ -109,9 +109,10 @@ public class PlanificadorService {
     }
 
     private void resetearCapacidadesAlIniciarCorrida() {
-        if (altasEnCaliente != null) {
-            altasEnCaliente.revertirAltasEfimeras();
-        }
+        // Los vuelos/aeropuertos agregados (efímeros) YA NO se revierten al iniciar: igual
+        // que las capacidades editadas en frío, persisten entre corridas (pueden cargarse
+        // EN FRÍO como preparación de la prueba) hasta que el operador pulse "Restaurar
+        // plan de vuelos" o se reinicie el backend (limpieza de schema.sql).
         if (configCapacidades != null) {
             configCapacidades.resincronizarCapacidadesConBaselineFrio();
         }
