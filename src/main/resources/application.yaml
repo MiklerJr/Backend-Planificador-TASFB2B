@@ -1,10 +1,14 @@
 spring:
   datasource:
-    # BD de PRODUCCIÓN (VM, túnel local en el puerto 5433). Activa por defecto.
+    # BD de PRODUCCIÓN (VM, túnel local en el puerto 5433): descomentar este bloque (y comentar el activo) para apuntar a producción.
 #    url: jdbc:postgresql://127.0.0.1:5433/Tasf_b2b
 #    username: postgres
 #    password: Furiousandfast.8
-    # BD de PRUEBAS (AWS RDS): descomentar este bloque (y comentar el de arriba) para apuntar a pruebas.
+    # BD LOCAL en Docker (host.docker.internal): descomentar este bloque (y comentar el activo) para correr contra un Postgres del host desde el contenedor.
+#    url: jdbc:postgresql://host.docker.internal:5432/Tasf_b2b
+#    username: postgres
+#    password: Furiousandfast.8
+    # BD de PRUEBAS (AWS RDS). Activa por defecto.
     url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b
     username: postgres
     password: Furiousandfast.8
