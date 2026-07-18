@@ -4,7 +4,6 @@ import java.time.LocalDateTime;
 
 public class ContextoTemporal {
 
-    // Eje de datos
     public final LocalDateTime scInicio;
     public final LocalDateTime scFin;
     public final int scMinutos;
@@ -12,7 +11,6 @@ public class ContextoTemporal {
     public final int k;
     public final int bloqueIdx;
 
-    // Eje real
     public long relojInicioMs;
     public long relojFinMs;
     public long taMs;

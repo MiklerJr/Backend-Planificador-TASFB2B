@@ -65,7 +65,6 @@ public class GestorBacklog {
     public List<LoteEnvio> sacarPendientes(int max) {
         if (max <= 0) return List.of();
         List<LoteEnvio> result = new ArrayList<>(Math.min(max, tamaño()));
-        // Prioridad: sinRuta primero (críticos), luego replanificables.
         while (!sinRuta.isEmpty() && result.size() < max) {
             result.add(sinRuta.pollFirst());
         }
@@ -88,7 +87,6 @@ public class GestorBacklog {
         todos.sort(Comparator.comparing(
                 b -> b.getTiempoListo().plusHours(b.getHorasLimiteSla())));
         List<LoteEnvio> out = new ArrayList<>(todos.subList(0, max));
-        // Re-encolar los menos urgentes (ya ordenados por deadline) para el próximo bloque.
         for (int i = max; i < todos.size(); i++) {
             sinRuta.addLast(todos.get(i));
         }

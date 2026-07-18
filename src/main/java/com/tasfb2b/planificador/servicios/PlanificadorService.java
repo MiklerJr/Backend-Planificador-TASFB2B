@@ -47,7 +47,6 @@ import java.nio.file.Path;
 @Service
 public class PlanificadorService {
 
-    // DEPENDENCIA
     private final CargadorDatos cargadorDatos;
     private final MapeadorAlgoritmo mapper;
     private final PlanificadorProperties props;
@@ -109,10 +108,6 @@ public class PlanificadorService {
     }
 
     private void resetearCapacidadesAlIniciarCorrida() {
-        // Los vuelos/aeropuertos agregados (efímeros) YA NO se revierten al iniciar: igual
-        // que las capacidades editadas en frío, persisten entre corridas (pueden cargarse
-        // EN FRÍO como preparación de la prueba) hasta que el operador pulse "Restaurar
-        // plan de vuelos" o se reinicie el backend (limpieza de schema.sql).
         if (configCapacidades != null) {
             configCapacidades.resincronizarCapacidadesConBaselineFrio();
         }

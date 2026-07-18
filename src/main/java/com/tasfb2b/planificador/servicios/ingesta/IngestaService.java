@@ -103,22 +103,17 @@ public class IngestaService {
 
     private void ejecutar(Path aero, Path vuelos, List<EnvioTemp> envios, IngestaEstado e) {
         try {
-            // 1. Reemplazo destructivo. CASCADE limpia las soluciones de la 5a (ruta_asignada/
-            //    tramo_ruta/cancelacion_vuelo, FK a envio/vuelo) y envio_inyectado (FK a aeropuerto).
             e.setFase("limpiando");
             jdbc.execute("TRUNCATE aeropuerto, vuelo, envio RESTART IDENTITY CASCADE");
 
-            // 2. Aeropuertos (parse robusto BOM-safe vía AnalizadorAeropuertos).
             e.setFase("aeropuertos");
             e.setAeropuertos(migrador.insertarAeropuertos(aeropuertoParser.parse(aero)));
 
-            // 3. Vuelos.
             e.setFase("vuelos");
             try (Reader r = Files.newBufferedReader(vuelos, StandardCharsets.UTF_8)) {
                 e.setVuelos(migrador.migrarVuelosDesde(r));
             }
 
-            // 4. Envíos (el ICAO de origen viene del nombre del archivo).
             e.setFase("envios");
             long ins = 0, desc = 0;
             int procesados = 0;
@@ -134,8 +129,6 @@ public class IngestaService {
                 e.setEnviosDescartados(desc);
             }
 
-            // 5. Recargar la cache del motor (aeropuertos, vuelos, ventanas) e invalidar el grafo +
-            //    esqueletos compartidos: cambian los vuelos ⇒ los edge-idx cacheados ya no valen.
             e.setFase("recargando");
             cargadorDatos.load();
             motorCache.invalidar();

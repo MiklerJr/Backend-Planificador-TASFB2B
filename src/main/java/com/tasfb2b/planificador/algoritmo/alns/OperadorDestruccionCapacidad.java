@@ -27,7 +27,6 @@ public class OperadorDestruccionCapacidad implements OperadorDestruccion {
         Set<LoteEnvio>  removedSet = new HashSet<>();
         int target = Math.max(1, (int)(all.size() * factor));
 
-        // Prioridad 1: tardadas — siempre destruir para intentar mejorar
         for (LoteEnvio b : all) {
             if (!b.isCumpleSLA() && tieneRuta(b)) {
                 removed.add(b);
@@ -35,7 +34,6 @@ public class OperadorDestruccionCapacidad implements OperadorDestruccion {
             }
         }
 
-        // Prioridad 2: completar con selección aleatoria de lotes enrutados
         if (removed.size() < target) {
             List<LoteEnvio> candidatos = new ArrayList<>();
             for (LoteEnvio b : all) {

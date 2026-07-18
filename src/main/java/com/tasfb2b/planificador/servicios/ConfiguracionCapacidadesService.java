@@ -180,7 +180,7 @@ public class ConfiguracionCapacidadesService {
 
         v.setIdVuelo(nuevoId);
         aplicarHorarioEnRam(v, salidaEff, llegadaEff);
-        motorCache.invalidar();   // el grafo del run se reconstruye desde RAM al iniciar el siguiente job
+        motorCache.invalidar();
         log.info("Horario de vuelo {} → {} (salida {} / llegada {} local) — EN FRÍO, BD+RAM; grafo y "
                 + "esqueletos invalidados.", idDb, nuevoId, hhmm(salidaEff), hhmm(llegadaEff));
         return nuevoId;
@@ -260,7 +260,6 @@ public class ConfiguracionCapacidadesService {
                         (String) fila.get("hora_salida_original"), "hora_salida_original");
                 LocalTime llegadaOrig = AltasEnCalienteService.parseHora(
                         (String) fila.get("hora_llegada_original"), "hora_llegada_original");
-                // BD anterior al backfill de icao_destino_original: conservar el destino vigente.
                 String destinoOrig = fila.get("icao_destino_original") != null
                         ? (String) fila.get("icao_destino_original")
                         : (String) fila.get("icao_destino");

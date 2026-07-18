@@ -40,7 +40,6 @@ public class MigradorEnviosDb {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    // ── Aeropuertos ─────────────────────────────────────────────────────────────
     public int insertarAeropuertos(List<Aeropuerto> aeropuertos) {
         if (aeropuertos == null || aeropuertos.isEmpty()) return 0;
         List<Object[]> lote = new ArrayList<>(aeropuertos.size());
@@ -52,7 +51,6 @@ public class MigradorEnviosDb {
         return lote.size();
     }
 
-    // ── Vuelos ──────────────────────────────────────────────────────────────────
     public void migrarVuelos(String rutaArchivoVuelos) {
         try (BufferedReader br = new BufferedReader(new FileReader(rutaArchivoVuelos))) {
             int n = migrarVuelosDesde(br);
@@ -92,7 +90,6 @@ public class MigradorEnviosDb {
         return total;
     }
 
-    // ── Envíos ──────────────────────────────────────────────────────────────────
     public void migrarDirectorioCompleto(String rutaDirectorio) {
         File carpeta = new File(rutaDirectorio);
         File[] archivos = carpeta.listFiles((dir, name) -> name.endsWith(".txt") && name.startsWith("_envios_"));
@@ -129,7 +126,6 @@ public class MigradorEnviosDb {
 
             String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
                    destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
-            // RF03: id opcional; el resto de campos obligatorios deben estar presentes.
             if (!ValidadorEnvio.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
                 descartados++;
                 continue;
@@ -138,7 +134,6 @@ public class MigradorEnviosDb {
                 String id = origenIcao + "-" + parts[0].trim();
                 int hh = Integer.parseInt(horaStr), mm = Integer.parseInt(minStr);
                 int maletas = Integer.parseInt(maletasStr), idCliente = Integer.parseInt(clienteStr);
-                // Timestamp PostgreSQL (YYYY-MM-DD HH:MM:SS) desde la fecha YYYYMMDD + hh:mm.
                 String ts = String.format("%s-%s-%s %02d:%02d:00",
                         fechaRaw.substring(0, 4), fechaRaw.substring(4, 6), fechaRaw.substring(6, 8), hh, mm);
                 batchArgs.add(new Object[]{ id, origenIcao, destino, maletas, idCliente, Timestamp.valueOf(ts) });
@@ -189,7 +184,7 @@ public class MigradorEnviosDb {
                 it.setSede(sede);
                 items.add(it);
             } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
-                // línea malformada → descartar sin abortar
+                // descartar sin abortar
             }
         }
         return items;

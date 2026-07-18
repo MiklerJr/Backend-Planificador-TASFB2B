@@ -133,7 +133,7 @@ public class AlmacenCacheEsqueletos {
         try {
             md = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 no disponible", ex);   // imposible en un JRE estándar
+            throw new IllegalStateException("SHA-256 no disponible", ex);
         }
         md.update(("escala|" + tiempoMinEscala + "|recojo|" + tiempoRecojoDestino + "\n")
                 .getBytes(StandardCharsets.UTF_8));

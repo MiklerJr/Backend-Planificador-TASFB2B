@@ -75,13 +75,12 @@ public class MetadatosDatosService {
         long diasDisponibles = 0L;
         if (primera != null && ultima != null) {
             diasDisponibles = java.time.Duration.between(primera, ultima).toDays();
-            if (diasDisponibles < 1) diasDisponibles = 1; // mínimo 1 día si hay datos
+            if (diasDisponibles < 1) diasDisponibles = 1;
         }
         DatosInfoResponse out = new DatosInfoResponse();
         out.setPrimeraVentana(primera != null ? primera.toString() : null);
         out.setUltimaVentana(ultima  != null ? ultima.toString()  : null);
         out.setDiasDisponibles(diasDisponibles);
-        // totalMaletas queda por compatibilidad: historicamente equivale a filas/envios.
         out.setTotalMaletas(cargadorDatos.getTotalMaletas());
         out.setTotalEnvios(cargadorDatos.getTotalEnvios());
         out.setTotalMaletasIndividuales(cargadorDatos.getTotalMaletasIndividuales());

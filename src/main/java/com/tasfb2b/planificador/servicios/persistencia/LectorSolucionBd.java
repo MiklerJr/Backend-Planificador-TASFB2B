@@ -82,14 +82,13 @@ public class LectorSolucionBd {
         org.springframework.jdbc.core.RowCallbackHandler rch = rs -> {
             long idRuta = rs.getLong("id_ruta");
             if (idRuta != idRutaActual[0]) {
-                emitir(acc, indiceVuelo, consumer);   // cierra el batch anterior
+                emitir(acc, indiceVuelo, consumer);
                 idRutaActual[0] = idRuta;
                 acc.reset(rs);
             }
             acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
                     rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
         };
-        // Cursor server-side (fetchSize por-statement) dentro de una tx read-only ⇒ autoCommit=false.
         Runnable lectura = () -> jdbc.query(con -> {
             var ps = con.prepareStatement(sql.toString());
             int idx = 1;
@@ -100,7 +99,7 @@ public class LectorSolucionBd {
         }, rch);
         if (txReadOnly != null) txReadOnly.executeWithoutResult(st -> lectura.run());
         else lectura.run();
-        emitir(acc, indiceVuelo, consumer);            // último batch pendiente
+        emitir(acc, indiceVuelo, consumer);
 
         forEachEnrutadoInyectado(indiceVuelo, desde, hasta, consumer);
     }
@@ -126,7 +125,7 @@ public class LectorSolucionBd {
         org.springframework.jdbc.core.RowCallbackHandler rch = rs -> {
             long idRuta = rs.getLong("id_ruta");
             if (idRuta != idRutaActual[0]) {
-                emitir(acc, indiceVuelo, consumer, true);   // readyTime ya UTC
+                emitir(acc, indiceVuelo, consumer, true);
                 idRutaActual[0] = idRuta;
                 acc.reset(rs);
             }
@@ -143,7 +142,7 @@ public class LectorSolucionBd {
         }, rch);
         if (txReadOnly != null) txReadOnly.executeWithoutResult(st -> lectura.run());
         else lectura.run();
-        emitir(acc, indiceVuelo, consumer, true);      // último batch pendiente
+        emitir(acc, indiceVuelo, consumer, true);
     }
 
     public List<LoteEnvio> afectadosPorVuelo(List<String> idsVueloNormalizado, LocalDate dia,
@@ -151,7 +150,6 @@ public class LectorSolucionBd {
         List<LoteEnvio> out = new ArrayList<>();
         if (idsVueloNormalizado == null || idsVueloNormalizado.isEmpty() || dia == null) return out;
 
-        // 1. id_ruta afectados (ruta activa que usa alguno de los vuelos en ese día UTC).
         String sqlIds =
                 "SELECT DISTINCT t.id_ruta FROM tramo_ruta t "
               + "JOIN ruta_asignada r ON r.id_ruta = t.id_ruta "
@@ -164,7 +162,6 @@ public class LectorSolucionBd {
                 (rs, n) -> rs.getLong("id_ruta"));
         if (idsRuta.isEmpty()) return out;
 
-        // 2. Reconstruir cada ruta afectada (datos del envío + todos sus tramos).
         String sqlRutas =
                 "SELECT r.id_ruta, r.id_envio, r.cumple_sla, r.sub_lote, r.total_sub_lotes, "
               + "       e.icao_origen, e.icao_destino, "
@@ -219,7 +216,6 @@ public class LectorSolucionBd {
                 destino = e.destino.codigo;
                 depMin = e.minutoDelDiaSalida;
             } else {
-                // Fallback defensivo: derivar del propio id_vuelo (ICAO-ICAO-HHMM).
                 String[] partes = idVuelo != null ? idVuelo.split("-") : new String[0];
                 origen = partes.length > 0 ? partes[0] : "";
                 destino = partes.length > 1 ? partes[1] : "";
@@ -294,12 +290,12 @@ public class LectorSolucionBd {
             String idBD = rs.getString("id_vuelo");
             Vuelo v = idx.get(idBD);
             String vueloFront = v != null ? FormatoSimulacion.vueloFrontId(v) : idBD;
-            String[] partes = vueloFront.split("-");   // ICAO-ICAO-HH:MM
+            String[] partes = vueloFront.split("-");
             String salida = rs.getTimestamp("hora_salida_utc").toLocalDateTime().toString();
             VuelosUsadosResponse.VueloUsado u = new VuelosUsadosResponse.VueloUsado();
             u.setVueloId(vueloFront);
             u.setFlightKey(vueloFront + "|" + salida);
-            u.setBloqueIdx(rowNum);   // orden temporal, no el bloque de cálculo (la BD no lo guarda)
+            u.setBloqueIdx(rowNum);
             u.setOrigen(partes.length > 0 ? partes[0] : "");
             u.setDestino(partes.length > 1 ? partes[1] : "");
             u.setFechaSalida(salida);
@@ -315,8 +311,6 @@ public class LectorSolucionBd {
         Map<String, Vuelo> idx = indiceVueloPorIdBd();
         final int offset = Math.max(0, desde);
         final int lim = Math.max(1, limit);
-        // SUM(COALESCE(r.cantidad, e.cantidad_maletas)): la carga real de cada sub-lote (con
-        // e.cantidad_maletas — la del padre — cada sub-lote doblaría las maletas del vuelo).
         String sql = "SELECT t.id_vuelo, t.hora_salida_utc, t.hora_llegada_utc, "
                 + "COALESCE(SUM(COALESCE(r.cantidad, e.cantidad_maletas)), 0) AS carga "
                 + "FROM tramo_ruta t "
@@ -339,7 +333,7 @@ public class LectorSolucionBd {
             c.setFechaLlegada(rs.getTimestamp("hora_llegada_utc").toLocalDateTime().toString());
             c.setCapacidadMaxima(v != null && v.getCapacidad() != null ? v.getCapacidad() : 0);
             c.setCargaAsignada(rs.getInt("carga"));
-            FormatoSimulacion.completarCargaVuelo(c);   // porcentajeCarga + semáforo
+            FormatoSimulacion.completarCargaVuelo(c);
             CargaVueloFila row = new CargaVueloFila();
             row.setVueloId(c.getVueloId());
             row.setOrigen(c.getOrigen());
@@ -350,7 +344,7 @@ public class LectorSolucionBd {
             row.setCargaAsignada(c.getCargaAsignada());
             row.setPorcentajeCarga(c.getPorcentajeCarga());
             row.setSemaforo(c.getSemaforo());
-            row.setBloqueIdx(offset + rowNum);   // orden temporal global, no el bloque de cálculo
+            row.setBloqueIdx(offset + rowNum);
             return row;
         };
         org.springframework.jdbc.core.PreparedStatementCreator psc = con -> {
@@ -425,18 +419,16 @@ public class LectorSolucionBd {
         }, rs -> {
             long idRuta = rs.getLong("id_ruta");
             if (idRuta != idRutaActual[0]) {
-                emitir(acc, indiceVuelo, out::add, inyectado);   // cierra el sub-lote anterior
+                emitir(acc, indiceVuelo, out::add, inyectado);
                 idRutaActual[0] = idRuta;
                 acc.reset(rs);
             }
             acc.tramos.add(new Tramo(rs.getInt("numero_orden"), rs.getString("id_vuelo"),
                     rs.getTimestamp("hora_salida_utc").toLocalDateTime()));
         });
-        emitir(acc, indiceVuelo, out::add, inyectado);           // último sub-lote pendiente
+        emitir(acc, indiceVuelo, out::add, inyectado);
         return out;
     }
-
-    // ── Reconstrucción ──────────────────────────────────────────────────────
 
     private void emitir(Acumulador acc, Map<String, Arista> indiceVuelo, Consumer<LoteEnvio> consumer) {
         emitir(acc, indiceVuelo, consumer, false);

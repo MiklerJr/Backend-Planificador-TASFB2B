@@ -121,7 +121,7 @@ public class AltasEnCalienteService {
     public synchronized String aplicarAltaVuelo(AltaVueloRequest req, Grafo grafo,
                                                 OperadorReparacionVoraz enrutador) {
         try {
-            validarAltaVuelo(req);   // revalidación defensiva: el estado pudo cambiar desde el encolado
+            validarAltaVuelo(req);
         } catch (ParametroInvalidoException ex) {
             return ex.getMessage();
         }
@@ -190,7 +190,7 @@ public class AltasEnCalienteService {
     public synchronized String aplicarAltaAeropuerto(AltaAeropuertoRequest req, Grafo grafo,
                                                      OperadorReparacionVoraz enrutador) {
         try {
-            validarAltaAeropuerto(req);   // revalidación defensiva
+            validarAltaAeropuerto(req);
         } catch (ParametroInvalidoException ex) {
             return ex.getMessage();
         }
@@ -245,15 +245,6 @@ public class AltasEnCalienteService {
         }
     }
 
-    /**
-     * Alta de vuelo EN FRÍO (sin corrida en curso): BD + catálogo en RAM, sin grafo ni
-     * enrutador — la arista entra en la próxima construcción del grafo, por lo que el
-     * llamador debe invalidar el MotorGrafoCache al cerrar el lote. El vuelo queda
-     * efímero: persiste entre corridas hasta "restaurar plan de vuelos" o el reinicio
-     * del backend (limpieza de schema.sql).
-     *
-     * @return null si se aplicó; el motivo del descarte en caso contrario.
-     */
     public synchronized String aplicarAltaVueloEnFrio(AltaVueloRequest req) {
         try {
             validarAltaVuelo(req);
@@ -303,14 +294,6 @@ public class AltasEnCalienteService {
         return null;
     }
 
-    /**
-     * Elimina del catálogo (BD + RAM) los vuelos agregados (efímeros) y sus referencias
-     * en la solución persistida, e invalida el grafo. Es la pata "quitar los vuelos
-     * agregados" de restaurar plan de vuelos; solo debe llamarse EN FRÍO. No toca los
-     * aeropuertos efímeros.
-     *
-     * @return número de vuelos eliminados.
-     */
     public synchronized int eliminarVuelosEfimeros() {
         int enBd = 0;
         if (jdbcTemplate != null) {
@@ -447,7 +430,7 @@ public class AltasEnCalienteService {
         int n = 0;
         while ((linea = br.readLine()) != null) {
             n++;
-            String s = linea.replace(String.valueOf((char) 0xFEFF), "").trim();   // BOM defensivo (TXT del curso)
+            String s = linea.replace(String.valueOf((char) 0xFEFF), "").trim();
             if (s.isEmpty() || s.startsWith("*") || s.startsWith("//") || s.contains("ORIG-DEST"))
                 continue;
             String[] parts = s.split("[\\s-]+");

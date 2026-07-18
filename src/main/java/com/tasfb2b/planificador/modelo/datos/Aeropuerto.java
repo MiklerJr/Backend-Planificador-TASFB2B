@@ -47,8 +47,6 @@ public class Aeropuerto {
     @Column(name = "activo", nullable = false)
     private boolean activo = true;
 
-    // Alta EN CALIENTE (efímera por corrida): no pertenece al dataset maestro; se revierte
-    // al iniciar la corrida siguiente y se limpia al arranque (schema.sql).
     @Column(name = "efimero", nullable = false)
     private boolean efimero = false;
 

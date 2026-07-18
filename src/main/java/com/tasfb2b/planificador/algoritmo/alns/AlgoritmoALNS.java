@@ -14,31 +14,27 @@ import java.util.Random;
 @Slf4j
 public class AlgoritmoALNS {
 
-    // ── Hiperparámetros ──────────────────────────────────────────────────────
-    public double factorDestruccion = 0.20;   // fracción de lotes destruidos por iter
-    public double tempInicial       = 500.0;  // temperatura SA inicial
-    public double tasaEnfriamiento  = 0.85;   // factor de enfriamiento por iteración
-    public double tempMinima        = 0.1;    // temperatura mínima (parada anticipada)
-    public int    tamañoMinBloque   = 3;      // bloques menores no ejecutan ALNS
-    public int    longitudSegmento  = 3;      // iters entre actualizaciones de pesos
+    public double factorDestruccion = 0.20;
+    public double tempInicial       = 500.0;
+    public double tasaEnfriamiento  = 0.85;
+    public double tempMinima        = 0.1;
+    public int    tamañoMinBloque   = 3;
+    public int    longitudSegmento  = 3;
 
     public long   tiempoLimiteMs = Long.MAX_VALUE;
 
-    // ── Parámetros adaptativos (Ropke & Pisinger 2006) ───────────────────────
     private static final double RECOMPENSA_NUEVO_MEJOR = 3.0;
     private static final double RECOMPENSA_MEJORA      = 2.0;
     private static final double RECOMPENSA_ACEPTADO    = 1.0;
-    private static final double FACTOR_REACCION        = 0.15; // r ∈ (0,1]
+    private static final double FACTOR_REACCION        = 0.15;
 
-    // ── Estado del algoritmo ─────────────────────────────────────────────────
     private final Grafo                  grafo;
     private final OperadorReparacionVoraz   enrutador;
     private final List<OperadorDestruccion>  operadoresDestruccion;
 
-    // Pesos adaptativos: un elemento por operador de destruir
     private final double[] pesos;
-    private final double[] puntajes;  // acumulado en el segmento actual
-    private final int[]    usos;    // usos en el segmento actual
+    private final double[] puntajes;
+    private final int[]    usos;
 
     private SolucionAlns     solucionActual;
     private SolucionAlns     mejorSolucion;
@@ -59,8 +55,6 @@ public class AlgoritmoALNS {
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-
     public AlgoritmoALNS(Grafo grafo,
                           OperadorReparacionVoraz enrutador,
                           List<LoteEnvio> batches,
@@ -75,7 +69,6 @@ public class AlgoritmoALNS {
                           Map<Long,Integer> blockFlight,
                           Map<Long,Integer> blockAirport,
                           PlanificadorProperties props) {
-        // 1. Aplicar config externa si está disponible (antes de usar tempInicial).
         if (props != null) {
             PlanificadorProperties.Alns a = props.getAlns();
             this.factorDestruccion = a.getDestroyFactor();
@@ -117,7 +110,6 @@ public class AlgoritmoALNS {
         this.vueloActual      = new HashMap<>(blockFlight);
         this.aeropuertoActual = new HashMap<>(blockAirport);
 
-        // La solución greedy es la mejor conocida al arrancar
         this.mejorSolucion  = solucionActual.clonar();
         this.mejorVuelo     = new HashMap<>(vueloActual);
         this.mejorAeropuerto = new HashMap<>(aeropuertoActual);
@@ -132,7 +124,6 @@ public class AlgoritmoALNS {
 
         for (int iter = 0; iter < maxIterations && temperatura > tempMinima; iter++) {
 
-            // Presupuesto de tiempo: aborta si excede tiempoLimiteMs.
             if (tiempoLimiteMs < Long.MAX_VALUE) {
                 long elapsedMs = (System.nanoTime() - tInicio) / 1_000_000;
                 if (elapsedMs >= tiempoLimiteMs) {
@@ -142,17 +133,13 @@ public class AlgoritmoALNS {
                 }
             }
 
-
-            // ── 1. Selección adaptativa (ruleta proporcional a pesos) ────────
             int selectedIdx = seleccionarOperadorDestruccion();
             usos[selectedIdx]++;
 
-            // ── 2. Clonar estado actual ───────────────────────────────────────
             SolucionAlns     candidate = solucionActual.clonar();
             Map<Long,Integer> cFlight  = new HashMap<>(vueloActual);
             Map<Long,Integer> cAirport = new HashMap<>(aeropuertoActual);
 
-            // ── 3. Destrucción ────────────────────────────────────────────────
             List<LoteEnvio> unassigned =
                     operadoresDestruccion.get(selectedIdx).destruir(candidate, factorDestruccion);
 
@@ -161,14 +148,11 @@ public class AlgoritmoALNS {
                 b.limpiarRuta();
             }
 
-            // ── 4. Reparación ─────────────────────────────────────────────────
             enrutador.reparar(candidate, unassigned, cFlight, cAirport);
 
-            // ── 5. Evaluación y aceptación SA ─────────────────────────────────
             double candidateCost = candidate.calcularCosto();
             boolean accepted     = aceptar(currentCost, candidateCost, temperatura);
 
-            // ── 6. Recompensa al operador y actualización de estado ───────────
             double reward = 0;
             if (accepted) {
                 boolean mejora = candidateCost < currentCost;
@@ -187,15 +171,13 @@ public class AlgoritmoALNS {
                 } else if (mejora) {
                     reward = RECOMPENSA_MEJORA;
                 } else {
-                    reward = RECOMPENSA_ACEPTADO;   // aceptado por SA pero no mejora
+                    reward = RECOMPENSA_ACEPTADO;
                 }
             }
             puntajes[selectedIdx] += reward;
 
-            // ── 7. Actualización periódica de pesos adaptativos ───────────────
             if ((iter + 1) % longitudSegmento == 0) actualizarPesos();
 
-            // ── 8. Enfriamiento ───────────────────────────────────────────────
             temperatura *= tasaEnfriamiento;
         }
     }
