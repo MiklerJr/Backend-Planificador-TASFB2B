@@ -1,7 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
-import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -19,8 +18,6 @@ public class OperadorDestruccionCongestionAeropuerto implements OperadorDestrucc
     private static final int TOP_AEROPUERTOS = 5;
 
     private Random rng = new Random();
-
-    public OperadorDestruccionCongestionAeropuerto(Grafo graph) { }
 
     @Override
     public void setAleatorio(Random rng) {

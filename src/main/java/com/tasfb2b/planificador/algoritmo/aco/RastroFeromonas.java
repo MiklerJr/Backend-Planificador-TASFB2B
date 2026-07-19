@@ -1,6 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.aco;
 
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 import java.util.HashMap;

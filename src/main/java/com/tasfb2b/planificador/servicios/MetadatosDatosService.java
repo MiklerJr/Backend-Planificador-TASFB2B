@@ -21,11 +21,13 @@ public class MetadatosDatosService {
     static final int DEFAULT_DEMANDA_MAX_DIAS = 31;
 
     private final CargadorDatos cargadorDatos;
+    private final PlanificadorProperties props;
     private final int demandaMaxDias;
 
     @Autowired
     public MetadatosDatosService(CargadorDatos cargadorDatos, PlanificadorProperties props) {
         this.cargadorDatos = cargadorDatos;
+        this.props = props;
         this.demandaMaxDias = (props != null && props.getConsulta() != null
                 && props.getConsulta().getDemandaMaxDias() > 0)
                 ? props.getConsulta().getDemandaMaxDias()
@@ -87,6 +89,58 @@ public class MetadatosDatosService {
         out.setTotalAeropuertos(cargadorDatos.getAeropuertos().size());
         out.setTotalVuelos(cargadorDatos.getVuelos().size());
         return out;
+    }
+
+    public Map<String, Object> getCatalogoEscenarios() {
+        PlanificadorProperties.Scenario sc = props.getScenario();
+
+        Map<String, Object> esc1 = new HashMap<>();
+        esc1.put("id", 1);
+        esc1.put("nombre", "Día a día (tiempo real)");
+        esc1.put("descripcion",
+                "Planificación viva: cada corrida cubre un único bloque Sa. " +
+                "El wall-clock por bloque es Sa real, sin aceleración.");
+        esc1.put("kDefault", sc.getKDefault1());
+        esc1.put("kFijo", true);
+        esc1.put("simulaTiempoReal", sc.isSimularTiempoReal1());
+        esc1.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario1/iniciar"
+        ));
+
+        Map<String, Object> esc2 = new HashMap<>();
+        esc2.put("id", 2);
+        esc2.put("nombre", "Período (3/5/7 días)");
+        esc2.put("descripcion",
+                "Replays/simulaciones de un período cerrado. Entre bloques duerme " +
+                "(Sa - Ta) cuando simularTiempoReal2=true, para imitar el ritmo real.");
+        esc2.put("kDefault", sc.getKDefault2());
+        esc2.put("kFijo", true);
+        esc2.put("simulaTiempoReal", sc.isSimularTiempoReal2());
+        esc2.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario2/iniciar"
+        ));
+
+        Map<String, Object> esc3 = new HashMap<>();
+        esc3.put("id", 3);
+        esc3.put("nombre", "Hasta colapso");
+        esc3.put("descripcion",
+                "Estrés / capacity planning. Avanza lo más rápido posible (a menos " +
+                "que simularTiempoReal3=true) hasta que se dispara la condición de colapso.");
+        esc3.put("kDefault", sc.getKDefault3());
+        esc3.put("kFijo", true);
+        esc3.put("simulaTiempoReal", sc.isSimularTiempoReal3());
+        esc3.put("umbralColapso", sc.getUmbralColapso());
+        esc3.put("umbralColapsoBacklog", sc.getUmbralColapsoBacklog());
+        esc3.put("endpoints", Map.of(
+                "iniciar", "POST /api/planificador/escenario3/iniciar"
+        ));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("saMinutos", sc.getSaMinutos());
+        body.put("taSegundos", sc.getTaSegundos());
+        body.put("motoresSoportados", List.of(PlanificadorService.MOTOR_ALNS, PlanificadorService.MOTOR_ACO));
+        body.put("escenarios", List.of(esc1, esc2, esc3));
+        return body;
     }
 
     public DemandaResumenResponse getDemandaResumen(LocalDateTime desde,

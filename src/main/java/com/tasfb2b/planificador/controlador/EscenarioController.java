@@ -10,6 +10,7 @@ import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
 import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
 import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.OperacionesEnVivoService;
 import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
 import com.tasfb2b.planificador.servicios.AltasEnCalienteService;
 import com.tasfb2b.planificador.servicios.PlanificadorService;
@@ -42,12 +43,14 @@ import java.util.Map;
 public class EscenarioController {
 
     private final PlanificadorService service;
+    private final OperacionesEnVivoService operacionesEnVivo;
     private final PlanificadorProperties props;
     private final IngestaService ingesta;
 
-    public EscenarioController(PlanificadorService service, PlanificadorProperties props,
-                               IngestaService ingesta) {
+    public EscenarioController(PlanificadorService service, OperacionesEnVivoService operacionesEnVivo,
+                               PlanificadorProperties props, IngestaService ingesta) {
         this.service = service;
+        this.operacionesEnVivo = operacionesEnVivo;
         this.props = props;
         this.ingesta = ingesta;
     }
@@ -221,7 +224,7 @@ public class EscenarioController {
             @PathVariable String jobId,
             @RequestBody CancelacionVueloRequest orden) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        boolean ok = service.solicitarCancelacionVuelo(jobId, orden);
+        boolean ok = operacionesEnVivo.solicitarCancelacionVuelo(jobId, orden);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -240,7 +243,7 @@ public class EscenarioController {
             @PathVariable String jobId,
             @RequestBody AltaVueloRequest alta) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        boolean ok = service.solicitarAltaVuelo(jobId, alta);
+        boolean ok = operacionesEnVivo.solicitarAltaVuelo(jobId, alta);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -259,7 +262,7 @@ public class EscenarioController {
             @PathVariable String jobId,
             @RequestBody AltaAeropuertoRequest alta) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        boolean ok = service.solicitarAltaAeropuerto(jobId, alta);
+        boolean ok = operacionesEnVivo.solicitarAltaAeropuerto(jobId, alta);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -276,7 +279,7 @@ public class EscenarioController {
             @PathVariable String jobId,
             @RequestBody InyeccionEnviosRequest req) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        int encolados = service.solicitarInyeccionEnvios(jobId, req);
+        int encolados = operacionesEnVivo.solicitarInyeccionEnvios(jobId, req);
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -307,7 +310,7 @@ public class EscenarioController {
                 throw new ParametroInvalidoException(
                         "Archivo sin ICAO de origen derivable del nombre: " + f.getOriginalFilename()
                       + " (use _envios_<ICAO>_.txt o el parámetro 'origen').");
-            Integer offset = service.getOffsetAeropuerto(icao);
+            Integer offset = operacionesEnVivo.getOffsetAeropuerto(icao);
             if (offset == null)
                 throw new ParametroInvalidoException("ICAO origen desconocido: " + icao);
             try (Reader r = new InputStreamReader(f.getInputStream(), StandardCharsets.UTF_8)) {
@@ -323,7 +326,7 @@ public class EscenarioController {
 
         InyeccionEnviosRequest req = new InyeccionEnviosRequest();
         req.setEnvios(items);
-        int encolados = service.solicitarInyeccionEnvios(jobId, req);
+        int encolados = operacionesEnVivo.solicitarInyeccionEnvios(jobId, req);
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -358,7 +361,7 @@ public class EscenarioController {
                     continue;
                 }
                 try {
-                    if (!service.solicitarAltaVuelo(jobId, linea.alta())) {
+                    if (!operacionesEnVivo.solicitarAltaVuelo(jobId, linea.alta())) {
                         return ResponseEntity.status(409).body(Map.of(
                                 "jobId", jobId, "encolado", false,
                                 "motivo", "el job no está activo (ya terminó o fue cancelado)"));

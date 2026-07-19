@@ -82,6 +82,6 @@ class OcupacionAlmacenesEndpointTest {
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
         ConsultaJobsService jobQuery = new ConsultaJobsService(jobs, null);
-        return new ConsultaJobsController(service, jobQuery);
+        return new ConsultaJobsController(service, jobQuery, new TelemetriaSimulacionService(jobs));
     }
 }

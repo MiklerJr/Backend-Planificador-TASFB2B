@@ -110,7 +110,7 @@ class OperadorReparacionVorazReSeedTest {
         assertTrue(!op.rutaCacheEsqueleto.get(key).isEmpty(), "hay al menos un esqueleto cacheado");
 
         // El fast-path ya dispone de candidatos sin recomputar Dijkstra.
-        List<OperadorReparacionVoraz.RutaCandidata> cand = op.generarCandidatosRuta(
+        List<RutaCandidata> cand = op.generarCandidatosRuta(
                 new LoteEnvio("E3", 10, 24, "AAA", "CCC", LocalDateTime.of(2026, 1, 1, 7, 15)),
                 new java.util.HashMap<>(), new java.util.HashMap<>(), 5);
         assertTrue(!cand.isEmpty(), "tras el pre-warm, generarCandidatosRuta devuelve candidatos");

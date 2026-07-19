@@ -1,7 +1,7 @@
 package com.tasfb2b.planificador.algoritmo.aco;
 
 import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;

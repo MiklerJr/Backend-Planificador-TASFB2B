@@ -3,7 +3,6 @@ package com.tasfb2b.planificador.controlador;
 import com.tasfb2b.planificador.dto.datos.*;
 import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.servicios.MetadatosDatosService;
-import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -21,11 +20,9 @@ import java.util.Map;
 public class MetadatosController {
 
     private final MetadatosDatosService datasetMetadata;
-    private final PlanificadorService service;
 
-    public MetadatosController(MetadatosDatosService datasetMetadata, PlanificadorService service) {
+    public MetadatosController(MetadatosDatosService datasetMetadata) {
         this.datasetMetadata = datasetMetadata;
-        this.service = service;
     }
 
     @GetMapping("/dataset/info")
@@ -49,7 +46,7 @@ public class MetadatosController {
 
     @GetMapping("/escenarios")
     public ResponseEntity<Map<String, Object>> catalogoEscenarios() {
-        return ResponseEntity.ok(service.getCatalogoEscenarios());
+        return ResponseEntity.ok(datasetMetadata.getCatalogoEscenarios());
     }
 
     @GetMapping("/demanda/resumen")

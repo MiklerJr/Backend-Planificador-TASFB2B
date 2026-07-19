@@ -4,7 +4,7 @@ import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
 import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.dto.almacenes.*;
 import org.junit.jupiter.api.Test;
@@ -49,7 +49,7 @@ class SerieAlmacenesTest {
         enrutar(op, batch("B1", 20, LocalTime.of(7, 0)), blockFlight, blockAirport);
         op.confirmarBloque(blockFlight, blockAirport);
 
-        PlanificadorService service = serviceSinDataset();
+        TelemetriaSimulacionService service = serviceSinDataset();
         List<OcupacionAlmacenSlot> serie =
                 service.buildSerieAlmacenes(blockAirport, graph, op);
 
@@ -88,7 +88,7 @@ class SerieAlmacenesTest {
         LoteEnvio b3 = batch("B3", 1, LocalTime.of(10, 0));
         op.reconstruirEsperaOrigenBacklog(List.of(b2), List.of(b3));
 
-        PlanificadorService service = serviceSinDataset();
+        TelemetriaSimulacionService service = serviceSinDataset();
         List<OcupacionAlmacenSlot> serie =
                 service.buildSerieAlmacenes(blockAirport, graph, op);
 
@@ -103,8 +103,8 @@ class SerieAlmacenesTest {
 
     // ----------------------------------------------------------------------- helpers
 
-    private static PlanificadorService serviceSinDataset() {
-        return new PlanificadorService(null, null, null, null, null, null);
+    private static TelemetriaSimulacionService serviceSinDataset() {
+        return new TelemetriaSimulacionService();
     }
 
     private static List<OcupacionAlmacenSlot> slotsDe(

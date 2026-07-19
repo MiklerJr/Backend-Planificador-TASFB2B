@@ -85,11 +85,11 @@ public class AlgoritmoALNS {
 
         if (props != null && props.getAlns().getOperadoresDestroy() != null
                 && !props.getAlns().getOperadoresDestroy().isEmpty()) {
-            this.operadoresDestruccion = construirOperadoresDestruccion(props.getAlns().getOperadoresDestroy(), grafo);
+            this.operadoresDestruccion = construirOperadoresDestruccion(props.getAlns().getOperadoresDestroy());
         } else {
             this.operadoresDestruccion = List.of(
-                    new OperadorDestruccionCapacidad(grafo),
-                    new OperadorDestruccionPeorRuta(grafo)
+                    new OperadorDestruccionCapacidad(),
+                    new OperadorDestruccionPeorRuta()
             );
         }
 
@@ -213,21 +213,21 @@ public class AlgoritmoALNS {
     public Map<Long,Integer> getMejorBloqueVuelo()   { return mejorVuelo;   }
     public Map<Long,Integer> getMejorBloqueAeropuerto() { return mejorAeropuerto;  }
 
-    private static List<OperadorDestruccion> construirOperadoresDestruccion(List<String> nombres, Grafo grafo) {
+    private static List<OperadorDestruccion> construirOperadoresDestruccion(List<String> nombres) {
         java.util.ArrayList<OperadorDestruccion> ops = new java.util.ArrayList<>(nombres.size());
         for (String n : nombres) {
             switch (n.toLowerCase().trim()) {
-                case "capacity"           -> ops.add(new OperadorDestruccionCapacidad(grafo));
-                case "worst-route"        -> ops.add(new OperadorDestruccionPeorRuta(grafo));
-                case "random"             -> ops.add(new OperadorDestruccionAleatoria(grafo));
-                case "airport-congestion" -> ops.add(new OperadorDestruccionCongestionAeropuerto(grafo));
+                case "capacity"           -> ops.add(new OperadorDestruccionCapacidad());
+                case "worst-route"        -> ops.add(new OperadorDestruccionPeorRuta());
+                case "random"             -> ops.add(new OperadorDestruccionAleatoria());
+                case "airport-congestion" -> ops.add(new OperadorDestruccionCongestionAeropuerto());
                 default -> log.warn("Operador destruir desconocido en config: '{}' (ignorado)", n);
             }
         }
         if (ops.isEmpty()) {
             log.warn("Lista de operadores destruir vacía tras parseo — usando defaults");
-            ops.add(new OperadorDestruccionCapacidad(grafo));
-            ops.add(new OperadorDestruccionPeorRuta(grafo));
+            ops.add(new OperadorDestruccionCapacidad());
+            ops.add(new OperadorDestruccionPeorRuta());
         }
         return ops;
     }

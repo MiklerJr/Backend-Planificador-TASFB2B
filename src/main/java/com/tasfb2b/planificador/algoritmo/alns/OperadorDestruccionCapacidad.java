@@ -1,7 +1,5 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
-import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -12,8 +10,6 @@ import java.util.Set;
 public class OperadorDestruccionCapacidad implements OperadorDestruccion {
 
     private Random rng = new Random();
-
-    public OperadorDestruccionCapacidad(Grafo graph) { }
 
     @Override
     public void setAleatorio(Random rng) {

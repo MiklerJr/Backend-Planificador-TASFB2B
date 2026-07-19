@@ -47,8 +47,7 @@ class EstadoInicialWarmupTest {
         // C: sin ruta → fuera (vuelve por el backlog en la fase visible).
         auditWarmup.put("C", batchSinRuta("C", LocalDateTime.of(DIA, LocalTime.of(8, 0))));
 
-        PlanificadorService service =
-                new PlanificadorService(null, null, null, null, null, null);
+        TelemetriaSimulacionService service = new TelemetriaSimulacionService();
         List<AsignacionMaleta> snapshot = service.construirEstadoInicial(auditWarmup.values());
 
         assertEquals(2, snapshot.size(), "solo B (en el aire) y E (tramo futuro) siguen activos");
@@ -66,8 +65,7 @@ class EstadoInicialWarmupTest {
 
     @Test
     void sinWarmupDevuelveListaVacia() {
-        PlanificadorService service =
-                new PlanificadorService(null, null, null, null, null, null);
+        TelemetriaSimulacionService service = new TelemetriaSimulacionService();
         assertTrue(service.construirEstadoInicial(List.of()).isEmpty());
         assertTrue(service.construirEstadoInicial((java.util.Collection<LoteEnvio>) null).isEmpty());
     }

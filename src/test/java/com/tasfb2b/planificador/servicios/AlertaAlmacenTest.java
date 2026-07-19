@@ -26,7 +26,7 @@ class AlertaAlmacenTest {
 
     @Test
     void eligeElAlmacenDeMayorPorcentaje() {
-        AlertaAlmacen alerta = PlanificadorService.construirAlertaAlmacen(List.of(
+        AlertaAlmacen alerta = TelemetriaSimulacionService.construirAlertaAlmacen(List.of(
                 ocup("SKBO", 40.0, "VERDE"),
                 ocup("SEQM", 95.0, "ROJO"),
                 ocup("LATI", 72.0, "AMBAR")), 7);
@@ -38,7 +38,7 @@ class AlertaAlmacenTest {
 
     @Test
     void listaVaciaDaVerdeSinCritico() {
-        AlertaAlmacen alerta = PlanificadorService.construirAlertaAlmacen(List.of(), 3);
+        AlertaAlmacen alerta = TelemetriaSimulacionService.construirAlertaAlmacen(List.of(), 3);
         assertEquals("VERDE", alerta.getNivel());
         assertNull(alerta.getAlmacenCritico());
         assertEquals(3, alerta.getBloqueIdx());
@@ -46,7 +46,7 @@ class AlertaAlmacenTest {
 
     @Test
     void nullDaVerdeSinCritico() {
-        AlertaAlmacen alerta = PlanificadorService.construirAlertaAlmacen(null, 0);
+        AlertaAlmacen alerta = TelemetriaSimulacionService.construirAlertaAlmacen(null, 0);
         assertEquals("VERDE", alerta.getNivel());
         assertNull(alerta.getAlmacenCritico());
     }

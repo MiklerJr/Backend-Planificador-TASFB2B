@@ -28,10 +28,10 @@ class JsonContratoTest {
     @Test
     void estadoOmiteOpcionalesNullYConservaSiempreSeedYVuelosCancelados() throws Exception {
         RegistroJobs jobs = new RegistroJobs();
-        PlanificadorService service = serviceCon(jobs);
+        TelemetriaSimulacionService telemetria = new TelemetriaSimulacionService(jobs);
         EstadoJob job = jobs.crear("2", 14);   // recién encolado: sin fechaInicio/fin/error/alerta
 
-        String json = mapper.writeValueAsString(service.getEstadoJob(job.getJobId()));
+        String json = mapper.writeValueAsString(telemetria.getEstadoJob(job.getJobId()));
 
         // Opcionales null: ausentes (igual que el mapa, que no los ponía).
         assertFalse(json.contains("\"fechaInicio\""), "fechaInicio null debe omitirse");
