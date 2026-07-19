@@ -347,196 +347,15 @@ public class PlanificadorService {
 
         List<ContextoTemporal> plan = construirPlanBloques(k, fechaInicio, saOverride, diasOverride);
         if (plan.isEmpty()) {
-            bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
-            r.setK(k);
-            r.setSaMinutos(saMin);
-            return r;
+            return respuestaVacia(k, saMin);
         }
 
         List<ContextoTemporal> warmupPlan = params.isProcesamientoPrevio()
                 ? construirPlanWarmup(k, fechaInicio, saOverride)
                 : Collections.emptyList();
 
-        resetearCapacidadesAlIniciarCorrida();
-        Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
-        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
-        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
-                props.getStorageAware().getPrecioHubExponente());   // Fase P
-        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
-        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
-        SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
-
-        int totalBloques = plan.size();
-        int intervaloReporte = Math.max(1, totalBloques / 10);
-
-        int totalVuelosCancelados = 0;
-        List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
-        List<CancelacionVueloRequest> cancelacionesNoAplicadas =
-                job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
-
-        List<BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
-        Map<String, int[]> odStats = new HashMap<>();
-        int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
-                totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
-        long totalMaletas = 0L;
-        EstadisticasTa taStats = new EstadisticasTa();
-        boolean simularTiempoReal = props.getScenario().isSimularTiempoReal2();
-        long saMs = saMin * 60_000L;
-        GestorBacklog backlog = crearBacklogConPurga(enrutador);
-        AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
-        AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
-                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio, false);
-        if (job != null) job.estadoInicial = telemetria.construirEstadoInicial(auditWarmup.completos());
-
-        if (props.getScenario().isPrewarmSkeletons() && !plan.isEmpty()) {
-            long t0Prewarm = System.currentTimeMillis();
-            List<Envio> demandaVentana = cargadorDatos.getMaletasEnRango(
-                    plan.get(0).scInicio, plan.get(plan.size() - 1).scFin);
-            if (job != null && !cancelacionPedida(job)) job.estado = "calentando";
-            log.info("Pre-warm iniciado: {} envíos en ventana | caché de esqueletos con {} claves precargadas",
-                    demandaVentana.size(), motorCache.cacheEsqueletos().size());
-            int clavesCalentadas = enrutador.precalentarEsqueletos(
-                    mapper.mapearALotes(demandaVentana), PREWARM_ROUTE_CANDIDATES,
-                    () -> cancelacionPedida(job));
-            log.info("Pre-warm esqueletos (N3): {} claves desde {} envíos en {} ms",
-                    clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
-            if (job != null && !cancelacionPedida(job)) job.estado = "ejecutando";
-            almacenEsqueletos.guardarSiCrecio();
-        }
-
-        if (cancelacionPedida(job)) {
-            log.info("E2 cancelado por usuario antes del primer bloque (warm-up/pre-warm)");
-            bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
-            r.setK(k);
-            r.setSaMinutos(saMin);
-            return r;
-        }
-
-        persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
-
-        boolean colapsoAlmacenDetectado = false;
-        int bloqueColapsoAlmacen = -1;
-        String detalleColapsoE2 = null;
-        LocalDateTime instanteColapsoE2 = null;
-        String nivelAlertaPrevio = AlertaColapso.VERDE;
-        for (ContextoTemporal ctx : plan) {
-            bloqueActual++;
-            operacionesEnVivo.aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);
-            totalVuelosCancelados += operacionesEnVivo.aplicarCancelacionesVuelo(
-                    job != null ? job.getJobId() : null,
-                    job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
-            Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs, false, false);
-            bloques.add(rv.bloque);
-            if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
-            taStats.acumular(ctx.taMs);
-
-            TotalesUnicos totales = auditAcc.totalesUnicos();
-            totalEnvios = totales.envios();
-            totalEnrutadas = totales.enrutadas();
-            totalSinRuta = totales.sinRuta();
-            totalCumpleSLA = totales.cumpleSLA();
-            totalTardadas = totales.tardadas();
-            totalMaletas = totales.maletas();
-
-            if (job != null) {
-                job.bloqueActual = bloqueActual;
-                job.totalBloques = totalBloques;
-                job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
-                job.publicarBloque(rv.bloque);
-                job.publicarSerieAlmacenes(rv.serieAlmacenes());
-                job.metricasSnapshot = telemetria.metricasSnapshotDe(totales, taStats.promedio());
-                job.alertaColapso = rv.alerta();
-                persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
-                if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
-                    log.info("E2 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
-                    break;
-                }
-            }
-            nivelAlertaPrevio = avisarColapsoInminente("E2", rv.alerta(), bloqueActual, nivelAlertaPrevio);
-
-            if (bloqueActual < plan.size()) {
-                double tasa = rv.envios > 0 ? (double) rv.sinRuta / rv.envios : 0.0;
-                plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
-            }
-
-            backlog.purgarVencidas(ctx.scFin);
-
-            logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(), rv.colapsoAlmacen(), job,
-                    auditAcc.sinRutaSize());
-
-            if (rv.colapsoAlmacen()) {
-                colapsoAlmacenDetectado = true;
-                bloqueColapsoAlmacen = bloqueActual;
-                detalleColapsoE2 = rv.detalleColapso();
-                instanteColapsoE2 = ctx.scFin;
-                log.warn("E2 COLAPSO por almacén lleno en bloque {}/{} — {}",
-                        bloqueActual, totalBloques, rv.detalleColapso());
-                break;
-            }
-
-            if (bloqueActual % 50 == 0 || bloqueActual == totalBloques) {
-                log.info("--- Saturación tras bloque {}/{} ---", bloqueActual, totalBloques);
-                enrutador.logEstadisticasCapacidad();
-            }
-
-            if (log.isDebugEnabled() && (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques)) {
-                log.debug("Progreso E2 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
-                        motorRes,
-                        (int) Math.round(bloqueActual * 100.0 / totalBloques),
-                        bloqueActual, totalBloques,
-                        totalEnvios, totalMaletas,
-                        totalCumpleSLA, totalTardadas, totalSinRuta, ctx.taMs);
-            }
-
-            if (simularTiempoReal && bloqueActual < totalBloques) {
-                long dormirMs = saMs - ctx.taMs;
-                if (dormirMs > 0) {
-                    try {
-                        Thread.sleep(dormirMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        log.warn("E2 interrumpido en bloque {}/{}", bloqueActual, totalBloques);
-                        break;
-                    }
-                } else {
-                    log.warn("Ta={}ms > Sa={}ms en bloque {} — calibrar K hacia abajo", ctx.taMs, saMs, bloqueActual);
-                }
-            }
-        }
-
-        bloquesCacheados = bloques;
-        long tiempoMs = System.currentTimeMillis() - inicio;
-        log.info("E2 completado en {} ms — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms (Sa={} ms) | backlog: pico={} actual={} definitivo={}",
-                tiempoMs, bloqueActual, totalEnvios, totalMaletas,
-                totalCumpleSLA, totalTardadas, totalSinRuta,
-                taStats.min(), taStats.promedio(), taStats.max(), saMs,
-                backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo());
-        if (colapsoAlmacenDetectado) {
-            log.warn("E2 detenido por COLAPSO de almacén en bloque {}", bloqueColapsoAlmacen);
-        }
-        logDiagnosticos(odStats, graph, enrutador);
-
-        SimulacionResponse res = telemetria.construirRespuestaFront(0, tiempoMs,
-                cargadorDatos.getVuelos(), bloqueActual, plan.get(0).scInicio.toLocalDate());
-        telemetria.llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
-                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
-                colapsoAlmacenDetectado, bloqueColapsoAlmacen,
-                colapsoAlmacenDetectado ? "almacen_lleno" : null, detalleColapsoE2, instanteColapsoE2);
-        telemetria.llenarMetricasTa(res.getMetricas(), taStats, saMs);
-        telemetria.llenarMetricasBacklog(res.getMetricas(), backlog);
-        res.setK(k);
-        res.setSaMinutos(saMin);
-
-        if (job != null) job.resultado = res;
-        finalizarAuditoriaDiferida(job, auditAcc);
-        return res;
+        return ejecutarBucle(EspecificacionEscenario.paraE2(k, saMin, taFijoMs, plan, warmupPlan,
+                props.getScenario().isSimularTiempoReal2(), motorRes, seed, fechaInicio), job, inicio);
     }
 
     public BloqueSimulacion getBloque(int index) {
@@ -562,168 +381,12 @@ public class PlanificadorService {
                 ? construirPlanWarmup(k, fechaInicio, null)
                 : Collections.emptyList();
         if (plan.isEmpty()) {
-            bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
-            r.setK(k);
-            r.setSaMinutos(saMin);
-            return r;
+            return respuestaVacia(k, saMin);
         }
 
-        resetearCapacidadesAlIniciarCorrida();
-        Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
-        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
-        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
-                props.getStorageAware().getPrecioHubExponente());   // Fase P
-        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
-        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
-        SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
-
-
-        int totalVuelosCancelados = 0;
-        List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
-        List<CancelacionVueloRequest> cancelacionesNoAplicadas =
-                job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
-        List<InyeccionEnviosRequest.Item> bufferInyecciones = new ArrayList<>();
-
-        List<BloqueSimulacion> bloques = new ArrayList<>(plan.size());
-        Map<String, int[]> odStats = new HashMap<>();
-        int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
-                totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
-        long totalMaletas = 0L;
-        EstadisticasTa taStats = new EstadisticasTa();
-        boolean simularTiempoReal = enVivo || props.getScenario().isSimularTiempoReal1();
-        long saMs = saMin * 60_000L;
-        int totalBloques = plan.size();
-        GestorBacklog backlog = crearBacklogConPurga(enrutador);
-        AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
-        int intervaloReporte = Math.max(1, totalBloques / 10);
-        persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
-
-        boolean colapsoAlmacenDetectado = false;
-        int bloqueColapsoAlmacen = -1;
-        String detalleColapsoE1 = null;
-        LocalDateTime instanteColapsoE1 = null;
-        String nivelAlertaPrevio = AlertaColapso.VERDE;
-
-        AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
-                solucionDummy, odStats, backlog, motorRes, seed, taFijoMs, fechaInicio, false);
-        if (job != null) job.estadoInicial = telemetria.construirEstadoInicial(auditWarmup.completos());
-
-        for (ContextoTemporal ctx : plan) {
-            bloqueActual++;
-            operacionesEnVivo.aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);
-            totalVuelosCancelados += operacionesEnVivo.aplicarCancelacionesVuelo(
-                    job != null ? job.getJobId() : null,
-                    job != null ? job.getCancelacionesVueloPendientes() : null,
-                    graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
-            if (job != null) operacionesEnVivo.aplicarInyeccionesEnvio(job, bufferInyecciones, ctx, backlog, graph);
-            Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, taFijoMs, false, enVivo);
-
-            rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
-
-            bloques.add(rv.bloque);
-            if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
-            taStats.acumular(ctx.taMs);
-
-            TotalesUnicos totales = auditAcc.totalesUnicos();
-            totalEnvios = totales.envios();
-            totalEnrutadas = totales.enrutadas();
-            totalSinRuta = totales.sinRuta();
-            totalCumpleSLA = totales.cumpleSLA();
-            totalTardadas = totales.tardadas();
-            totalMaletas = totales.maletas();
-
-            if (job != null) {
-                job.bloqueActual = bloqueActual;
-                job.totalBloques = totalBloques;
-                job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
-                job.publicarBloque(rv.bloque);
-                job.publicarSerieAlmacenes(rv.serieAlmacenes());
-                job.metricasSnapshot = telemetria.metricasSnapshotDe(totales, taStats.promedio());
-                job.alertaColapso = rv.alerta();
-                persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
-                if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
-                    log.info("E1 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
-                    break;
-                }
-            }
-            nivelAlertaPrevio = avisarColapsoInminente("E1", rv.alerta(), bloqueActual, nivelAlertaPrevio);
-
-            if (bloqueActual < plan.size()) {
-                double tasa = rv.envios > 0 ? (double) rv.sinRuta / rv.envios : 0.0;
-                plan.get(bloqueActual).tasaSinRutaPrevia = tasa;
-            }
-
-            backlog.purgarVencidas(ctx.scFin);
-
-            logBloque(motorRes, bloqueActual, totalBloques,
-                    rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(), rv.colapsoAlmacen(), job,
-                    auditAcc.sinRutaSize());
-
-            if (rv.colapsoAlmacen()) {
-                colapsoAlmacenDetectado = true;
-                bloqueColapsoAlmacen = bloqueActual;
-                detalleColapsoE1 = rv.detalleColapso();
-                instanteColapsoE1 = ctx.scFin;
-                log.warn("E1 COLAPSO por almacén lleno en bloque {}/{} — {}",
-                        bloqueActual, totalBloques, rv.detalleColapso());
-                break;
-            }
-
-            if (log.isDebugEnabled() && (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques)) {
-                log.debug("Progreso E1 ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
-                        motorRes,
-                        (int) Math.round(bloqueActual * 100.0 / totalBloques),
-                        bloqueActual, totalBloques,
-                        totalEnvios, totalMaletas,
-                        totalCumpleSLA, totalTardadas, totalSinRuta, ctx.taMs);
-            }
-
-            if (simularTiempoReal && bloqueActual < totalBloques) {
-                long dormirMs = saMs - ctx.taMs;
-                if (dormirMs > 0) {
-                    try {
-                        Thread.sleep(dormirMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        log.warn("E1 interrumpido en bloque {}/{}", bloqueActual, totalBloques);
-                        break;
-                    }
-                } else {
-                    log.warn("Ta={}ms > Sa={}ms en bloque {} — calibrar Ta hacia abajo", ctx.taMs, saMs, bloqueActual);
-                }
-            }
-        }
-
-        bloquesCacheados = bloques;
-        long tiempoMs = System.currentTimeMillis() - inicio;
-        log.info("E1 completado en {} ms — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms (Sa={} ms) | backlog: pico={} actual={} definitivo={}",
-                tiempoMs, bloqueActual, totalEnvios, totalMaletas,
-                totalCumpleSLA, totalTardadas, totalSinRuta,
-                taStats.min(), taStats.promedio(), taStats.max(), saMs,
-                backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo());
-        if (colapsoAlmacenDetectado) {
-            log.warn("E1 detenido por COLAPSO de almacén en bloque {}", bloqueColapsoAlmacen);
-        }
-        logDiagnosticos(odStats, graph, enrutador);
-
-        SimulacionResponse res = telemetria.construirRespuestaFront(0, tiempoMs,
-                cargadorDatos.getVuelos(), bloqueActual, plan.get(0).scInicio.toLocalDate());
-        telemetria.llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
-                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
-                colapsoAlmacenDetectado, bloqueColapsoAlmacen,
-                colapsoAlmacenDetectado ? "almacen_lleno" : null, detalleColapsoE1, instanteColapsoE1);
-        telemetria.llenarMetricasTa(res.getMetricas(), taStats, saMs);
-        telemetria.llenarMetricasBacklog(res.getMetricas(), backlog);
-        res.setK(k);
-        res.setSaMinutos(saMin);
-
-        if (job != null) job.resultado = res;
-        finalizarAuditoriaDiferida(job, auditAcc);
-        return res;
+        return ejecutarBucle(EspecificacionEscenario.paraE1(k, saMin, taFijoMs, plan, warmupPlan,
+                enVivo, enVivo || props.getScenario().isSimularTiempoReal1(), motorRes, seed, fechaInicio),
+                job, inicio);
     }
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso) {
@@ -748,63 +411,193 @@ public class PlanificadorService {
                 ? construirPlanWarmup(k, fechaInicio, null)
                 : Collections.emptyList();
         if (plan.isEmpty()) {
-            bloquesCacheados = new ArrayList<>();
-            SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
-            r.setK(k);
-            r.setSaMinutos(saMin);
-            return r;
+            return respuestaVacia(k, saMin);
         }
 
-        resetearCapacidadesAlIniciarCorrida();
-        Grafo graph = motorCache.obtenerGrafo(
-                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
-        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
-        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
-                props.getStorageAware().getPrecioHubExponente());   // Fase P
-        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
-        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
-        SolucionAlns solucionDummy = new SolucionAlns(Collections.emptyList());
+        return ejecutarBucle(EspecificacionEscenario.paraE3(k, saMin,
+                props.getScenario().getTaSegundos() * 1000L, plan, warmupPlan,
+                props.getScenario().isSimularTiempoReal3(), motorRes, seed, fechaInicio), job, inicio);
+    }
 
+    /**
+     * Parámetros que distinguen a los tres escenarios dentro del bucle unificado de bloques
+     * (Tanda 4F-3). Cada {@code ejecutarX} construye su spec vía fábrica y delega en
+     * {@link #ejecutarBucle}; los textos de log conservan la etiqueta y formatos históricos.
+     */
+    private record EspecificacionEscenario(
+            String etiqueta,                     // "E1"/"E2"/"E3" — prefijo de todos los logs
+            int k,
+            int saMin,
+            long taFijoMs,                       // presupuesto Ta del warm-up y (salvo E3) del bucle
+            long taProcesarBloqueMs,             // override para procesarBloque (E3: 0L ⇒ usa props)
+            List<ContextoTemporal> plan,
+            List<ContextoTemporal> warmupPlan,
+            boolean warmupCadenciaTaFija,        // E3: cada bloque de warm-up consume su Ta completo
+            boolean iniciarCorridaAntesDeWarmup, // E1: orden histórico del TRUNCATE por corrida
+            boolean preWarmEsqueletos,           // E2: pre-warm Fase T + cancelación pre-bucle
+            boolean aplicarInyecciones,          // E1: drena inyecciones EN VIVO por bloque
+            boolean demandaEnVivo,               // E1 enVivo: la demanda entra solo por inyección
+            boolean setTiempoProcesamiento,      // E1/E3: taMs por bloque visible en el DTO
+            boolean contarVuelosCancelados,      // E1/E2: el total va a métricas (E3 publica 0)
+            boolean pararPorBacklog,             // E3: SLA vencido en backlog ⇒ colapso definitivo
+            boolean logSaturacionCada50,         // E2
+            boolean logProgresoDebug,            // E1/E2
+            boolean logDiagnosticosAlFinal,      // E1/E2
+            String calibrarQue,                  // aviso Ta>Sa: "K" (E2/E3) o "Ta" (E1)
+            boolean simularTiempoReal,
+            String motorRes,
+            long seed,
+            LocalDateTime fechaInicio) {
+
+        static EspecificacionEscenario paraE2(int k, int saMin, long taFijoMs,
+                                              List<ContextoTemporal> plan, List<ContextoTemporal> warmupPlan,
+                                              boolean simularTiempoReal, String motorRes, long seed,
+                                              LocalDateTime fechaInicio) {
+            return new EspecificacionEscenario("E2", k, saMin, taFijoMs, taFijoMs, plan, warmupPlan,
+                    false,  // warmupCadenciaTaFija
+                    false,  // iniciarCorridaAntesDeWarmup
+                    true,   // preWarmEsqueletos
+                    false,  // aplicarInyecciones
+                    false,  // demandaEnVivo
+                    false,  // setTiempoProcesamiento
+                    true,   // contarVuelosCancelados
+                    false,  // pararPorBacklog
+                    true,   // logSaturacionCada50
+                    true,   // logProgresoDebug
+                    true,   // logDiagnosticosAlFinal
+                    "K", simularTiempoReal, motorRes, seed, fechaInicio);
+        }
+
+        static EspecificacionEscenario paraE1(int k, int saMin, long taFijoMs,
+                                              List<ContextoTemporal> plan, List<ContextoTemporal> warmupPlan,
+                                              boolean enVivo, boolean simularTiempoReal, String motorRes,
+                                              long seed, LocalDateTime fechaInicio) {
+            return new EspecificacionEscenario("E1", k, saMin, taFijoMs, taFijoMs, plan, warmupPlan,
+                    false,  // warmupCadenciaTaFija
+                    true,   // iniciarCorridaAntesDeWarmup
+                    false,  // preWarmEsqueletos
+                    true,   // aplicarInyecciones
+                    enVivo, // demandaEnVivo
+                    true,   // setTiempoProcesamiento
+                    true,   // contarVuelosCancelados
+                    false,  // pararPorBacklog
+                    false,  // logSaturacionCada50
+                    true,   // logProgresoDebug
+                    true,   // logDiagnosticosAlFinal
+                    "Ta", simularTiempoReal, motorRes, seed, fechaInicio);
+        }
+
+        static EspecificacionEscenario paraE3(int k, int saMin, long taFijoMs,
+                                              List<ContextoTemporal> plan, List<ContextoTemporal> warmupPlan,
+                                              boolean simularTiempoReal, String motorRes, long seed,
+                                              LocalDateTime fechaInicio) {
+            return new EspecificacionEscenario("E3", k, saMin, taFijoMs, 0L, plan, warmupPlan,
+                    true,   // warmupCadenciaTaFija
+                    false,  // iniciarCorridaAntesDeWarmup
+                    false,  // preWarmEsqueletos
+                    false,  // aplicarInyecciones
+                    false,  // demandaEnVivo
+                    true,   // setTiempoProcesamiento
+                    false,  // contarVuelosCancelados
+                    true,   // pararPorBacklog
+                    false,  // logSaturacionCada50
+                    false,  // logProgresoDebug
+                    false,  // logDiagnosticosAlFinal
+                    "K", simularTiempoReal, motorRes, seed, fechaInicio);
+        }
+    }
+
+    /** Bucle de bloques unificado de E1/E2/E3 (Tanda 4F-3). Behavior-preserving: mismo orden de
+     *  operaciones, mismos textos de log y mismo consumo del Random que los tres bucles históricos. */
+    private SimulacionResponse ejecutarBucle(EspecificacionEscenario spec, EstadoJob job, long inicio) {
+        final String etiqueta = spec.etiqueta();
+        final List<ContextoTemporal> plan = spec.plan();
+        final int k = spec.k();
+        final int saMin = spec.saMin();
+        final String motorRes = spec.motorRes();
+        final long seed = spec.seed();
+
+        MotorCorrida motorCorrida = prepararMotorCorrida();
+        Grafo graph = motorCorrida.graph();
+        OperadorReparacionVoraz enrutador = motorCorrida.enrutador();
+        SolucionAlns solucionDummy = motorCorrida.solucionDummy();
+
+        int totalBloques = plan.size();
+        int intervaloReporte = Math.max(1, totalBloques / 10);
+
+        int totalVuelosCancelados = 0;
         List<VueloCancelado> vuelosCancelados = job != null ? job.getVuelosCancelados() : new ArrayList<>();
         List<CancelacionVueloRequest> cancelacionesNoAplicadas =
                 job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
+        List<InyeccionEnviosRequest.Item> bufferInyecciones = new ArrayList<>();
 
-        List<BloqueSimulacion> bloques = new ArrayList<>();
+        List<BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
         Map<String, int[]> odStats = new HashMap<>();
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
         long totalMaletas = 0L;
-        boolean collapsoDetectado = false;
-        int bloqueColapso = -1;
-        String detalleColapsoE3 = null;
-        LocalDateTime instanteColapsoE3 = null;
-        String motivoParada = "falta_datos";
-        String nivelAlertaPrevio = AlertaColapso.VERDE;
         EstadisticasTa taStats = new EstadisticasTa();
-        boolean simularTiempoReal = props.getScenario().isSimularTiempoReal3();
         long saMs = saMin * 60_000L;
-        int totalBloques = plan.size();
         GestorBacklog backlog = crearBacklogConPurga(enrutador);
         AcumuladorAuditoria auditAcc = new AcumuladorAuditoria(false);
 
-        AcumuladorAuditoria auditWarmup = ejecutarWarmup(warmupPlan, job, graph, enrutador,
-                solucionDummy, odStats, backlog, motorRes, seed,
-                props.getScenario().getTaSegundos() * 1000L, fechaInicio, true);
+        boolean colapsoDetectado = false;
+        int bloqueColapso = -1;
+        String detalleColapso = null;
+        LocalDateTime instanteColapso = null;
+        String motivoParada = "falta_datos";
+        String nivelAlertaPrevio = AlertaColapso.VERDE;
+
+        if (spec.iniciarCorridaAntesDeWarmup()) {
+            persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
+        }
+
+        AcumuladorAuditoria auditWarmup = ejecutarWarmup(spec.warmupPlan(), job, graph, enrutador,
+                solucionDummy, odStats, backlog, motorRes, seed, spec.taFijoMs(), spec.fechaInicio(),
+                spec.warmupCadenciaTaFija());
         if (job != null) job.estadoInicial = telemetria.construirEstadoInicial(auditWarmup.completos());
 
-        persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
+        if (spec.preWarmEsqueletos() && props.getScenario().isPrewarmSkeletons() && !plan.isEmpty()) {
+            long t0Prewarm = System.currentTimeMillis();
+            List<Envio> demandaVentana = cargadorDatos.getMaletasEnRango(
+                    plan.get(0).scInicio, plan.get(plan.size() - 1).scFin);
+            if (job != null && !cancelacionPedida(job)) job.estado = "calentando";
+            log.info("Pre-warm iniciado: {} envíos en ventana | caché de esqueletos con {} claves precargadas",
+                    demandaVentana.size(), motorCache.cacheEsqueletos().size());
+            int clavesCalentadas = enrutador.precalentarEsqueletos(
+                    mapper.mapearALotes(demandaVentana), PREWARM_ROUTE_CANDIDATES,
+                    () -> cancelacionPedida(job));
+            log.info("Pre-warm esqueletos (N3): {} claves desde {} envíos en {} ms",
+                    clavesCalentadas, demandaVentana.size(), System.currentTimeMillis() - t0Prewarm);
+            if (job != null && !cancelacionPedida(job)) job.estado = "ejecutando";
+            almacenEsqueletos.guardarSiCrecio();
+        }
+
+        if (spec.preWarmEsqueletos() && cancelacionPedida(job)) {
+            log.info("{} cancelado por usuario antes del primer bloque (warm-up/pre-warm)", etiqueta);
+            return respuestaVacia(k, saMin);
+        }
+
+        if (!spec.iniciarCorridaAntesDeWarmup()) {
+            persistencia.iniciarCorrida(job != null ? job.getJobId() : null);
+        }
 
         for (ContextoTemporal ctx : plan) {
             bloqueActual++;
             operacionesEnVivo.aplicarAltasEnCaliente(job, graph, enrutador, ctx.bloqueIdx);
-            operacionesEnVivo.aplicarCancelacionesVuelo(
+            int canceladosBloque = operacionesEnVivo.aplicarCancelacionesVuelo(
                     job != null ? job.getJobId() : null,
                     job != null ? job.getCancelacionesVueloPendientes() : null,
                     graph, enrutador, backlog, vuelosCancelados, cancelacionesNoAplicadas);
+            if (spec.contarVuelosCancelados()) totalVuelosCancelados += canceladosBloque;
+            if (spec.aplicarInyecciones() && job != null) {
+                operacionesEnVivo.aplicarInyeccionesEnvio(job, bufferInyecciones, ctx, backlog, graph);
+            }
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
-            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog, auditAcc, motorRes, rngBloque, 0L, false, false);
+            ResultadoVentana rv = procesarBloque(ctx, graph, enrutador, solucionDummy, odStats, backlog,
+                    auditAcc, motorRes, rngBloque, spec.taProcesarBloqueMs(), false, spec.demandaEnVivo());
 
-            rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
+            if (spec.setTiempoProcesamiento()) rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
             bloques.add(rv.bloque);
             if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
@@ -818,23 +611,12 @@ public class PlanificadorService {
             totalTardadas = totales.tardadas();
             totalMaletas = totales.maletas();
 
-            if (job != null) {
-                job.bloqueActual = bloqueActual;
-                job.totalBloques = totalBloques;
-                job.taPromedioMs = taStats.promedio();
-                job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
-                job.publicarBloque(rv.bloque);
-                job.publicarSerieAlmacenes(rv.serieAlmacenes());
-                job.metricasSnapshot = telemetria.metricasSnapshotDe(totales, taStats.promedio());
-                job.alertaColapso = rv.alerta();
-                persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
-                if ("cancelado".equals(job.estado) || job.canceladoPorUsuario) {
-                    motivoParada = "cancelado_front";
-                    log.info("E3 cancelado por usuario en bloque {}/{}", bloqueActual, totalBloques);
-                    break;
-                }
+            if (publicarBloqueYDetectarCancelacion(job, rv, bloqueActual, totalBloques, taStats, ctx, totales)) {
+                motivoParada = "cancelado_front";
+                log.info("{} cancelado por usuario en bloque {}/{}", etiqueta, bloqueActual, totalBloques);
+                break;
             }
-            nivelAlertaPrevio = avisarColapsoInminente("E3", rv.alerta(), bloqueActual, nivelAlertaPrevio);
+            nivelAlertaPrevio = avisarColapsoInminente(etiqueta, rv.alerta(), bloqueActual, nivelAlertaPrevio);
 
             if (bloqueActual < plan.size()) {
                 double tasa = rv.envios > 0 ? (double) rv.sinRuta / rv.envios : 0.0;
@@ -842,75 +624,90 @@ public class PlanificadorService {
             }
 
             int vencidos = backlog.purgarVencidas(ctx.scFin);
-            boolean backlogDefinitivo = vencidos > 0;
+            boolean backlogDefinitivo = spec.pararPorBacklog() && vencidos > 0;
 
             logBloque(motorRes, bloqueActual, totalBloques,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(),
                     backlogDefinitivo || rv.colapsoAlmacen(), job, auditAcc.sinRutaSize());
 
             if (rv.colapsoAlmacen()) {
-                collapsoDetectado = true;
+                colapsoDetectado = true;
                 bloqueColapso = bloqueActual;
                 motivoParada = "almacen_lleno";
-                detalleColapsoE3 = rv.detalleColapso();
-                instanteColapsoE3 = ctx.scFin;
-                log.warn("E3 ALMACÉN LLENO en bloque {}/{} — envío {}", bloqueActual, totalBloques, rv.detalleColapso());
+                detalleColapso = rv.detalleColapso();
+                instanteColapso = ctx.scFin;
+                if (spec.pararPorBacklog()) {
+                    log.warn("{} ALMACÉN LLENO en bloque {}/{} — envío {}",
+                            etiqueta, bloqueActual, totalBloques, rv.detalleColapso());
+                } else {
+                    log.warn("{} COLAPSO por almacén lleno en bloque {}/{} — {}",
+                            etiqueta, bloqueActual, totalBloques, rv.detalleColapso());
+                }
                 break;
             }
 
             if (backlogDefinitivo) {
-                collapsoDetectado = true;
+                colapsoDetectado = true;
                 bloqueColapso = bloqueActual;
                 motivoParada = "backlog_definitivo";
-                detalleColapsoE3 = vencidos + " envío(s) del backlog con SLA vencido";
-                instanteColapsoE3 = ctx.scFin;
+                detalleColapso = vencidos + " envío(s) del backlog con SLA vencido";
+                instanteColapso = ctx.scFin;
                 break;
             }
 
-            if (simularTiempoReal && bloqueActual < totalBloques) {
-                long dormirMs = saMs - ctx.taMs;
-                if (dormirMs > 0) {
-                    try {
-                        Thread.sleep(dormirMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        log.warn("E3 interrumpido en bloque {}/{}", bloqueActual, totalBloques);
-                        break;
-                    }
-                } else {
-                    log.warn("Ta={}ms > Sa={}ms en bloque {} — calibrar K hacia abajo", ctx.taMs, saMs, bloqueActual);
-                }
+            if (spec.logSaturacionCada50() && (bloqueActual % 50 == 0 || bloqueActual == totalBloques)) {
+                log.info("--- Saturación tras bloque {}/{} ---", bloqueActual, totalBloques);
+                enrutador.logEstadisticasCapacidad();
             }
+
+            if (spec.logProgresoDebug() && log.isDebugEnabled()
+                    && (bloqueActual % intervaloReporte == 0 || bloqueActual == totalBloques)) {
+                log.debug("Progreso {} ({}): {}% — {}/{} | envíos:{} maletas:{} | ok:{} tarde:{} sinRuta:{} | Ta={}ms",
+                        etiqueta, motorRes,
+                        (int) Math.round(bloqueActual * 100.0 / totalBloques),
+                        bloqueActual, totalBloques,
+                        totalEnvios, totalMaletas,
+                        totalCumpleSLA, totalTardadas, totalSinRuta, ctx.taMs);
+            }
+
+            if (dormirSaRestante(etiqueta, spec.calibrarQue(), spec.simularTiempoReal(),
+                    bloqueActual, totalBloques, saMs, ctx.taMs)) break;
         }
 
         bloquesCacheados = bloques;
         long tiempoMs = System.currentTimeMillis() - inicio;
-        log.info("E3 {}: {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms | backlog: pico={} actual={} definitivo={} | {} ms",
-                "backlog_definitivo".equals(motivoParada)
-                        ? "BACKLOG DEFINITIVO en bloque " + bloqueColapso
-                        : ("almacen_lleno".equals(motivoParada)
-                                ? "ALMACÉN LLENO en bloque " + bloqueColapso
-                                : ("cancelado_front".equals(motivoParada)
-                                        ? "CANCELADO por front en bloque " + bloqueActual
-                                        : "fin por falta de datos")),
-                bloqueActual, totalEnvios, totalMaletas,
-                totalCumpleSLA, totalTardadas, totalSinRuta,
-                taStats.min(), taStats.promedio(), taStats.max(),
-                backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo(), tiempoMs);
+        if (spec.pararPorBacklog()) {
+            log.info("{} {}: {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms | backlog: pico={} actual={} definitivo={} | {} ms",
+                    etiqueta,
+                    "backlog_definitivo".equals(motivoParada)
+                            ? "BACKLOG DEFINITIVO en bloque " + bloqueColapso
+                            : ("almacen_lleno".equals(motivoParada)
+                                    ? "ALMACÉN LLENO en bloque " + bloqueColapso
+                                    : ("cancelado_front".equals(motivoParada)
+                                            ? "CANCELADO por front en bloque " + bloqueActual
+                                            : "fin por falta de datos")),
+                    bloqueActual, totalEnvios, totalMaletas,
+                    totalCumpleSLA, totalTardadas, totalSinRuta,
+                    taStats.min(), taStats.promedio(), taStats.max(),
+                    backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo(), tiempoMs);
+        } else {
+            log.info("{} completado en {} ms — {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms (Sa={} ms) | backlog: pico={} actual={} definitivo={}",
+                    etiqueta, tiempoMs, bloqueActual, totalEnvios, totalMaletas,
+                    totalCumpleSLA, totalTardadas, totalSinRuta,
+                    taStats.min(), taStats.promedio(), taStats.max(), saMs,
+                    backlog.picoHistorico(), backlog.tamaño(), backlog.sinRutaDefinitivo());
+            if (colapsoDetectado) {
+                log.warn("{} detenido por COLAPSO de almacén en bloque {}", etiqueta, bloqueColapso);
+            }
+        }
+        if (spec.logDiagnosticosAlFinal()) logDiagnosticos(odStats, graph, enrutador);
 
-        SimulacionResponse res = telemetria.construirRespuestaFront(0, tiempoMs,
-                cargadorDatos.getVuelos(), bloqueActual, plan.get(0).scInicio.toLocalDate());
-        telemetria.llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
-                totalCumpleSLA, totalTardadas, totalMaletas, 0, collapsoDetectado, bloqueColapso,
-                collapsoDetectado ? motivoParada : null, detalleColapsoE3, instanteColapsoE3);
-        telemetria.llenarMetricasTa(res.getMetricas(), taStats, saMs);
-        telemetria.llenarMetricasBacklog(res.getMetricas(), backlog);
-        res.setK(k);
-        res.setSaMinutos(saMin);
-
-        if (job != null) job.resultado = res;
-        finalizarAuditoriaDiferida(job, auditAcc);
-        return res;
+        return construirRespuestaFinal(job, auditAcc, backlog, taStats, tiempoMs, bloqueActual,
+                plan.get(0).scInicio.toLocalDate(), k, saMin, saMs,
+                totalEnvios, totalEnrutadas, totalSinRuta, totalCumpleSLA, totalTardadas, totalMaletas,
+                spec.contarVuelosCancelados() ? totalVuelosCancelados : 0,
+                colapsoDetectado, bloqueColapso,
+                colapsoDetectado ? motivoParada : null, detalleColapso, instanteColapso);
     }
 
     private void finalizarAuditoriaDiferida(EstadoJob job, AcumuladorAuditoria auditAcc) {
@@ -1390,6 +1187,106 @@ public class PlanificadorService {
                 b.limpiarRuta();
             }
         });
+    }
+
+    /** Motor recién construido para una corrida: grafo cacheado + enrutador con los tiempos operativos. */
+    private record MotorCorrida(Grafo graph, OperadorReparacionVoraz enrutador, SolucionAlns solucionDummy) {}
+
+    /**
+     * Prepara el motor al iniciar una corrida (idéntico en E1/E2/E3): resincroniza capacidades al
+     * baseline en frío, obtiene el grafo cacheado, crea un {@link OperadorReparacionVoraz} fresco y le
+     * configura storage-aware + tiempos operativos (escala/recojo). Fuente única de esa configuración.
+     */
+    private MotorCorrida prepararMotorCorrida() {
+        resetearCapacidadesAlIniciarCorrida();
+        Grafo graph = motorCache.obtenerGrafo(
+                () -> mapper.mapearAGrafo(cargadorDatos.getAeropuertos(), cargadorDatos.getVuelos()));
+        OperadorReparacionVoraz enrutador = new OperadorReparacionVoraz(graph, motorCache.cacheEsqueletos());
+        enrutador.configurarStorageAware(props.getStorageAware().getUmbralHubPico(),
+                props.getStorageAware().getPrecioHubExponente());   // Fase P
+        enrutador.configurarTiempoMinEscala(props.getOperativo().getTiempoMinEscalaMinutos());
+        enrutador.configurarTiempoRecojoDestino(props.getOperativo().getTiempoRecojoDestinoMinutos());
+        return new MotorCorrida(graph, enrutador, new SolucionAlns(Collections.emptyList()));
+    }
+
+    /** Respuesta vacía estándar cuando el plan no tiene bloques (o la corrida se canceló antes de empezar). */
+    private SimulacionResponse respuestaVacia(int k, int saMin) {
+        bloquesCacheados = new ArrayList<>();
+        SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
+        r.setK(k);
+        r.setSaMinutos(saMin);
+        return r;
+    }
+
+    /**
+     * Publica el bloque recién procesado al job (progreso, ventana, serie de almacenes, métricas,
+     * alerta) y lo persiste a BD. Devuelve true si el usuario pidió cancelar la corrida
+     * (el bucle llamador debe loguear su mensaje y salir).
+     */
+    private boolean publicarBloqueYDetectarCancelacion(EstadoJob job, ResultadoVentana rv,
+                                                      int bloqueActual, int totalBloques,
+                                                      EstadisticasTa taStats, ContextoTemporal ctx,
+                                                      TotalesUnicos totales) {
+        if (job == null) return false;
+        job.bloqueActual = bloqueActual;
+        job.totalBloques = totalBloques;
+        job.taPromedioMs = taStats.promedio();
+        job.registrarVentanaSimulada(ctx.scInicio, ctx.scFin);
+        job.publicarBloque(rv.bloque);
+        job.publicarSerieAlmacenes(rv.serieAlmacenes());
+        job.metricasSnapshot = telemetria.metricasSnapshotDe(totales, taStats.promedio());
+        job.alertaColapso = rv.alerta();
+        persistencia.persistirBloque(job.getJobId(), rv.finalBatches());
+        return "cancelado".equals(job.estado) || job.canceladoPorUsuario;
+    }
+
+    /**
+     * Simulación a ritmo de reloj: duerme lo que resta de Sa tras el Ta del bloque.
+     * Devuelve true si el hilo fue interrumpido (el bucle llamador debe salir).
+     * El sleep/interrupt debe quedar aquí en posición idéntica a la original: la cancelación
+     * de jobs depende de esta interrupción.
+     */
+    private boolean dormirSaRestante(String etiqueta, String calibrar, boolean simularTiempoReal,
+                                     int bloqueActual, int totalBloques, long saMs, long taMs) {
+        if (!simularTiempoReal || bloqueActual >= totalBloques) return false;
+        long dormirMs = saMs - taMs;
+        if (dormirMs > 0) {
+            try {
+                Thread.sleep(dormirMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("{} interrumpido en bloque {}/{}", etiqueta, bloqueActual, totalBloques);
+                return true;
+            }
+        } else {
+            log.warn("Ta={}ms > Sa={}ms en bloque {} — calibrar {} hacia abajo", taMs, saMs, bloqueActual, calibrar);
+        }
+        return false;
+    }
+
+    /** Tail común de los tres escenarios: respuesta al front + métricas + auditoría diferida. */
+    private SimulacionResponse construirRespuestaFinal(EstadoJob job, AcumuladorAuditoria auditAcc,
+                                                       GestorBacklog backlog, EstadisticasTa taStats,
+                                                       long tiempoMs, int bloqueActual, LocalDate fechaBase,
+                                                       int k, int saMin, long saMs,
+                                                       int totalEnvios, int totalEnrutadas, int totalSinRuta,
+                                                       int totalCumpleSLA, int totalTardadas, long totalMaletas,
+                                                       int totalVuelosCancelados,
+                                                       boolean colapsoDetectado, int bloqueColapso,
+                                                       String motivoColapso, String detalleColapso,
+                                                       LocalDateTime instanteColapso) {
+        SimulacionResponse res = telemetria.construirRespuestaFront(0, tiempoMs,
+                cargadorDatos.getVuelos(), bloqueActual, fechaBase);
+        telemetria.llenarMetricas(res.getMetricas(), totalEnvios, totalEnrutadas, totalSinRuta,
+                totalCumpleSLA, totalTardadas, totalMaletas, totalVuelosCancelados,
+                colapsoDetectado, bloqueColapso, motivoColapso, detalleColapso, instanteColapso);
+        telemetria.llenarMetricasTa(res.getMetricas(), taStats, saMs);
+        telemetria.llenarMetricasBacklog(res.getMetricas(), backlog);
+        res.setK(k);
+        res.setSaMinutos(saMin);
+        if (job != null) job.resultado = res;
+        finalizarAuditoriaDiferida(job, auditAcc);
+        return res;
     }
 
     private static boolean cancelacionPedida(EstadoJob job) {
