@@ -59,6 +59,13 @@ planificador:
 
     max-bloques-buffer: 35
 
+    # Presupuesto REAL del buffer de bloques: tope de asignaciones retenidas (0 = solo manda
+    # max-bloques-buffer). Al final del dataset un bloque de 12 h trae ~11.800 asignaciones, así que
+    # 35 bloques podían retener ~400k. max-bloques-buffer sigue como tope secundario y siempre queda
+    # al menos el último bloque publicado (el contrato de /bloques y /asignaciones no cambia:
+    # devuelven lista vacía + primerBloqueDisponible cuando el `desde` pedido ya fue purgado).
+    max-asignaciones-buffer: 100000
+
     max-jobs-en-memoria: 3
 
     k-default-1: 1
@@ -108,7 +115,6 @@ planificador:
 
   consulta:
     max-filas-pagina: 5000      # tope de filas por página (limit por defecto) en /vuelos/carga y /almacenes/ocupacion
-    demanda-max-dias: 31        # span máximo (días) de /demanda/resumen (acota el escaneo de BD)
 
   operativo:
     tiempo-min-escala-minutos: 10
@@ -116,6 +122,12 @@ planificador:
 
   cache:
     skeleton-file: data/skeleton-cache.bin
+
+  memoria:
+    # Contención de RAM en corridas largas: la ocupación global (vuelo-día y slots de almacén)
+    # crece sin tope aunque nada vuelva a consultarla (horizonte de ruta 3 días, SLA máx 48 h).
+    purga-ocupacion-cada-bloques: 20   # 0 = nunca purgar
+    purga-ocupacion-retencion-dias: 7  # días conservados detrás del cursor; 0 = nunca purgar
 
   fragmentacion:
     habilitada: true                 # false = comportamiento actual exacto

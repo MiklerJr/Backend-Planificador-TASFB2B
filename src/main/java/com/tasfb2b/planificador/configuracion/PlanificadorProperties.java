@@ -21,6 +21,16 @@ public class PlanificadorProperties {
     private Cache        cache        = new Cache();
     private Operativo    operativo    = new Operativo();
     private Fragmentacion fragmentacion = new Fragmentacion();
+    private Memoria      memoria      = new Memoria();
+
+    /** Contención de RAM en corridas largas (E3 puede acumular años simulados). */
+    @Data
+    public static class Memoria {
+        /** Cada cuántos bloques se purga la ocupación global vencida (0 = nunca purgar). */
+        private int purgaOcupacionCadaBloques = 20;
+        /** Días de ocupación que se conservan detrás del cursor (0 = nunca purgar). */
+        private int purgaOcupacionRetencionDias = 7;
+    }
 
     @Data
     public static class Fragmentacion {
@@ -56,6 +66,9 @@ public class PlanificadorProperties {
         private int maxVentanasColapso = 0;
 
         private int maxBloquesBuffer = 60;
+
+        /** Tope de asignaciones retenidas en el buffer del job (0 = solo manda maxBloquesBuffer). */
+        private int maxAsignacionesBuffer = 0;
 
         private int maxJobsEnMemoria = 3;
 
@@ -110,7 +123,6 @@ public class PlanificadorProperties {
     @Data
     public static class Consulta {
         private int maxFilasPagina = 5000;
-        private int demandaMaxDias = 31;
     }
 
     @Data

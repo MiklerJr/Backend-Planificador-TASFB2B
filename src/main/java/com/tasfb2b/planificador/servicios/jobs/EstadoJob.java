@@ -106,6 +106,17 @@ public class EstadoJob {
 
     private volatile int maxBloquesConAsignaciones = 500;
 
+    /**
+     * Tope de asignaciones retenidas en el buffer (0 = sin tope). Es el presupuesto que de verdad
+     * manda sobre la RAM: al final del dataset un bloque de 12 h trae ~11.800 asignaciones, así que
+     * contar bloques dice poco. {@link #maxBloquesConAsignaciones} sigue vigente como tope
+     * secundario (nunca se retienen más bloques que ese número) y siempre queda al menos el último.
+     */
+    private volatile int maxAsignacionesBuffer = 0;
+
+    /** Asignaciones vivas en {@link #bloquesParciales} (mantenido por deltas al publicar/purgar). */
+    private int asignacionesRetenidas = 0;
+
     private final Map<String, VueloUsadoAcc> vuelosUsadosAcum = new LinkedHashMap<>();
 
     public volatile Metricas metricasSnapshot;
@@ -113,6 +124,27 @@ public class EstadoJob {
     public void setMaxBloquesConAsignaciones(int n) { if (n > 0) this.maxBloquesConAsignaciones = n; }
 
     public int getMaxBloquesConAsignaciones() { return maxBloquesConAsignaciones; }
+
+    public void setMaxAsignacionesBuffer(int n) { if (n >= 0) this.maxAsignacionesBuffer = n; }
+
+    public int getMaxAsignacionesBuffer() { return maxAsignacionesBuffer; }
+
+    public int asignacionesRetenidas() {
+        synchronized (bloquesLock) { return asignacionesRetenidas; }
+    }
+
+    /**
+     * ¿El buffer excede su presupuesto y hay que soltar el bloque más viejo? Manda el tope de
+     * bloques; si ese se respeta, manda el de asignaciones, que nunca purga el último bloque.
+     */
+    private static boolean debePurgarBloque(int bloques, int asignaciones, int maxBloques, int maxAsignaciones) {
+        if (bloques > maxBloques) return true;
+        return maxAsignaciones > 0 && asignaciones > maxAsignaciones && bloques > 1;
+    }
+
+    private static int cuentaAsignaciones(BloqueSimulacion bloque) {
+        return bloque == null || bloque.getAsignaciones() == null ? 0 : bloque.getAsignaciones().size();
+    }
 
     public EstadoJob(String jobId, String escenario, int k) {
         this.jobId     = jobId;
@@ -202,8 +234,10 @@ public class EstadoJob {
         indexarRutasSinteticas(bloque);
         synchronized (bloquesLock) {
             bloquesParciales.add(bloque);
-            while (bloquesParciales.size() > maxBloquesConAsignaciones) {
-                bloquesParciales.remove(0);
+            asignacionesRetenidas += cuentaAsignaciones(bloque);
+            while (debePurgarBloque(bloquesParciales.size(), asignacionesRetenidas,
+                    maxBloquesConAsignaciones, maxAsignacionesBuffer)) {
+                asignacionesRetenidas -= cuentaAsignaciones(bloquesParciales.remove(0));
                 baseBloquesPurgados++;
             }
         }
@@ -211,7 +245,7 @@ public class EstadoJob {
     }
 
     private void purgarVuelosUsadosViejos() {
-        int corte = bloquesPublicados() - maxBloquesConAsignaciones;
+        int corte = primerBloqueDisponible();
         if (corte <= 0) return;
         synchronized (vuelosUsadosAcum) {
             Iterator<VueloUsadoAcc> it = vuelosUsadosAcum.values().iterator();
@@ -376,7 +410,7 @@ public class EstadoJob {
     }
 
     public void liberarPesados() {
-        synchronized (bloquesLock) { bloquesParciales.clear(); }
+        synchronized (bloquesLock) { bloquesParciales.clear(); asignacionesRetenidas = 0; }
         synchronized (vuelosUsadosAcum) { vuelosUsadosAcum.clear(); }
         synchronized (seriesLock) { seriesAlmacenes.clear(); }
         rutasSinteticas.clear();

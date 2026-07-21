@@ -227,32 +227,6 @@ public class CargadorDatos {
         return maletas;
     }
 
-    public List<DemandaAgrupada> agregarDemandaEnRango(LocalDateTime desdeUtc, LocalDateTime hastaUtc) {
-        if (desdeUtc == null || hastaUtc == null || !desdeUtc.isBefore(hastaUtc)) {
-            return Collections.emptyList();
-        }
-        LocalDateTime desdeLocal = desdeUtc.minusHours(maxOffsetAbsHoras);
-        LocalDateTime hastaLocal = hastaUtc.plusHours(maxOffsetAbsHoras);
-        final String readyExpr = "(e.fecha_hora_registro - make_interval(hours => a.huso_horario))";
-
-        String sql = "SELECT e.icao_origen AS origen, e.icao_destino AS destino, " +
-                     "COUNT(*) AS envios, COALESCE(SUM(e.cantidad_maletas), 0) AS maletas " +
-                     "FROM ENVIO e " +
-                     "JOIN AEROPUERTO a ON a.icao = e.icao_origen " +
-                     "WHERE e.fecha_hora_registro >= ? AND e.fecha_hora_registro < ? " +
-                     "AND e.icao_origen <> e.icao_destino " +
-                     "AND " + readyExpr + " >= ? AND " + readyExpr + " < ? " +
-                     "GROUP BY e.icao_origen, e.icao_destino";
-
-        return jdbcTemplate.query(sql, (rs, rowNum) -> new DemandaAgrupada(
-                        rs.getString("origen"), rs.getString("destino"),
-                        rs.getLong("envios"), rs.getLong("maletas")),
-                Timestamp.valueOf(desdeLocal), Timestamp.valueOf(hastaLocal),
-                Timestamp.valueOf(desdeUtc), Timestamp.valueOf(hastaUtc));
-    }
-
-    public record DemandaAgrupada(String origen, String destino, long envios, long maletas) { }
-
     static boolean registroEnVentanaUtc(LocalDateTime registroLocal, int offsetHoras,
                                         LocalDateTime desdeUtc, LocalDateTime hastaUtc) {
         LocalDateTime registroUtc = registroLocal.minusHours(offsetHoras);

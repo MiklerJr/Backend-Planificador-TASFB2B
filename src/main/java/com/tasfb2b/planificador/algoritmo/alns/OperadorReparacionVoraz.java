@@ -42,6 +42,9 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private final Set<Long> vueloDiasCancelados = ConcurrentHashMap.newKeySet();
 
+    /** Pico absoluto de ocupación por aeropuerto entre los slots ya purgados (ver {@link #purgarOcupacionAnteriorA}). */
+    private int[] picoAlmacenPurgado;
+
     private final ConcurrentHashMap<Long, Integer> ocupacionOrigenBacklog = new ConcurrentHashMap<>();
     private long relojUtcMin = Long.MIN_VALUE;
     private final Set<String> origenAdmitidos = new HashSet<>();
@@ -83,6 +86,50 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         adyacenciaPorIndice = adj;
 
         this.hubPorIndice = new boolean[conteoNodos];
+        this.picoAlmacenPurgado = new int[conteoNodos];
+    }
+
+    /**
+     * Purga la ocupación global de los días ya vencidos: elimina de {@code ocupacionVuelo} y
+     * {@code ocupacionAeropuerto} las claves cuyo día (embebido en la clave por
+     * {@link CodificadorClaveVuelo}) es anterior a {@code diaCorte}. En una corrida larga esos
+     * mapas crecen sin tope (~2.866 vuelo-días + ~720 slots de almacén por día simulado) aunque
+     * nada vuelva a consultarlos: el horizonte de ruta es de 3 días, el SLA máximo 48 h y el
+     * backlog purga por SLA, así que con {@code diaCorte} varios días detrás del cursor ninguna
+     * consulta del motor puede alcanzarlos.
+     *
+     * <p>Antes de borrar un slot de almacén conserva su pico absoluto por aeropuerto, único dato
+     * histórico que sigue leyéndose ({@link #reclasificarHubsPorUtilizacion}), de modo que la
+     * clasificación de hubs —y por tanto el ruteo— es idéntica a la de un mapa sin purgar.
+     *
+     * @return número de claves eliminadas entre ambos mapas.
+     */
+    public int purgarOcupacionAnteriorA(long diaCorte) {
+        int purgadas = 0;
+        for (Iterator<Map.Entry<Long, Integer>> it = ocupacionVuelo.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Long, Integer> entry = it.next();
+            long dia = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
+            if (dia < diaCorte) { it.remove(); purgadas++; }
+        }
+        long slotsPorDia = MIN_DIA / SLOT_ALMACEN_MIN;
+        for (Iterator<Map.Entry<Long, Integer>> it = ocupacionAeropuerto.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Long, Integer> entry = it.next();
+            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
+            if (slot / slotsPorDia >= diaCorte) continue;
+            int nodeIdx = (int) (entry.getKey() >> BITS_DIA);
+            if (nodeIdx >= 0 && nodeIdx < picoAlmacenPurgado.length
+                    && entry.getValue() > picoAlmacenPurgado[nodeIdx]) {
+                picoAlmacenPurgado[nodeIdx] = entry.getValue();
+            }
+            it.remove();
+            purgadas++;
+        }
+        return purgadas;
+    }
+
+    /** Tamaño actual de los mapas de ocupación global: {@code [vuelo-días, slots de almacén]}. */
+    public int[] tamañoOcupacionGlobal() {
+        return new int[] { ocupacionVuelo.size(), ocupacionAeropuerto.size() };
     }
 
     public boolean incorporarArista(Arista e) {
@@ -107,6 +154,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         adyacenciaPorIndice = Arrays.copyOf(adyacenciaPorIndice, idx + 1);
         adyacenciaPorIndice[idx] = new ArrayList<>();
         hubPorIndice = Arrays.copyOf(hubPorIndice, idx + 1);
+        picoAlmacenPurgado = Arrays.copyOf(picoAlmacenPurgado, idx + 1);
         conteoNodos = idx + 1;
         return idx;
     }
@@ -136,7 +184,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.hubPorIndice = flags;
     }
 
-    private boolean esHub(int nodeIdx) {
+    /** Package-private: además del ruteo, lo consultan los tests de clasificación de hubs. */
+    boolean esHub(int nodeIdx) {
         return nodeIdx >= 0 && nodeIdx < hubPorIndice.length && hubPorIndice[nodeIdx];
     }
 
@@ -149,6 +198,16 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             Nodo nodo = code != null ? grafo.nodos.get(code) : null;
             if (nodo == null || nodo.capacidad <= 0) continue;
             double util = entry.getValue() / (double) nodo.capacidad;
+            if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
+        }
+        // Los slots ya purgados (P2) siguen contando: su pico absoluto sobrevive a la purga, así
+        // que el máximo histórico por aeropuerto es idéntico al de un mapa que nunca se purgara.
+        for (int nodeIdx = 0; nodeIdx < conteoNodos && nodeIdx < picoAlmacenPurgado.length; nodeIdx++) {
+            if (picoAlmacenPurgado[nodeIdx] <= 0) continue;
+            String code = nodoPorIndice[nodeIdx];
+            Nodo nodo = code != null ? grafo.nodos.get(code) : null;
+            if (nodo == null || nodo.capacidad <= 0) continue;
+            double util = picoAlmacenPurgado[nodeIdx] / (double) nodo.capacidad;
             if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
         }
 

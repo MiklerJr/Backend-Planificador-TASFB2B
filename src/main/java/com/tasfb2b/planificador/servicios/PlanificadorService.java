@@ -61,7 +61,6 @@ public class PlanificadorService {
 
     private static final int SUFIJO_ROUTE_CANDIDATES = 5;
 
-    private volatile List<BloqueSimulacion> bloquesCacheados = null;
 
     // CONSTRUCTOR UNIFICADO
     @org.springframework.beans.factory.annotation.Autowired
@@ -122,6 +121,7 @@ public class PlanificadorService {
 
         EstadoJob job = jobs.crear("2", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());
+        job.setMaxAsignacionesBuffer(props.getScenario().getMaxAsignacionesBuffer());
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = params.getFechaInicio();
@@ -158,6 +158,7 @@ public class PlanificadorService {
         long seedRes = resolverSeed(seed);
         EstadoJob job = jobs.crear("3", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());
+        job.setMaxAsignacionesBuffer(props.getScenario().getMaxAsignacionesBuffer());
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = fechaInicio;
@@ -188,6 +189,7 @@ public class PlanificadorService {
         int k = props.getScenario().getKDefault1();
         EstadoJob job = jobs.crear("1", k);
         job.setMaxBloquesConAsignaciones(props.getScenario().getMaxBloquesBuffer());   // anti-OOM (Fase 1)
+        job.setMaxAsignacionesBuffer(props.getScenario().getMaxAsignacionesBuffer());
         job.algoritmo = motorRes;
         job.seed = seedRes;
         job.fechaInicio = enVivo ? null : fechaInicio;
@@ -309,10 +311,6 @@ public class PlanificadorService {
         return jobs.posicionEnCola(jobId);
     }
 
-                public SimulacionResponse ejecutarALNS(int k) {
-        return ejecutarALNS(k, null, MOTOR_ALNS, resolverSeed(null), null);
-    }
-
     public SimulacionResponse ejecutarALNS(int k, EstadoJob job, String motor,
                                             long seed, LocalDateTime fechaInicio) {
         EjecucionParametros p = new EjecucionParametros();
@@ -358,11 +356,6 @@ public class PlanificadorService {
                 props.getScenario().isSimularTiempoReal2(), motorRes, seed, fechaInicio), job, inicio);
     }
 
-    public BloqueSimulacion getBloque(int index) {
-        if (bloquesCacheados == null || index < 0 || index >= bloquesCacheados.size()) return null;
-        return bloquesCacheados.get(index);
-    }
-
     public SimulacionResponse ejecutarEscenario1(EstadoJob job, String motor, long seed,
                                                  LocalDateTime fechaInicio, boolean enVivo) {
         String motorRes = resolverMotor(motor);
@@ -387,10 +380,6 @@ public class PlanificadorService {
         return ejecutarBucle(EspecificacionEscenario.paraE1(k, saMin, taFijoMs, plan, warmupPlan,
                 enVivo, enVivo || props.getScenario().isSimularTiempoReal1(), motorRes, seed, fechaInicio),
                 job, inicio);
-    }
-
-    public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso) {
-        return ejecutarHastaColapso(k, umbralColapso, null, MOTOR_ALNS, resolverSeed(null), null);
     }
 
     public SimulacionResponse ejecutarHastaColapso(int k, double umbralColapso,
@@ -531,7 +520,6 @@ public class PlanificadorService {
                 job != null ? job.getCancelacionesNoAplicadas() : new ArrayList<>();
         List<InyeccionEnviosRequest.Item> bufferInyecciones = new ArrayList<>();
 
-        List<BloqueSimulacion> bloques = new ArrayList<>(totalBloques);
         Map<String, int[]> odStats = new HashMap<>();
         int totalEnvios = 0, totalEnrutadas = 0, totalSinRuta = 0,
                 totalCumpleSLA = 0, totalTardadas = 0, bloqueActual = 0;
@@ -599,8 +587,6 @@ public class PlanificadorService {
 
             if (spec.setTiempoProcesamiento()) rv.bloque.setTiempoProcesamientoMs(ctx.taMs);
 
-            bloques.add(rv.bloque);
-            if (job != null && bloques.size() > job.getMaxBloquesConAsignaciones()) bloques.remove(0);
             taStats.acumular(ctx.taMs);
 
             TotalesUnicos totales = auditAcc.totalesUnicos();
@@ -625,10 +611,11 @@ public class PlanificadorService {
 
             int vencidos = backlog.purgarVencidas(ctx.scFin);
             boolean backlogDefinitivo = spec.pararPorBacklog() && vencidos > 0;
+            purgarOcupacionVencida(enrutador, ctx, bloqueActual);
 
             logBloque(motorRes, bloqueActual, totalBloques,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(),
-                    backlogDefinitivo || rv.colapsoAlmacen(), job, auditAcc.sinRutaSize());
+                    backlogDefinitivo || rv.colapsoAlmacen(), job, auditAcc.sinRutaSize(), enrutador);
 
             if (rv.colapsoAlmacen()) {
                 colapsoDetectado = true;
@@ -674,7 +661,6 @@ public class PlanificadorService {
                     bloqueActual, totalBloques, saMs, ctx.taMs)) break;
         }
 
-        bloquesCacheados = bloques;
         long tiempoMs = System.currentTimeMillis() - inicio;
         if (spec.pararPorBacklog()) {
             log.info("{} {}: {} bloques | {} envíos | {} maletas | ok:{} tarde:{} sinRuta:{} | Ta(min/avg/max)={}/{}/{} ms | backlog: pico={} actual={} definitivo={} | {} ms",
@@ -1211,7 +1197,6 @@ public class PlanificadorService {
 
     /** Respuesta vacía estándar cuando el plan no tiene bloques (o la corrida se canceló antes de empezar). */
     private SimulacionResponse respuestaVacia(int k, int saMin) {
-        bloquesCacheados = new ArrayList<>();
         SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
         r.setK(k);
         r.setSaMinutos(saMin);
@@ -1302,24 +1287,44 @@ public class PlanificadorService {
 
                         private void logBloque(String motor, int bloque, int total, int envios, int onTime,
                            int tardadas, int sinRuta, long taMs, int backlog, boolean colapso,
-                           EstadoJob job, int sinRutaRam) {
+                           EstadoJob job, int sinRutaRam, OperadorReparacionVoraz enrutador) {
         log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
                 bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
                 colapso ? " | COLAPSO" : "");
-        if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam);
+        if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam, enrutador);
     }
 
+    /**
+     * Purga periódica de la ocupación global vencida del enrutador (contención de RAM en corridas
+     * largas). El corte va {@code purga-ocupacion-retencion-dias} detrás del cursor de la
+     * simulación, muy por detrás del horizonte que el motor puede consultar.
+     */
+    private void purgarOcupacionVencida(OperadorReparacionVoraz enrutador, ContextoTemporal ctx, int bloqueActual) {
+        PlanificadorProperties.Memoria mem = props.getMemoria();
+        int cada = mem.getPurgaOcupacionCadaBloques();
+        int dias = mem.getPurgaOcupacionRetencionDias();
+        if (cada <= 0 || dias <= 0 || bloqueActual % cada != 0) return;
+        long diaCorte = ctx.scFin.toLocalDate().toEpochDay() - dias;
+        int purgadas = enrutador.purgarOcupacionAnteriorA(diaCorte);
+        if (purgadas > 0 && log.isDebugEnabled()) {
+            int[] tam = enrutador.tamañoOcupacionGlobal();
+            log.debug("Purga de ocupación en bloque {}: {} claves anteriores al día {} | quedan vuelo-días={} slots={}",
+                    bloqueActual, purgadas, diaCorte, tam[0], tam[1]);
+        }
+    }
 
-    private void logHuellaMemoria(EstadoJob job, int sinRutaRam) {
+    private void logHuellaMemoria(EstadoJob job, int sinRutaRam, OperadorReparacionVoraz enrutador) {
         Runtime rt = Runtime.getRuntime();
         long usadoMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
         long comprometidoMb = rt.totalMemory() / (1024 * 1024);
         long maxMb = rt.maxMemory() / (1024 * 1024);
+        int[] tamOcupacion = enrutador != null ? enrutador.tamañoOcupacionGlobal() : new int[] {0, 0};
         log.info("MEM job={} | heap usado={}MB comprometido={}MB max={}MB ({}%) | bloques={} | "
-                        + "vuelosUsadosAcum={} | sinRutaRam={} | jobs={}",
+                        + "vuelosUsadosAcum={} | sinRutaRam={} | ocupVuelo={} | ocupAlmacen={} | jobs={}",
                 job.getJobId(), usadoMb, comprometidoMb, maxMb,
                 maxMb > 0 ? (usadoMb * 100 / maxMb) : 0,
-                job.bloquesPublicados(), job.vuelosUsadosAcumSize(), sinRutaRam, jobs.cantidadJobs());
+                job.bloquesPublicados(), job.vuelosUsadosAcumSize(), sinRutaRam,
+                tamOcupacion[0], tamOcupacion[1], jobs.cantidadJobs());
     }
 
     private record ResultadoVentana(

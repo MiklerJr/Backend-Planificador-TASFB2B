@@ -70,13 +70,6 @@ public class ConsultaJobsController {
         return ResponseEntity.ok(body);
     }
 
-    @GetMapping("/jobs/{jobId}/alerta-colapso")
-    public ResponseEntity<AlertaColapso> alertaColapsoJob(@PathVariable String jobId) {
-        EstadoJob job = service.getJob(jobId);
-        if (job == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(job.alertaColapso != null ? job.alertaColapso : AlertaColapso.verde());
-    }
-
     @GetMapping("/jobs/{jobId}/dashboard")
     public ResponseEntity<TableroResponse> tableroJob(@PathVariable String jobId) {
         TableroResponse body = jobQuery.getTableroJob(jobId);

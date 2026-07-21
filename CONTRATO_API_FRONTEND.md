@@ -20,7 +20,7 @@ Generado a partir de los controladores del backend (`EscenarioController`, `Cons
 > - **`BloqueSimulacion.horaInicio/horaFin`** (y sus alias `horaInicioUtc/horaFinUtc`) son ahora
 >   los **límites UTC de la ventana** y los bloques son **CONTIGUOS**: `horaFin[N] == horaInicio[N+1]`,
 >   sin solapes ni huecos. Ya se pueden usar directamente como eje de la animación.
-> - **`fechaInicio`** (E1/E2/E3) y **`desde`/`hasta`** de `/demanda/resumen` deben enviarse **en UTC**.
+> - **`fechaInicio`** (E1/E2/E3) debe enviarse **en UTC**.
 > - **`primeraVentana`/`ultimaVentana`** de `/dataset/info` se exponen en UTC (la primera pasa de
 >   `2026-01-02T00:02` local a ≈ `2026-01-01T19:52` UTC).
 - **Patrón de uso:** las corridas largas son **asíncronas** (devuelven un `jobId`). El front
@@ -32,8 +32,7 @@ Generado a partir de los controladores del backend (`EscenarioController`, `Cons
 > `hayMas:true`, volver a pedir con `desde=proximoDesde` (para refrescar, reiniciar en `desde=0`).
 > `total` pasa a ser "filas en esta página". `limit` se clampea al tope del servidor (5000). Si el front
 > no se actualiza, una llamada simple seguirá funcionando pero **solo verá la primera página**.
-> Además, `/jobs/{id}/indicadores` ahora es un **snapshot reciente acotado** (no histórico) y
-> `/demanda/resumen` **acota el rango** a un span máximo (reporta el rango efectivo en `desde`/`hasta`).
+> Además, `/jobs/{id}/indicadores` ahora es un **snapshot reciente acotado** (no histórico).
 
 ### Estados de un job (`estado`)
 `encolado` → `calentando` (opcional) → `ejecutando` → **`completado`** | `cancelado` | `error`.
@@ -63,7 +62,6 @@ Generado a partir de los controladores del backend (`EscenarioController`, `Cons
 2. Polling cada ~2–5 s:
    - `GET /jobs/{jobId}/estado` → `estado`, `progreso`, `alertaColapso`.
    - `GET /jobs/{jobId}/bloques?desde=N` → bloques nuevos para dibujar (incremental).
-   - `GET /jobs/{jobId}/alerta-colapso` → alerta de colapso inminente (VERDE/AMBAR/ROJO).
 3. Cuando `estado == "completado"` (o `bloques.terminado == true`):
    - `GET /jobs/{jobId}/resultado` → `SimulacionResponse` final con métricas.
    - Bajo demanda: `GET /jobs/{jobId}/auditoria.zip` (se **genera al pedirlo**, opcionalmente por
@@ -303,11 +301,10 @@ dataset (**solo** cuando `enVivo=false`). La respuesta incluye `"enVivo"`.
 > visible respeta Sa con normalidad. Los aviones que quedan en el aire al llegar a
 > `fechaInicio` se consultan en `GET /jobs/{id}/estado-inicial` (ver §5).
 
-### Síncronos (bloquean hasta terminar — solo para pruebas / corridas cortas)
-- `GET /ejecutar?algoritmo=alns&k=14` → `SimulacionResponse` (solo `alns`).
-- `GET /ejecutar-colapso?k=144&umbralColapso=0.20` → `SimulacionResponse`.
-- `GET /bloque/{index}` → `BloqueSimulacion` del último `/ejecutar` síncrono (o `404` si el índice
-  no existe). Legacy: en el flujo asíncrono se usa `GET /jobs/{jobId}/bloques?desde=N` (§5).
+> **Eliminados (2026-07-21)**: los tres endpoints síncronos legacy `GET /ejecutar`,
+> `GET /ejecutar-colapso` y `GET /bloque/{index}` ya no existen. Ningún cliente los usaba y el
+> buffer que alimentaba `/bloque/{index}` duplicaba en RAM los bloques del job. Todo el flujo pasa
+> por los jobs asíncronos: `POST /escenarioN/iniciar` + `GET /jobs/{jobId}/bloques?desde=N` (§5).
 
 ### E1 — Operación día a día en vivo (`enVivo=true`)
 
@@ -376,6 +373,20 @@ Un solo campo de formulario `archivos` (**1..N**), cada TXT con el formato del d
 > Modificar el horario de un vuelo **ya existente** es otra cosa (ver `PUT /configuracion/vuelos/{id}/horario`
 > arriba): eso es **EN FRÍO** (antes de iniciar) y **renombra** el id; `cargar-vuelos-txt` **agrega** vuelos
 > nuevos **en caliente** sin tocar la caché de esqueletos.
+
+#### `POST /configuracion/vuelos/cargar-txt` — carga TXT de planes de vuelo **en frío** (`multipart/form-data`)
+Variante **sin job en curso** de la carga anterior: mismo campo `archivos` (**1..N**) y mismo formato
+`ORIG-DEST-HH:MM-HH:MM-CAPACIDAD` (**horas LOCALES**), con el mismo parser tolerante (comentarios,
+cabecera y líneas inválidas se descartan por línea con su motivo).
+
+- Se aplica **de inmediato** (no se encola): los vuelos entran al dataset de la corrida siguiente en vez
+  de esperar a la frontera de bloque. Úsalo **antes de iniciar** el job.
+- **200** → `{ "aplicados": N, "descartados": M, "detalleDescartados": [ { "archivo", "linea", "contenido", "motivo" } ] }`.
+- **409** hay una simulación en curso (`{ "aplicados": 0, "motivo" }`) → usa la variante en caliente
+  `POST /jobs/{jobId}/cargar-vuelos-txt` · **400** faltan archivos o ninguna línea de vuelo en ellos.
+
+> ⚠ Si aplica al menos un vuelo **invalida el grafo cacheado**, así que el siguiente job paga el
+> **pre-warm frío** (~13 min en la VM). Hazlo con margen antes de la hora de la prueba.
 
 #### Concurrencia y husos (garantías del backend)
 - Varios registradores POST en paralelo: cada request en su hilo; la validación es previa al encolado y
@@ -496,8 +507,9 @@ recibido y volver a pedir con `desde = total`.
 > `duracionRealMs` = temporizador real de la simulación (ver `GET /jobs/activo`); viene en cada poll
 > para que las páginas del mapa lo mantengan al día sin llamadas extra. Omitido hasta el primer bloque.
 
-### `GET /jobs/{jobId}/alerta-colapso`
-Alerta de colapso **inminente** (pre-colapso). Siempre responde (VERDE si no hay riesgo). Ver §7.
+> **Eliminado (2026-07-21)**: `GET /jobs/{jobId}/alerta-colapso` ya no existe. La alerta vigente
+> viaja en el campo `alertaColapso` de `GET /jobs/{jobId}/estado` (mismo objeto, ver §7), que el
+> front ya poll-ea; el endpoint dedicado no tenía ningún consumidor.
 
 ### `GET /jobs/{jobId}/resultado?incluirVuelosPlaneados=true`
 `SimulacionResponse` final. `204` si el job sigue ejecutando.
@@ -691,14 +703,11 @@ Devuelve un `EnvioEstadoResponse`: la `asignacion` (mismo esquema que el campo `
 > - **404 transitorio:** si la consulta cae justo cuando el job reescribe esa ruta (re-enrutamiento en
 >   curso), puede devolver `404` un instante; **reintentar** lo resuelve.
 
-### `GET /demanda/resumen?desde=&hasta=&top=20`
-Demanda agregada del dataset (no requiere job). `porOrigen`, `porDestino`, `porOD` (top N),
-más `totalEnvios` y `totalMaletas`. `desde`/`hasta` en **UTC**.
-> **Rango acotado (anti-OOM):** la agregación se hace **en BD** (no carga los envíos en RAM). El rango
-> se **acota** a un span máximo (`planificador.consulta.demanda-max-dias`, **31** por defecto): si falta
-> `hasta` o el span lo supera, el backend recorta `hasta = desde + demanda-max-dias` y **reporta el rango
-> efectivo** en los campos `desde`/`hasta` de la respuesta. Pedir sin parámetros ya **no** escanea el
-> dataset entero; conviene enviar siempre un rango acotado.
+> **Eliminado (2026-07-21)**: `GET /demanda/resumen` ya no existe. No tenía ningún consumidor y era
+> el endpoint público más caro (agregación sobre los 9,5 M de `envio`). La demanda agregada que
+> muestra la página de reportes se arma en el front con los envíos de `GET /jobs/{id}/estado`.
+> Con él se fueron la propiedad `planificador.consulta.demanda-max-dias` y el DTO
+> `DemandaResumenResponse`.
 
 ### `POST /jobs/{jobId}/cancelar`
 `{ "jobId", "cancelado": true|false }`. Detiene el job (orden del front).
@@ -925,7 +934,8 @@ bloqueIdx : int                      // = BloqueSimulacion.bloqueIdx
 > Alerta de almacén cerca de su capacidad, **específica de cada bloque** (no un valor global). Viaja
 > dentro del bloque (vía `GET /jobs/{id}/bloques?desde=N`) para que el front la muestre justo cuando
 > anima ese `bloqueIdx`, aunque el backend ya esté procesando bloques futuros. Para el detalle por
-> almacén, ver `ocupacionAlmacenes[]`; para la alerta global vigente (almacén + SLA), `/alerta-colapso`.
+> almacén, ver `ocupacionAlmacenes[]`; para la alerta global vigente (almacén + SLA), el campo
+> `alertaColapso` de `/estado`.
 
 ### `AeropuertoDTO`
 ```
@@ -953,7 +963,7 @@ cargaAsignada : int (siempre 0 aquí)
 ## 7. Alerta de colapso logístico inminente (`AlertaColapso`)
 
 Anticipa los dos criterios de colapso reales (almacén lleno / SLA vencido) **antes** de que ocurran.
-Solo informa (no detiene). Disponible en `GET /jobs/{id}/alerta-colapso` y dentro de `/estado`.
+Solo informa (no detiene). Disponible en el campo `alertaColapso` de `GET /jobs/{id}/estado`.
 
 ```json
 {
@@ -1142,7 +1152,7 @@ origen se toma del **nombre del archivo**). Cada línea: `id-AAAAMMDD-HH-MM-ICAO
 - **Unidades:** la capacidad de vuelos y almacenes está en **maletas físicas**; las métricas de
   conteo de "procesadas/enrutadas/sinRuta" están en **envíos** (un envío agrupa varias maletas).
 - **Semáforo:** verde ≤ 0.70, ámbar ≤ 0.90, rojo > 0.90 (umbrales en `/indicadores`).
-- **Polling recomendado:** `estado` + `bloques?desde=` cada 2–5 s; `alerta-colapso` cada tick.
+- **Polling recomendado:** `estado` + `bloques?desde=` cada 2–5 s (`estado` ya trae `alertaColapso`).
 - **Eje de tiempo:** los aeropuertos están en husos distintos. Para cualquier cálculo de posición
   o cronología **global**, usar los campos `*Utc` (`registroUtc`, `salidaUtc`, `llegadaUtc`), que sí
   comparten reloj. Los `*Local` son solo para mostrar la hora de pared de cada ciudad.

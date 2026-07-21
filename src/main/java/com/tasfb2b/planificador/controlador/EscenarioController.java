@@ -20,7 +20,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -60,36 +59,6 @@ public class EscenarioController {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Hay una ingesta de dataset en curso; espera a que termine.");
         }
-    }
-
-    @GetMapping("/ejecutar")
-    public ResponseEntity<SimulacionResponse> ejecutar(
-            @RequestParam(defaultValue = "alns") String algoritmo,
-            @RequestParam(defaultValue = "14")   int    k) {
-
-        rechazarSiIngestaEnCurso();
-        return switch (algoritmo.toLowerCase()) {
-            case "alns" -> ResponseEntity.ok(service.ejecutarALNS(k));
-            default     -> throw new ParametroInvalidoException(
-                    "algoritmo no soportado en este endpoint síncrono: '" + algoritmo + "' (use 'alns')");
-        };
-    }
-
-    @GetMapping("/bloque/{index}")
-    public ResponseEntity<BloqueSimulacion> getBloque(@PathVariable int index) {
-        BloqueSimulacion bloque = service.getBloque(index);
-        if (bloque == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(bloque);
-    }
-
-    @GetMapping("/ejecutar-colapso")
-    public ResponseEntity<SimulacionResponse> ejecutarColapso(
-            @RequestParam(defaultValue = "75")   int    k,
-            @RequestParam(defaultValue = "0.20") double umbralColapso) {
-
-        rechazarSiIngestaEnCurso();
-        umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        return ResponseEntity.ok(service.ejecutarHastaColapso(k, umbralColapso));
     }
 
     @PostMapping("/escenario1/iniciar")
