@@ -9,10 +9,20 @@ spring:
 #    username: postgres
 #    password: Furiousandfast.8
     # BD de PRUEBAS (AWS RDS). Activa por defecto.
-    url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b
+    # socketTimeout=180: un read sin respuesta en 3 min falla (el COPY colgado se detecta y reintenta)
+    # en vez de quedar zombie para siempre. La conexión Perú→us-east-1 se corta en transferencias largas.
+    # tcpKeepAlive: el SO detecta conexiones muertas antes.
+    url: jdbc:postgresql://dp1-bd.cjw9vckmfqz8.us-east-1.rds.amazonaws.com:5432/Tasf_b2b?socketTimeout=180&tcpKeepAlive=true
     username: postgres
     password: Furiousandfast.8
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # Ingesta a us-east-1: conexiones frescas para que no se corten por antigüedad a mitad de un COPY.
+      maximum-pool-size: 4
+      max-lifetime: 120000        # recicla conexiones idle cada 2 min (antes de que la RDS/NAT las corte)
+      keepalive-time: 30000       # Hikari sondea las conexiones idle cada 30 s
+      connection-timeout: 30000
+      validation-timeout: 10000
   jpa:
     hibernate:
       ddl-auto: validate

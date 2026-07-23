@@ -118,11 +118,9 @@ public class IngestaService {
             long ins = 0, desc = 0;
             int procesados = 0;
             for (EnvioTemp et : envios) {
-                try (Reader r = Files.newBufferedReader(et.path, StandardCharsets.UTF_8)) {
-                    int[] res = migrador.migrarEnviosDesde(r, et.icao);
-                    ins += res[0];
-                    desc += res[1];
-                }
+                int[] res = migrarArchivoConReintento(et);
+                ins += res[0];
+                desc += res[1];
                 procesados++;
                 e.setEnviosArchivosProcesados(procesados);
                 e.setEnviosInsertados(ins);
@@ -147,6 +145,35 @@ public class IngestaService {
             limpiar(aero, vuelos, envios);
             enCurso.set(false);
         }
+    }
+
+    /**
+     * Migra un archivo de envíos con reintentos: la conexión Perú→us-east-1 se corta en transferencias
+     * largas y el COPY falla (ahora con socketTimeout, no cuelga). Cada intento re-abre el archivo y
+     * migrarEnviosDesde borra las filas previas de ese ICAO antes de re-copiar (idempotente), así un
+     * corte NO pierde los archivos ya cargados ni duplica filas. Aborta la ingesta si agota los intentos.
+     */
+    private int[] migrarArchivoConReintento(EnvioTemp et) {
+        final int maxIntentos = 4;
+        RuntimeException ultimo = null;
+        for (int intento = 1; intento <= maxIntentos; intento++) {
+            try (Reader r = Files.newBufferedReader(et.path, StandardCharsets.UTF_8)) {
+                return migrador.migrarEnviosDesde(r, et.icao);
+            } catch (Exception ex) {
+                ultimo = (ex instanceof RuntimeException re) ? re
+                        : new IllegalStateException(ex.getMessage(), ex);
+                log.warn("Ingesta {} — intento {}/{} falló: {}", et.icao, intento, maxIntentos, ex.getMessage());
+                if (intento < maxIntentos) {
+                    try {
+                        Thread.sleep(1000L * intento * intento); // backoff 1s, 4s, 9s
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Ingesta interrumpida en " + et.icao, ie);
+                    }
+                }
+            }
+        }
+        throw new IllegalStateException("Archivo " + et.icao + " falló tras " + maxIntentos + " intentos", ultimo);
     }
 
     private static boolean vacio(MultipartFile f) {

@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
@@ -133,6 +134,15 @@ public class MigradorEnviosDb {
                 // La carga es reproducible; sin fsync por commit va mucho más rápido y no arriesga datos.
                 try (Statement st = con.createStatement()) {
                     st.execute("SET synchronous_commit TO off");
+                }
+                // Idempotencia para el reintento: borra cualquier fila previa de este ICAO (id_envio =
+                // ICAO-numero) antes de re-copiar. Rango sobre el índice de id_envio ('-'=0x2D, '.'=0x2E),
+                // así usa el btree. Tras un TRUNCATE es no-op; tras un COPY parcial/colgado, limpia.
+                try (PreparedStatement del = con.prepareStatement(
+                        "DELETE FROM envio WHERE id_envio >= ? AND id_envio < ?")) {
+                    del.setString(1, origenIcao + "-");
+                    del.setString(2, origenIcao + ".");
+                    del.executeUpdate();
                 }
                 CopyManager copyManager = new CopyManager(con.unwrap(BaseConnection.class));
                 CopyIn copyIn = copyManager.copyIn(SQL_COPY_ENVIO);
