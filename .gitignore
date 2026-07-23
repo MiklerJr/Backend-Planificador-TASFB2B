@@ -51,3 +51,6 @@ src/main/CONTRATO_API_FRONTEND.md
 src/main/CONTRATO_API_FRONTEND.md
 src/main/CONTRATO_API_FRONTEND.md
 /data
+/data
+*.txt
+/src/main/resources/data
