@@ -613,7 +613,7 @@ public class PlanificadorService {
             boolean backlogDefinitivo = spec.pararPorBacklog() && vencidos > 0;
             purgarOcupacionVencida(enrutador, ctx, bloqueActual);
 
-            logBloque(motorRes, bloqueActual, totalBloques,
+            logBloque(motorRes, bloqueActual, totalBloques, ctx,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taMs, backlog.tamaño(),
                     backlogDefinitivo || rv.colapsoAlmacen(), job, auditAcc.sinRutaSize(), enrutador);
 
@@ -624,11 +624,11 @@ public class PlanificadorService {
                 detalleColapso = rv.detalleColapso();
                 instanteColapso = ctx.scFin;
                 if (spec.pararPorBacklog()) {
-                    log.warn("{} ALMACÉN LLENO en bloque {}/{} — envío {}",
-                            etiqueta, bloqueActual, totalBloques, rv.detalleColapso());
+                    log.warn("{} ALMACÉN LLENO en bloque {}/{} — sim={}Z — envío {}",
+                            etiqueta, bloqueActual, totalBloques, ctx.scFin, rv.detalleColapso());
                 } else {
-                    log.warn("{} COLAPSO por almacén lleno en bloque {}/{} — {}",
-                            etiqueta, bloqueActual, totalBloques, rv.detalleColapso());
+                    log.warn("{} COLAPSO por almacén lleno en bloque {}/{} — sim={}Z — {}",
+                            etiqueta, bloqueActual, totalBloques, ctx.scFin, rv.detalleColapso());
                 }
                 break;
             }
@@ -639,6 +639,9 @@ public class PlanificadorService {
                 motivoParada = "backlog_definitivo";
                 detalleColapso = vencidos + " envío(s) del backlog con SLA vencido";
                 instanteColapso = ctx.scFin;
+                log.warn("{} COLAPSO por backlog definitivo en bloque {}/{} — sim={}Z — {} | backlog: actual={} pico={} definitivo={}",
+                        etiqueta, bloqueActual, totalBloques, ctx.scFin, detalleColapso,
+                        backlog.tamaño(), backlog.picoHistorico(), backlog.sinRutaDefinitivo());
                 break;
             }
 
@@ -826,11 +829,14 @@ public class PlanificadorService {
             finalBatches.addAll(afectadosResueltos);
         }
 
+        ctx.motorMs = System.currentTimeMillis() - inicioMotorMs;
+
         if (taFijoMs > 0 && !fastForward) {
             if (MOTOR_ACO.equalsIgnoreCase(motor)) {
                 enrutador.reSeedHubAvoiding(props.getStorageAware().getReSeedSlice(), deadlineMotorNs);
             }
             long transcurridoMs = System.currentTimeMillis() - inicioMotorMs;
+            ctx.motorMs = transcurridoMs;
             long faltanteMs = taFijoMs - transcurridoMs;
             if (faltanteMs > 0) {
                 try {
@@ -1132,6 +1138,8 @@ public class PlanificadorService {
         long inicioWarmupMs = System.currentTimeMillis();
         log.info("Warm-up iniciado: {} bloques hasta fechaInicio={}", warmupPlan.size(), fechaInicio);
         int wIdx = 0;
+        int vencidosTotalWarmup = 0;
+        LocalDateTime primerVencimientoWarmup = null;
         for (ContextoTemporal ctx : warmupPlan) {
             wIdx++;
             Random rngBloque = rngParaBloque(seed, motorRes, ctx.bloqueIdx);
@@ -1144,6 +1152,23 @@ public class PlanificadorService {
             log.info("Warm-up {}/{} [{}] | ventana {}→{} | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta real:{}ms | backlog:{}",
                     wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taRealMs, backlog.tamaño());
+
+            // El bucle principal purga el backlog vencido en cada bloque (ver ejecutarBucle); el warm-up
+            // debe hacer lo mismo o el estado con el que arranca la corrida no es el de una simulación
+            // continua: los vencidos se acumularían durante meses y el primer purgarVencidas del bucle
+            // los barrería de golpe, disparando un "backlog_definitivo" fechado en fechaInicio y no en
+            // el instante real. Aquí además queda registrado ese instante real.
+            int vencidosWarmup = backlog.purgarVencidas(ctx.scFin);
+            if (vencidosWarmup > 0) {
+                vencidosTotalWarmup += vencidosWarmup;
+                if (primerVencimientoWarmup == null) {
+                    primerVencimientoWarmup = ctx.scFin;
+                    log.warn("Warm-up: PRIMER SLA VENCIDO en el backlog — sim={}Z (bloque {}/{}) — {} envío(s). "
+                                    + "El colapso por backlog_definitivo ocurre ANTES de fechaInicio={}",
+                            ctx.scFin, wIdx, warmupPlan.size(), vencidosWarmup, fechaInicio);
+                }
+            }
+
             if (cadenciaTaFija && taFijoMs > 0) {
                 long restanteMs = taFijoMs - ctx.taRealMs;
                 if (restanteMs > 0) {
@@ -1160,6 +1185,11 @@ public class PlanificadorService {
         log.info("Warm-up completado en {} ms (backlog={}, pico={})",
                 System.currentTimeMillis() - inicioWarmupMs,
                 backlog.tamaño(), backlog.picoHistorico());
+        if (vencidosTotalWarmup > 0) {
+            log.warn("Warm-up: {} envío(s) con SLA vencido durante el calentamiento (primero en sim={}Z). "
+                            + "El sistema YA estaba colapsado antes de fechaInicio={}: relanzar con una fecha anterior.",
+                    vencidosTotalWarmup, primerVencimientoWarmup, fechaInicio);
+        }
         if (job != null && !("cancelado".equals(job.estado) || job.canceladoPorUsuario)) {
             job.estado = "ejecutando";
         }
@@ -1285,13 +1315,14 @@ public class PlanificadorService {
         return new Random(mixed);
     }
 
-                        private void logBloque(String motor, int bloque, int total, int envios, int onTime,
+    private void logBloque(String motor, int bloque, int total, ContextoTemporal ctx, int envios, int onTime,
                            int tardadas, int sinRuta, long taMs, int backlog, boolean colapso,
                            EstadoJob job, int sinRutaRam, OperadorReparacionVoraz enrutador) {
-        log.info("Bloque {}/{} [{}] | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms | backlog:{}{}",
-                bloque, total, motor, envios, onTime, tardadas, sinRuta, taMs, backlog,
+        log.info("Bloque {}/{} [{}] sim={}→{}Z | envíos:{} | onTime:{} | tardadas:{} | sinRuta:{} | Ta:{}ms motor:{}ms | backlog:{}{}",
+                bloque, total, motor, ctx.scInicio, ctx.scFin, envios, onTime, tardadas, sinRuta,
+                taMs, ctx.motorMs, backlog,
                 colapso ? " | COLAPSO" : "");
-        if (job != null && (bloque % 50 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam, enrutador);
+        if (job != null && (bloque % 20 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam, enrutador);
     }
 
     /**

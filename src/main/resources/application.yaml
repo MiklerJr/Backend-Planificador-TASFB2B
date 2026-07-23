@@ -23,10 +23,20 @@ spring:
       schema-locations: classpath:schema.sql
   servlet:
     multipart:
-      max-file-size: 512MB
-      max-request-size: 2GB
-      file-size-threshold: 2MB
-      
+      # Ingesta del dataset de colapso (POST /dataset/cargar): 30 archivos de envíos que suman ~4,8 GB.
+      # Es UNA sola request multipart (aeropuertos + vuelos + envios[]) y el TRUNCATE es destructivo,
+      # así que no se puede partir en lotes; el request completo debe caber bajo max-request-size.
+      max-file-size: 1GB       # por archivo (el mayor hoy ~280 MB; margen para crecimiento)
+      max-request-size: 6GB    # request completa (4,8 GB de envíos + margen multipart)
+      file-size-threshold: 2MB # > 2 MB se vuelca a disco (java.io.tmpdir), no a RAM
+
+# Tomcat: sin esto, una subida grande que falle a mitad (p.ej. un ICAO no derivable) se corta feo
+# porque Tomcat solo "traga" 2 MB por defecto antes de resetear la conexión, ocultando el error real.
+server:
+  tomcat:
+    max-swallow-size: -1              # no limitar lo que Tomcat traga de un upload abortado
+    max-http-form-post-size: -1       # sin tope de POST (multipart no lo usa, pero por robustez)
+
 data:
   airports:
     file: ${DATA_AIRPORTS_FILE:data/c.1inf54.26.1.v1.Aeropuerto.husos.v1.20250818__estudiantes.txt}
