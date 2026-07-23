@@ -84,7 +84,7 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
-			<scope>runtime</scope>
+			<!-- compile (no runtime): la ingesta masiva usa CopyManager/BaseConnection directamente -->
 		</dependency>
     </dependencies>
 
