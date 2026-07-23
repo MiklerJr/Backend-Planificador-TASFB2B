@@ -1,2 +1,7 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+
+# Dataset (envios/vuelos/aeropuertos): son datos, no codigo. Sin diff textual para que agregar o
+# quitar el dataset del tracking no llene el registro con millones de lineas de contenido.
+data/** -diff
+src/main/resources/data/** -diff
