@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
+
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import lombok.extern.slf4j.Slf4j;
@@ -38,10 +39,10 @@ public class AlgoritmoALNS {
 
     private SolucionAlns     solucionActual;
     private SolucionAlns     mejorSolucion;
-    private Map<Long,Integer> vueloActual;
-    private Map<Long,Integer> aeropuertoActual;
-    private Map<Long,Integer> mejorVuelo;
-    private Map<Long,Integer> mejorAeropuerto;
+    private Map<Long, Integer> vueloActual;
+    private Map<Long, Integer> aeropuertoActual;
+    private Map<Long, Integer> mejorVuelo;
+    private Map<Long, Integer> mejorAeropuerto;
 
     private double temperatura;
 
@@ -58,16 +59,16 @@ public class AlgoritmoALNS {
     public AlgoritmoALNS(Grafo grafo,
                           OperadorReparacionVoraz enrutador,
                           List<LoteEnvio> batches,
-                          Map<Long,Integer> blockFlight,
-                          Map<Long,Integer> blockAirport) {
+                          Map<Long, Integer> blockFlight,
+                          Map<Long, Integer> blockAirport) {
         this(grafo, enrutador, batches, blockFlight, blockAirport, null);
     }
 
     public AlgoritmoALNS(Grafo grafo,
                           OperadorReparacionVoraz enrutador,
                           List<LoteEnvio> batches,
-                          Map<Long,Integer> blockFlight,
-                          Map<Long,Integer> blockAirport,
+                          Map<Long, Integer> blockFlight,
+                          Map<Long, Integer> blockAirport,
                           PlanificadorProperties props) {
         if (props != null) {
             PlanificadorProperties.Alns a = props.getAlns();
@@ -137,8 +138,8 @@ public class AlgoritmoALNS {
             usos[selectedIdx]++;
 
             SolucionAlns     candidate = solucionActual.clonar();
-            Map<Long,Integer> cFlight  = new HashMap<>(vueloActual);
-            Map<Long,Integer> cAirport = new HashMap<>(aeropuertoActual);
+            Map<Long, Integer> cFlight  = new HashMap<>(vueloActual);
+            Map<Long, Integer> cAirport = new HashMap<>(aeropuertoActual);
 
             List<LoteEnvio> unassigned =
                     operadoresDestruccion.get(selectedIdx).destruir(candidate, factorDestruccion);
@@ -210,8 +211,8 @@ public class AlgoritmoALNS {
     }
 
     public SolucionAlns      getMejorSolucion()      { return mejorSolucion; }
-    public Map<Long,Integer> getMejorBloqueVuelo()   { return mejorVuelo;   }
-    public Map<Long,Integer> getMejorBloqueAeropuerto() { return mejorAeropuerto;  }
+    public Map<Long, Integer> getMejorBloqueVuelo()   { return mejorVuelo;   }
+    public Map<Long, Integer> getMejorBloqueAeropuerto() { return mejorAeropuerto;  }
 
     private static List<OperadorDestruccion> construirOperadoresDestruccion(List<String> nombres) {
         java.util.ArrayList<OperadorDestruccion> ops = new java.util.ArrayList<>(nombres.size());

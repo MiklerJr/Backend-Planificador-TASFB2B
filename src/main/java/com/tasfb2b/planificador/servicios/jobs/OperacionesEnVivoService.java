@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.servicios.jobs;
 
+
 import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 
 import com.tasfb2b.planificador.algoritmo.alns.CodificadorClaveVuelo;

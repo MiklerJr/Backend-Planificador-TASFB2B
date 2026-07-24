@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.aco;
 
+
 import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
 import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
@@ -182,7 +183,11 @@ public class ColoniaACO {
             cfg.cantidadHormigas = 14;
             cfg.iteraciones = 108;
         }
-        cfg.maxSinMejora = 8;
+        // P1: el perfil JFR mostró 65 soluciones con CERO mejoras sobre la base voraz, es decir que con
+        // maxSinMejora=8 el ACO construía ~64 hormigas que no aportaban nada. Cortar antes reduce el
+        // NÚMERO de construcciones (~65 → ~17) sin quitarle protagonismo: si una mejora aparece, el
+        // contador se reinicia y la búsqueda continúa. Guarda: onTime/sinRuta no deben empeorar.
+        cfg.maxSinMejora = 2;
         cfg.alpha = 1.0;
         cfg.beta = 2.0;
         cfg.evaporacion = 0.30;

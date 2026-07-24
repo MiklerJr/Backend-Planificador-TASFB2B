@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.servicios;
 
+
 import com.tasfb2b.planificador.algoritmo.alns.PreColapso;
 
 import com.tasfb2b.planificador.algoritmo.alns.CodificadorClaveVuelo;
@@ -350,14 +351,14 @@ public class TelemetriaSimulacionService {
         Map<Integer, Nodo> nodesByIdx = new HashMap<>();
         for (Nodo node : graph.nodos.values()) nodesByIdx.put(node.indice, node);
 
-        Map<Long, Integer> picoPorAeroDia = new LinkedHashMap<>();
+        Map<Long, Integer> picoPorAeroDia = new HashMap<>();
         for (Map.Entry<Long, Integer> entry : blockAirport.entrySet()) {
             int ocupacion = enrutador != null
                     ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
                     : entry.getValue();
             if (ocupacion <= 0) continue;
-            int nodeIdx = resourceIdx(entry.getKey());
-            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
+            int nodeIdx = CodificadorClaveVuelo.indiceNodoDeSlot(entry.getKey());
+            long slot = CodificadorClaveVuelo.slotDe(entry.getKey());
             long epochDia = (slot * OperadorReparacionVoraz.SLOT_ALMACEN_MIN) / CodificadorClaveVuelo.MIN_DIA;
             long claveAeroDia = (((long) nodeIdx) << CodificadorClaveVuelo.BITS_DIA) | (epochDia & CodificadorClaveVuelo.MASCARA_DIA);
             picoPorAeroDia.merge(claveAeroDia, ocupacion, Integer::max);
@@ -395,10 +396,10 @@ public class TelemetriaSimulacionService {
                     ? enrutador.ocupacionGlobalAlmacen(entry.getKey())
                     : entry.getValue();
             if (ocupacion <= 0) continue;
-            Nodo node = nodesByIdx.get(resourceIdx(entry.getKey()));
+            Nodo node = nodesByIdx.get(CodificadorClaveVuelo.indiceNodoDeSlot(entry.getKey()));
             if (node == null) continue;
 
-            long slot = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
+            long slot = CodificadorClaveVuelo.slotDe(entry.getKey());
             long epochMin = slot * OperadorReparacionVoraz.SLOT_ALMACEN_MIN;
 
             OcupacionAlmacenSlot dto = new OcupacionAlmacenSlot();

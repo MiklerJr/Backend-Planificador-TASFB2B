@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
+
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;

@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.servicios;
 
+
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
@@ -16,17 +17,22 @@ import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.LongStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Verificación de la serie de ocupación por SLOT de 60 min ({@code buildSerieAlmacenes}) y del
+ * Verificación de la serie de ocupación por SLOT ({@code buildSerieAlmacenes}) y del
  * REALISMO del bloque al publicarse: la serie debe reflejar EXACTAMENTE lo que el modelo interno
  * cobró slot a slot — espera en origen {@code [registro, primer vuelo)}, estadía de escala
- * {@code [llegada, salida siguiente)}, destino {@code [llegada, +10 min)} y la espera en origen
- * de envíos sin ruta del backlog — sin agregaciones que pierdan granularidad (el DTO diario
- * {@code OcupacionAlmacen} colapsa todo a un pico por día; la serie no).
+ * {@code [llegada, salida siguiente)}, destino {@code [llegada, +tiempoRecojoDestino)} y la espera
+ * en origen de envíos sin ruta del backlog — sin agregaciones que pierdan granularidad (el DTO
+ * diario {@code OcupacionAlmacen} colapsa todo a un pico por día; la serie no).
+ *
+ * <p>Las cuentas esperadas se DERIVAN de {@link OperadorReparacionVoraz#SLOT_ALMACEN_MIN}
+ * (ver {@link #slotsQueCubren}), así que el test sigue siendo válido si cambia la granularidad
+ * del modelo de almacén: lo que fija es la semántica (qué intervalo se cobra), no el número.
  */
 class SerieAlmacenesTest {
 
@@ -36,9 +42,8 @@ class SerieAlmacenesTest {
 
     /**
      * B1 (20 maletas, ready 07:00) vuela AAA→BBB (08:30-09:30) y BBB→CCC (18:00-19:00):
-     * espera en origen AAA [07:00, 08:30) → slots 07:00 y 08:00;
-     * escala en BBB [09:30, 18:00) → slots 09:00 … 17:00 (9 slots);
-     * destino CCC [19:00, 19:10) → slot 19:00.
+     * espera en origen AAA [07:00, 08:30), escala en BBB [09:30, 18:00) y destino CCC
+     * [19:00, 19:15). Con slots de 60 min son 2 + 9 + 1 = 12; con 15 min, 6 + 34 + 1 = 41.
      */
     @Test
     void laSerieReproduceSlotASlotLaEstadiaCompletaQueCobroElModelo() {
@@ -53,12 +58,17 @@ class SerieAlmacenesTest {
         List<OcupacionAlmacenSlot> serie =
                 service.buildSerieAlmacenes(blockAirport, graph, op);
 
-        assertEquals(12, serie.size(), "2 slots de origen + 9 de escala + 1 de destino");
-        assertEquals(2, slotsDe(serie, "AAA").size(), "origen: [07:00, 08:30) → slots 07 y 08");
-        assertEquals(9, slotsDe(serie, "BBB").size(), "escala: [09:30, 18:00) → slots 09..17");
-        assertEquals(1, slotsDe(serie, "CCC").size(), "destino: [19:00, 19:10) → slot 19");
+        long enOrigen = slotsQueCubren("07:00", "08:30");
+        long enEscala = slotsQueCubren("09:30", "18:00");
+        long enDestino = slotsQueCubren("19:00", "19:15");
+
+        assertEquals(enOrigen + enEscala + enDestino, serie.size(),
+                "slots de origen + escala + destino");
+        assertEquals(enOrigen, slotsDe(serie, "AAA").size(), "origen: espera [07:00, 08:30)");
+        assertEquals(enEscala, slotsDe(serie, "BBB").size(), "escala: [09:30, 18:00)");
+        assertEquals(enDestino, slotsDe(serie, "CCC").size(), "destino: [19:00, 19:15)");
         assertTrue(serie.stream().anyMatch(s ->
-                        s.getAeropuerto().equals("BBB") && s.getHora().startsWith("2026-01-01T09:00")),
+                        s.getAeropuerto().equals("BBB") && s.getHora().startsWith(inicioDelSlotQueContiene("09:30"))),
                 "las horas son el inicio del slot en eje UTC");
 
         // Realismo: cada slot del DTO coincide EXACTAMENTE con la ocupación global del modelo.
@@ -110,6 +120,31 @@ class SerieAlmacenesTest {
     private static List<OcupacionAlmacenSlot> slotsDe(
             List<OcupacionAlmacenSlot> serie, String aeropuerto) {
         return serie.stream().filter(s -> s.getAeropuerto().equals(aeropuerto)).toList();
+    }
+
+    /**
+     * Cuántos slots distintos toca la estadía {@code [desde, hasta)}, contados minuto a minuto
+     * (definición independiente de la aritmética del operador: un slot cuenta si alguno de los
+     * minutos de la estadía cae dentro de él).
+     */
+    private static long slotsQueCubren(String desde, String hasta) {
+        long g = OperadorReparacionVoraz.SLOT_ALMACEN_MIN;
+        return LongStream.range(minutosDelDia(desde), minutosDelDia(hasta))
+                .map(m -> m / g)
+                .distinct()
+                .count();
+    }
+
+    /** Prefijo ISO del slot que contiene la hora dada, p. ej. {@code 2026-01-01T09:30}. */
+    private static String inicioDelSlotQueContiene(String hora) {
+        long g = OperadorReparacionVoraz.SLOT_ALMACEN_MIN;
+        long inicio = (minutosDelDia(hora) / g) * g;
+        return LocalDateTime.of(DIA, LocalTime.MIDNIGHT).plusMinutes(inicio).toString();
+    }
+
+    private static long minutosDelDia(String hora) {
+        LocalTime t = LocalTime.parse(hora);
+        return t.getHour() * 60L + t.getMinute();
     }
 
     private static void enrutar(OperadorReparacionVoraz op, LoteEnvio b,
