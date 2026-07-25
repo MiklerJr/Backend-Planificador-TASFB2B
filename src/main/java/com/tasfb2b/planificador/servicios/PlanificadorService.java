@@ -409,31 +409,26 @@ public class PlanificadorService {
                 props.getScenario().isSimularTiempoReal3(), motorRes, seed, fechaInicio), job, inicio);
     }
 
-    /**
-     * Parámetros que distinguen a los tres escenarios dentro del bucle unificado de bloques
-     * (Tanda 4F-3). Cada {@code ejecutarX} construye su spec vía fábrica y delega en
-     * {@link #ejecutarBucle}; los textos de log conservan la etiqueta y formatos históricos.
-     */
     private record EspecificacionEscenario(
-            String etiqueta,                     // "E1"/"E2"/"E3" — prefijo de todos los logs
+            String etiqueta,
             int k,
             int saMin,
-            long taFijoMs,                       // presupuesto Ta del warm-up y (salvo E3) del bucle
-            long taProcesarBloqueMs,             // override para procesarBloque (E3: 0L ⇒ usa props)
+            long taFijoMs,
+            long taProcesarBloqueMs,
             List<ContextoTemporal> plan,
             List<ContextoTemporal> warmupPlan,
-            boolean warmupCadenciaTaFija,        // E3: cada bloque de warm-up consume su Ta completo
-            boolean iniciarCorridaAntesDeWarmup, // E1: orden histórico del TRUNCATE por corrida
-            boolean preWarmEsqueletos,           // E2: pre-warm Fase T + cancelación pre-bucle
-            boolean aplicarInyecciones,          // E1: drena inyecciones EN VIVO por bloque
-            boolean demandaEnVivo,               // E1 enVivo: la demanda entra solo por inyección
-            boolean setTiempoProcesamiento,      // E1/E3: taMs por bloque visible en el DTO
-            boolean contarVuelosCancelados,      // E1/E2: el total va a métricas (E3 publica 0)
-            boolean pararPorBacklog,             // E3: SLA vencido en backlog ⇒ colapso definitivo
-            boolean logSaturacionCada50,         // E2
-            boolean logProgresoDebug,            // E1/E2
-            boolean logDiagnosticosAlFinal,      // E1/E2
-            String calibrarQue,                  // aviso Ta>Sa: "K" (E2/E3) o "Ta" (E1)
+            boolean warmupCadenciaTaFija,
+            boolean iniciarCorridaAntesDeWarmup,
+            boolean preWarmEsqueletos,
+            boolean aplicarInyecciones,
+            boolean demandaEnVivo,
+            boolean setTiempoProcesamiento,
+            boolean contarVuelosCancelados,
+            boolean pararPorBacklog,
+            boolean logSaturacionCada50,
+            boolean logProgresoDebug,
+            boolean logDiagnosticosAlFinal,
+            String calibrarQue,
             boolean simularTiempoReal,
             String motorRes,
             long seed,
@@ -444,17 +439,17 @@ public class PlanificadorService {
                                               boolean simularTiempoReal, String motorRes, long seed,
                                               LocalDateTime fechaInicio) {
             return new EspecificacionEscenario("E2", k, saMin, taFijoMs, taFijoMs, plan, warmupPlan,
-                    false,  // warmupCadenciaTaFija
-                    false,  // iniciarCorridaAntesDeWarmup
-                    true,   // preWarmEsqueletos
-                    false,  // aplicarInyecciones
-                    false,  // demandaEnVivo
-                    false,  // setTiempoProcesamiento
-                    true,   // contarVuelosCancelados
-                    false,  // pararPorBacklog
-                    true,   // logSaturacionCada50
-                    true,   // logProgresoDebug
-                    true,   // logDiagnosticosAlFinal
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    true,
+                    true,
+                    true,
                     "K", simularTiempoReal, motorRes, seed, fechaInicio);
         }
 
@@ -463,17 +458,17 @@ public class PlanificadorService {
                                               boolean enVivo, boolean simularTiempoReal, String motorRes,
                                               long seed, LocalDateTime fechaInicio) {
             return new EspecificacionEscenario("E1", k, saMin, taFijoMs, taFijoMs, plan, warmupPlan,
-                    false,  // warmupCadenciaTaFija
-                    true,   // iniciarCorridaAntesDeWarmup
-                    false,  // preWarmEsqueletos
-                    true,   // aplicarInyecciones
-                    enVivo, // demandaEnVivo
-                    true,   // setTiempoProcesamiento
-                    true,   // contarVuelosCancelados
-                    false,  // pararPorBacklog
-                    false,  // logSaturacionCada50
-                    true,   // logProgresoDebug
-                    true,   // logDiagnosticosAlFinal
+                    false,
+                    true,
+                    false,
+                    true,
+                    enVivo,
+                    true,
+                    true,
+                    false,
+                    false,
+                    true,
+                    true,
                     "Ta", simularTiempoReal, motorRes, seed, fechaInicio);
         }
 
@@ -482,23 +477,21 @@ public class PlanificadorService {
                                               boolean simularTiempoReal, String motorRes, long seed,
                                               LocalDateTime fechaInicio) {
             return new EspecificacionEscenario("E3", k, saMin, taFijoMs, 0L, plan, warmupPlan,
-                    true,   // warmupCadenciaTaFija
-                    false,  // iniciarCorridaAntesDeWarmup
-                    false,  // preWarmEsqueletos
-                    false,  // aplicarInyecciones
-                    false,  // demandaEnVivo
-                    true,   // setTiempoProcesamiento
-                    false,  // contarVuelosCancelados
-                    true,   // pararPorBacklog
-                    false,  // logSaturacionCada50
-                    false,  // logProgresoDebug
-                    false,  // logDiagnosticosAlFinal
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
                     "K", simularTiempoReal, motorRes, seed, fechaInicio);
         }
     }
 
-    /** Bucle de bloques unificado de E1/E2/E3 (Tanda 4F-3). Behavior-preserving: mismo orden de
-     *  operaciones, mismos textos de log y mismo consumo del Random que los tres bucles históricos. */
     private SimulacionResponse ejecutarBucle(EspecificacionEscenario spec, EstadoJob job, long inicio) {
         final String etiqueta = spec.etiqueta();
         final List<ContextoTemporal> plan = spec.plan();
@@ -1122,7 +1115,7 @@ public class PlanificadorService {
         log.info("=======================");
     }
 
-                                        private AcumuladorAuditoria ejecutarWarmup(List<ContextoTemporal> warmupPlan, EstadoJob job,
+    private AcumuladorAuditoria ejecutarWarmup(List<ContextoTemporal> warmupPlan, EstadoJob job,
                                                      Grafo graph, OperadorReparacionVoraz enrutador,
                                                      SolucionAlns solucionDummy, Map<String, int[]> odStats,
                                                      GestorBacklog backlog, String motorRes, long seed,
@@ -1154,11 +1147,6 @@ public class PlanificadorService {
                     wIdx, warmupPlan.size(), motorRes, ctx.scInicio, ctx.scFin,
                     rv.envios, rv.cumpleSLA, rv.tardadas, rv.sinRuta, ctx.taRealMs, backlog.tamaño());
 
-            // El bucle principal purga el backlog vencido en cada bloque (ver ejecutarBucle); el warm-up
-            // debe hacer lo mismo o el estado con el que arranca la corrida no es el de una simulación
-            // continua: los vencidos se acumularían durante meses y el primer purgarVencidas del bucle
-            // los barrería de golpe, disparando un "backlog_definitivo" fechado en fechaInicio y no en
-            // el instante real. Aquí además queda registrado ese instante real.
             int vencidosWarmup = backlog.purgarVencidas(ctx.scFin);
             if (vencidosWarmup > 0) {
                 vencidosTotalWarmup += vencidosWarmup;
@@ -1206,14 +1194,8 @@ public class PlanificadorService {
         });
     }
 
-    /** Motor recién construido para una corrida: grafo cacheado + enrutador con los tiempos operativos. */
     private record MotorCorrida(Grafo graph, OperadorReparacionVoraz enrutador, SolucionAlns solucionDummy) {}
 
-    /**
-     * Prepara el motor al iniciar una corrida (idéntico en E1/E2/E3): resincroniza capacidades al
-     * baseline en frío, obtiene el grafo cacheado, crea un {@link OperadorReparacionVoraz} fresco y le
-     * configura storage-aware + tiempos operativos (escala/recojo). Fuente única de esa configuración.
-     */
     private MotorCorrida prepararMotorCorrida() {
         resetearCapacidadesAlIniciarCorrida();
         Grafo graph = motorCache.obtenerGrafo(
@@ -1226,7 +1208,6 @@ public class PlanificadorService {
         return new MotorCorrida(graph, enrutador, new SolucionAlns(Collections.emptyList()));
     }
 
-    /** Respuesta vacía estándar cuando el plan no tiene bloques (o la corrida se canceló antes de empezar). */
     private SimulacionResponse respuestaVacia(int k, int saMin) {
         SimulacionResponse r = telemetria.construirRespuestaFront(0, 0L, cargadorDatos.getVuelos(), 0, null);
         r.setK(k);
@@ -1234,11 +1215,6 @@ public class PlanificadorService {
         return r;
     }
 
-    /**
-     * Publica el bloque recién procesado al job (progreso, ventana, serie de almacenes, métricas,
-     * alerta) y lo persiste a BD. Devuelve true si el usuario pidió cancelar la corrida
-     * (el bucle llamador debe loguear su mensaje y salir).
-     */
     private boolean publicarBloqueYDetectarCancelacion(EstadoJob job, ResultadoVentana rv,
                                                       int bloqueActual, int totalBloques,
                                                       EstadisticasTa taStats, ContextoTemporal ctx,
@@ -1256,12 +1232,6 @@ public class PlanificadorService {
         return "cancelado".equals(job.estado) || job.canceladoPorUsuario;
     }
 
-    /**
-     * Simulación a ritmo de reloj: duerme lo que resta de Sa tras el Ta del bloque.
-     * Devuelve true si el hilo fue interrumpido (el bucle llamador debe salir).
-     * El sleep/interrupt debe quedar aquí en posición idéntica a la original: la cancelación
-     * de jobs depende de esta interrupción.
-     */
     private boolean dormirSaRestante(String etiqueta, String calibrar, boolean simularTiempoReal,
                                      int bloqueActual, int totalBloques, long saMs, long taMs) {
         if (!simularTiempoReal || bloqueActual >= totalBloques) return false;
@@ -1280,7 +1250,6 @@ public class PlanificadorService {
         return false;
     }
 
-    /** Tail común de los tres escenarios: respuesta al front + métricas + auditoría diferida. */
     private SimulacionResponse construirRespuestaFinal(EstadoJob job, AcumuladorAuditoria auditAcc,
                                                        GestorBacklog backlog, EstadisticasTa taStats,
                                                        long tiempoMs, int bloqueActual, LocalDate fechaBase,
@@ -1326,11 +1295,6 @@ public class PlanificadorService {
         if (job != null && (bloque % 20 == 0 || bloque == total)) logHuellaMemoria(job, sinRutaRam, enrutador);
     }
 
-    /**
-     * Purga periódica de la ocupación global vencida del enrutador (contención de RAM en corridas
-     * largas). El corte va {@code purga-ocupacion-retencion-dias} detrás del cursor de la
-     * simulación, muy por detrás del horizonte que el motor puede consultar.
-     */
     private void purgarOcupacionVencida(OperadorReparacionVoraz enrutador, ContextoTemporal ctx, int bloqueActual) {
         PlanificadorProperties.Memoria mem = props.getMemoria();
         int cada = mem.getPurgaOcupacionCadaBloques();

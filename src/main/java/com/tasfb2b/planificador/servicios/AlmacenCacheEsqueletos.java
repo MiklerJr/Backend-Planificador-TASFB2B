@@ -33,7 +33,7 @@ import java.util.Map;
 @Component
 public class AlmacenCacheEsqueletos {
 
-    static final int MAGIC = 0x54534B31;   // "TSK1"
+    static final int MAGIC = 0x54534B31;
     static final int VERSION = 1;
     private static final int MAX_SKELETONS_LEIDOS = 64;
     private static final int MAX_TRAMOS_LEIDOS = 4096;

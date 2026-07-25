@@ -44,14 +44,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/**
- * Construcción de los DTOs de telemetría/lectura de la simulación: cargas de vuelos, ocupación
- * de almacenes (bloque y serie por slot), alertas, métricas, asignaciones de maletas y la
- * respuesta al frontend. Los métodos de bloque reciben {@code grafo}/{@code enrutador} por
- * parámetro (el {@link OperadorReparacionVoraz} se crea fresco por corrida): esta clase no tiene
- * estado mutable de corrida. El bucle de {@code PlanificadorService} la invoca una vez por bloque
- * (no en el hot path por-arista), así que la indirección es neutral para el presupuesto Ta.
- */
 @Service
 public class TelemetriaSimulacionService {
 
@@ -83,17 +75,14 @@ public class TelemetriaSimulacionService {
         this.props = props;
     }
 
-    /** Constructor de conveniencia para tests: solo cablea la caché de offsets (con dataset nulo). */
     TelemetriaSimulacionService() {
         this(null, new CacheOffsetsAeropuerto(null), null, null, null, null, null, null);
     }
 
-    /** Constructor de conveniencia para tests de read-models de job (getEstadoJob/getSerieAlmacenes). */
     TelemetriaSimulacionService(RegistroJobs jobs) {
         this(jobs, new CacheOffsetsAeropuerto(null), null, null, null, null, null, null);
     }
 
-    // ------------------------------------------------------------------ read-models de job
 
     public SerieAlmacenesResponse getSerieAlmacenes(String jobId, int desde) {
         EstadoJob job = jobs.get(jobId);
@@ -170,8 +159,6 @@ public class TelemetriaSimulacionService {
         return body;
     }
 
-    // ------------------------------------------------------------------ consulta de envío individual
-
     public EnvioEstadoResponse buscarEstadoEnvio(String jobId, String idEnvio, LocalDateTime instante) {
         List<AsignacionMaleta> asigs = construirAsignacionesDesdeBd(jobId, idEnvio);
         if (asigs.isEmpty()) asigs = construirAsignacionesSinteticas(jobId, idEnvio);
@@ -226,8 +213,6 @@ public class TelemetriaSimulacionService {
             return null;
         }
     }
-
-    // ------------------------------------------------------------------ asignaciones de maletas
 
     List<AsignacionMaleta> buildAsignaciones(List<LoteEnvio> batches) {
         return batches.stream().map(b -> {
@@ -303,8 +288,6 @@ public class TelemetriaSimulacionService {
         }
         return buildAsignaciones(activos);
     }
-
-    // ------------------------------------------------------------------ telemetría de bloque
 
     List<CargaVuelo> buildCargasVuelos(Map<Long, Integer> blockFlight, Grafo graph,
                                        OperadorReparacionVoraz enrutador) {
@@ -490,8 +473,6 @@ public class TelemetriaSimulacionService {
         return 0;
     }
 
-    // ------------------------------------------------------------------ métricas y respuesta
-
     SimulacionResponse construirRespuestaFront(int enrutadas, long tiempoMs,
                                                List<Vuelo> vuelosReales,
                                                int totalBloques,
@@ -572,8 +553,6 @@ public class TelemetriaSimulacionService {
         m.setTaPromedioMs(taPromedioMs);
         return m;
     }
-
-    // ------------------------------------------------------------------ helpers
 
     private void agregarInfoAeropuerto(Map<String, AeropuertoDTO> map, String cod, Aeropuerto a) {
         if (!map.containsKey(cod)) {

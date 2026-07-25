@@ -16,13 +16,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private long conexionMin = 10L;
     private long tiempoRecojoDestino = 15L;
-    /**
-     * Granularidad del modelo de ocupación concurrente del almacén (Fase R). Un envío ocupa el
-     * almacén en TODOS los slots que toca su estadía, así que un slot grande sobreestima la
-     * concurrencia: dos maletas que pasan a las 10:05 y a las 10:55 nunca coexisten pero con slots
-     * de 60 min se suman. Bajar a 15 min cuadruplica la resolución (y el número de claves del mapa
-     * de ocupación y de iteraciones por pierna) a cambio de medir la saturación real.
-     */
     public static final long SLOT_ALMACEN_MIN = 15L;
     private static final long HORIZONTE_MAX_MIN  = 3 * 24 * 60L;
     private static final long MIN_DIA          = CodificadorClaveVuelo.MIN_DIA;
@@ -50,7 +43,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private final Set<Long> vueloDiasCancelados = ConcurrentHashMap.newKeySet();
 
-    /** Pico absoluto de ocupación por aeropuerto entre los slots ya purgados (ver {@link #purgarOcupacionAnteriorA}). */
     private int[] picoAlmacenPurgado;
 
     private final ConcurrentHashMap<Long, Integer> ocupacionOrigenBacklog = new ConcurrentHashMap<>();
@@ -97,21 +89,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.picoAlmacenPurgado = new int[conteoNodos];
     }
 
-    /**
-     * Purga la ocupación global de los días ya vencidos: elimina de {@code ocupacionVuelo} y
-     * {@code ocupacionAeropuerto} las claves cuyo día (embebido en la clave por
-     * {@link CodificadorClaveVuelo}) es anterior a {@code diaCorte}. En una corrida larga esos
-     * mapas crecen sin tope (~2.866 vuelo-días + ~720 slots de almacén por día simulado) aunque
-     * nada vuelva a consultarlos: el horizonte de ruta es de 3 días, el SLA máximo 48 h y el
-     * backlog purga por SLA, así que con {@code diaCorte} varios días detrás del cursor ninguna
-     * consulta del motor puede alcanzarlos.
-     *
-     * <p>Antes de borrar un slot de almacén conserva su pico absoluto por aeropuerto, único dato
-     * histórico que sigue leyéndose ({@link #reclasificarHubsPorUtilizacion}), de modo que la
-     * clasificación de hubs —y por tanto el ruteo— es idéntica a la de un mapa sin purgar.
-     *
-     * @return número de claves eliminadas entre ambos mapas.
-     */
     public int purgarOcupacionAnteriorA(long diaCorte) {
         int purgadas = 0;
         for (Iterator<Map.Entry<Long, Integer>> it = ocupacionVuelo.entrySet().iterator(); it.hasNext(); ) {
@@ -135,7 +112,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return purgadas;
     }
 
-    /** Tamaño actual de los mapas de ocupación global: {@code [vuelo-días, slots de almacén]}. */
     public int[] tamañoOcupacionGlobal() {
         return new int[] { ocupacionVuelo.size(), ocupacionAeropuerto.size() };
     }
@@ -192,7 +168,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.hubPorIndice = flags;
     }
 
-    /** Package-private: además del ruteo, lo consultan los tests de clasificación de hubs. */
     boolean esHub(int nodeIdx) {
         return nodeIdx >= 0 && nodeIdx < hubPorIndice.length && hubPorIndice[nodeIdx];
     }
@@ -208,8 +183,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             double util = entry.getValue() / (double) nodo.capacidad;
             if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
         }
-        // Los slots ya purgados (P2) siguen contando: su pico absoluto sobrevive a la purga, así
-        // que el máximo histórico por aeropuerto es idéntico al de un mapa que nunca se purgara.
         for (int nodeIdx = 0; nodeIdx < conteoNodos && nodeIdx < picoAlmacenPurgado.length; nodeIdx++) {
             if (picoAlmacenPurgado[nodeIdx] <= 0) continue;
             String code = nodoPorIndice[nodeIdx];

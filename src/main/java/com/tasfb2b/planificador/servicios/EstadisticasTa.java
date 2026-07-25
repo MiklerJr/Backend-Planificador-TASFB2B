@@ -1,9 +1,5 @@
 package com.tasfb2b.planificador.servicios;
 
-/**
- * Acumulador de estadísticas del presupuesto Ta por bloque (min/max/suma/promedio) para
- * las métricas finales de la corrida y la advertencia de calibración (Ta cercano a Sa).
- */
 final class EstadisticasTa {
     private long min = Long.MAX_VALUE;
     private long max = 0L;

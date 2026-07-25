@@ -17,10 +17,9 @@ spring:
     password: Furiousandfast.8
     driver-class-name: org.postgresql.Driver
     hikari:
-      # Ingesta a us-east-1: conexiones frescas para que no se corten por antigüedad a mitad de un COPY.
       maximum-pool-size: 4
-      max-lifetime: 120000        # recicla conexiones idle cada 2 min (antes de que la RDS/NAT las corte)
-      keepalive-time: 30000       # Hikari sondea las conexiones idle cada 30 s
+      max-lifetime: 120000
+      keepalive-time: 30000
       connection-timeout: 30000
       validation-timeout: 10000
   jpa:
@@ -33,19 +32,14 @@ spring:
       schema-locations: classpath:schema.sql
   servlet:
     multipart:
-      # Ingesta del dataset de colapso (POST /dataset/cargar): 30 archivos de envíos que suman ~4,8 GB.
-      # Es UNA sola request multipart (aeropuertos + vuelos + envios[]) y el TRUNCATE es destructivo,
-      # así que no se puede partir en lotes; el request completo debe caber bajo max-request-size.
-      max-file-size: 1GB       # por archivo (el mayor hoy ~280 MB; margen para crecimiento)
-      max-request-size: 6GB    # request completa (4,8 GB de envíos + margen multipart)
-      file-size-threshold: 2MB # > 2 MB se vuelca a disco (java.io.tmpdir), no a RAM
+      max-file-size: 1GB
+      max-request-size: 6GB
+      file-size-threshold: 2MB
 
-# Tomcat: sin esto, una subida grande que falle a mitad (p.ej. un ICAO no derivable) se corta feo
-# porque Tomcat solo "traga" 2 MB por defecto antes de resetear la conexión, ocultando el error real.
 server:
   tomcat:
-    max-swallow-size: -1              # no limitar lo que Tomcat traga de un upload abortado
-    max-http-form-post-size: -1       # sin tope de POST (multipart no lo usa, pero por robustez)
+    max-swallow-size: -1
+    max-http-form-post-size: -1
 
 data:
   airports:
@@ -72,20 +66,9 @@ planificador:
     #   52560  → 365 días
     max-ventanas: 720
 
-    # E3 (hasta colapso): tope de ventanas de Sa min SOLO para el escenario 3. 0 = recorrer TODO el
-    # dataset hasta el fin (el E3 se detiene solo al colapsar). max-ventanas (arriba) NO aplica a E3:
-    # con 720 y K=144 E3 quedaba en ~5 bloques (2,5 días) sin llegar nunca al colapso.
     max-ventanas-colapso: 0
-
     max-bloques-buffer: 35
-
-    # Presupuesto REAL del buffer de bloques: tope de asignaciones retenidas (0 = solo manda
-    # max-bloques-buffer). Al final del dataset un bloque de 12 h trae ~11.800 asignaciones, así que
-    # 35 bloques podían retener ~400k. max-bloques-buffer sigue como tope secundario y siempre queda
-    # al menos el último bloque publicado (el contrato de /bloques y /asignaciones no cambia:
-    # devuelven lista vacía + primerBloqueDisponible cuando el `desde` pedido ya fue purgado).
     max-asignaciones-buffer: 100000
-
     max-jobs-en-memoria: 3
 
     k-default-1: 1
@@ -93,7 +76,7 @@ planificador:
     k-default-3: 144
     umbral-colapso: 0.01
     umbral-colapso-backlog: 1000
-    simular-tiempo-real-1: true            # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
+    simular-tiempo-real-1: true           # E1 día a día: duerme (Sa - Ta). El perfil smoke lo pone en false
     simular-tiempo-real-2: true           # El perfil smoke pondrá esto en false
     simular-tiempo-real-3: true           # E3 duerme (Sa·60 − Ta) entre bloques como E1/E2; su warm-up de fechaInicio va a cadencia Ta fija (sin Sa)
     prewarm-skeletons: true
@@ -121,10 +104,10 @@ planificador:
     peso-uso-vuelo: 20.0
 
   storage-aware:
-    reserva-almacen-base: 0.0       # R5: sin colchón (L2 inerte)
-    umbral-hub-pico: 0.99           # R5: casi nadie es hub (L1/L2/O inertes)
-    precio-hub-exponente: 1.7       # (sin efecto si no hay hubs)
-    re-seed-slice: 0                # R5: re-seed hub-avoiding desactivado (Q inerte)
+    reserva-almacen-base: 0.0
+    umbral-hub-pico: 0.99
+    precio-hub-exponente: 1.7
+    re-seed-slice: 0
 
   backlog:
     max-size: 10000
@@ -134,7 +117,7 @@ planificador:
     max-reproceso-por-bloque: 3000
 
   consulta:
-    max-filas-pagina: 5000      # tope de filas por página (limit por defecto) en /vuelos/carga y /almacenes/ocupacion
+    max-filas-pagina: 5000
 
   operativo:
     tiempo-min-escala-minutos: 10
@@ -144,10 +127,8 @@ planificador:
     skeleton-file: data/skeleton-cache.bin
 
   memoria:
-    # Contención de RAM en corridas largas: la ocupación global (vuelo-día y slots de almacén)
-    # crece sin tope aunque nada vuelva a consultarla (horizonte de ruta 3 días, SLA máx 48 h).
-    purga-ocupacion-cada-bloques: 20   # 0 = nunca purgar
-    purga-ocupacion-retencion-dias: 7  # días conservados detrás del cursor; 0 = nunca purgar
+    purga-ocupacion-cada-bloques: 20
+    purga-ocupacion-retencion-dias: 7
 
   fragmentacion:
     habilitada: true                 # false = comportamiento actual exacto

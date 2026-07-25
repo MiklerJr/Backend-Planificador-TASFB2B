@@ -36,11 +36,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Operaciones EN VIVO sobre una corrida en curso (request-side): validan la petición del
- * operador y la ENCOLAN en el {@link EstadoJob}; el hilo del job las drena en la frontera
- * del siguiente bloque. No tocan el motor ni el grafo directamente.
- */
 @Slf4j
 @Service
 public class OperacionesEnVivoService {
@@ -158,8 +153,6 @@ public class OperacionesEnVivoService {
         }
         return true;
     }
-
-    // ------------------------------------------------------------------ apply-side (hilo del job)
 
     public void aplicarAltasEnCaliente(EstadoJob job, Grafo graph, OperadorReparacionVoraz enrutador,
                                         int bloqueIdx) {
@@ -334,7 +327,7 @@ public class OperacionesEnVivoService {
             int n = route.size();
             int k = n;
             for (int i = 0; i < n; i++) {
-                if (deps.get(i) > ahoraMin) { k = i; break; }   // primer tramo PENDIENTE
+                if (deps.get(i) > ahoraMin) { k = i; break; }
             }
             if (k == n) {
                 return b;

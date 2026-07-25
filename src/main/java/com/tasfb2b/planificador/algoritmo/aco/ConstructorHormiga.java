@@ -50,12 +50,6 @@ final class ConstructorHormiga {
         Map<Long, Integer> simAirport = new HashMap<>(blockAirport);
         BolsaPendientes pendientes = new BolsaPendientes(base);
         List<Asignacion> asignaciones = new ArrayList<>();
-
-        // O1: el cache solo retiene la frontera evaluada y aún no consumida (~5-20 entradas), pero se
-        // dimensionaba a base.size()*2 (~12k slots con 6k lotes). El removeIf de más abajo recorre TODA
-        // la tabla en cada asignación, así que sobredimensionar costaba decenas de millones de visitas a
-        // slots vacíos por construcción. Con la capacidad por defecto la tabla crece según lo realmente
-        // guardado; el comportamiento no cambia (el removeIf borra el mismo conjunto, sin depender del orden).
         Map<LoteEnvio, OpcionEnvio> evalCache = new IdentityHashMap<>();
 
         while (!pendientes.isEmpty() && System.nanoTime() < deadline) {

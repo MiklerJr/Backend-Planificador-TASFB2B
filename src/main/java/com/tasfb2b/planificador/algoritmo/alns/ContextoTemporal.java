@@ -15,7 +15,6 @@ public class ContextoTemporal {
     public long relojFinMs;
     public long taMs;
     public long taRealMs;
-    /** Tiempo que consumió el motor (ALNS/ACO) dentro del bloque, sin el relleno hasta completar Ta. */
     public long motorMs;
     public double tasaSinRutaPrevia = 0.0;
 

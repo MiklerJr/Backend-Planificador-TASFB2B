@@ -23,12 +23,9 @@ public class PlanificadorProperties {
     private Fragmentacion fragmentacion = new Fragmentacion();
     private Memoria      memoria      = new Memoria();
 
-    /** Contención de RAM en corridas largas (E3 puede acumular años simulados). */
     @Data
     public static class Memoria {
-        /** Cada cuántos bloques se purga la ocupación global vencida (0 = nunca purgar). */
         private int purgaOcupacionCadaBloques = 20;
-        /** Días de ocupación que se conservan detrás del cursor (0 = nunca purgar). */
         private int purgaOcupacionRetencionDias = 7;
     }
 
@@ -67,7 +64,6 @@ public class PlanificadorProperties {
 
         private int maxBloquesBuffer = 60;
 
-        /** Tope de asignaciones retenidas en el buffer del job (0 = solo manda maxBloquesBuffer). */
         private int maxAsignacionesBuffer = 0;
 
         private int maxJobsEnMemoria = 3;

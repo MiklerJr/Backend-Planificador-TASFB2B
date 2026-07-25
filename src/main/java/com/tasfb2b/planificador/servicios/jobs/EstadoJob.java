@@ -106,15 +106,8 @@ public class EstadoJob {
 
     private volatile int maxBloquesConAsignaciones = 500;
 
-    /**
-     * Tope de asignaciones retenidas en el buffer (0 = sin tope). Es el presupuesto que de verdad
-     * manda sobre la RAM: al final del dataset un bloque de 12 h trae ~11.800 asignaciones, así que
-     * contar bloques dice poco. {@link #maxBloquesConAsignaciones} sigue vigente como tope
-     * secundario (nunca se retienen más bloques que ese número) y siempre queda al menos el último.
-     */
     private volatile int maxAsignacionesBuffer = 0;
 
-    /** Asignaciones vivas en {@link #bloquesParciales} (mantenido por deltas al publicar/purgar). */
     private int asignacionesRetenidas = 0;
 
     private final Map<String, VueloUsadoAcc> vuelosUsadosAcum = new LinkedHashMap<>();
@@ -133,10 +126,6 @@ public class EstadoJob {
         synchronized (bloquesLock) { return asignacionesRetenidas; }
     }
 
-    /**
-     * ¿El buffer excede su presupuesto y hay que soltar el bloque más viejo? Manda el tope de
-     * bloques; si ese se respeta, manda el de asignaciones, que nunca purga el último bloque.
-     */
     private static boolean debePurgarBloque(int bloques, int asignaciones, int maxBloques, int maxAsignaciones) {
         if (bloques > maxBloques) return true;
         return maxAsignaciones > 0 && asignaciones > maxAsignaciones && bloques > 1;
@@ -165,7 +154,7 @@ public class EstadoJob {
 
     public boolean encolarCancelacionVuelo(CancelacionVueloRequest orden) {
         if (orden == null) return false;
-        if (cancelacionesVueloPendientes.contains(orden)) return false;   // anti doble-click
+        if (cancelacionesVueloPendientes.contains(orden)) return false;
         return cancelacionesVueloPendientes.add(orden);
     }
 
@@ -191,7 +180,7 @@ public class EstadoJob {
 
     public boolean encolarAltaVuelo(AltaVueloRequest alta) {
         if (alta == null) return false;
-        if (altasVueloPendientes.contains(alta)) return false;   // anti doble-click
+        if (altasVueloPendientes.contains(alta)) return false;
         return altasVueloPendientes.add(alta);
     }
 
@@ -207,7 +196,7 @@ public class EstadoJob {
 
     public boolean encolarAltaAeropuerto(AltaAeropuertoRequest alta) {
         if (alta == null) return false;
-        if (altasAeropuertoPendientes.contains(alta)) return false;   // anti doble-click
+        if (altasAeropuertoPendientes.contains(alta)) return false;
         return altasAeropuertoPendientes.add(alta);
     }
 

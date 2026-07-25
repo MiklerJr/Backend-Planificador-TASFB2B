@@ -12,26 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 
-/**
- * Acumulador de auditoría por corrida (Fase 5b): registra el último estado conocido de cada
- * envío ÚNICO (deduplicado por id de lote) para las métricas globales y los sin-ruta que
- * alimenta la auditoría diferida ({@code EstadoJob.auditoriaSinRuta}). En modo
- * {@code retenerBatches} conserva los lotes completos (warm-up / estado inicial).
- *
- * <p><b>Compacto e incremental (P1, reducción de RAM)</b>: el estado por envío es un
- * {@code long} empaquetado ({@link #empacar}) bajo el id del lote —un {@code String} que ya
- * existe, en vez de una clave compuesta creada en cada {@code registrar()}— y los totales se
- * mantienen por deltas al registrar, en vez de recorrer el mapa entero dos veces por bloque
- * (era O(nº envíos únicos) de CPU robada al Ta, creciendo toda la corrida).
- *
- * <p>La deduplicación por id es equivalente a la clave compuesta histórica
- * ({@code id|origen|destino|tiempoListo|cantidad}) porque los cinco campos son inmutables en
- * {@link LoteEnvio} y el id ya los determina: {@code envio.id_envio} es PK del dataset, los
- * sub-lotes de fragmentación llevan sufijo {@code -Fn} y los envíos inyectados en vivo
- * {@code INV-…} son únicos por corrida.
- */
 final class AcumuladorAuditoria {
-    /** id del lote → estado empaquetado (ver {@link #empacar}). */
     private final Map<String, Long> resumen = new HashMap<>();
     private final Map<String, LoteEnvio> sinRuta = new LinkedHashMap<>();
     private final Map<String, LoteEnvio> completos;
@@ -41,10 +22,8 @@ final class AcumuladorAuditoria {
     private long maletas;
     private long maletasEnrutadas;
     private long maletasEntregadas;
-    /** Corte del eje temporal: máximo {@code readyMin} visto (monótono, como el max histórico). */
     private long corteMin = Long.MIN_VALUE;
 
-    /** Arribos aún no "graduados" contra {@link #corteMin}, en orden de arribo (lazy deletion). */
     private final PriorityQueue<ArriboPendiente> pendientesEntrega =
             new PriorityQueue<>((a, b) -> Long.compare(a.arriboMin, b.arriboMin));
 
@@ -54,12 +33,6 @@ final class AcumuladorAuditoria {
 
     private record ArriboPendiente(long arriboMin, String clave) {}
 
-    // ── Empaquetado del estado por envío ────────────────────────────────────────────────
-    // bits  0..30 : arriboMin (minuto epoch; SIN_ARRIBO si el lote no tiene arribo calculable)
-    // bits 31..60 : cantidad de maletas (saturada)
-    // bit  61     : enrutada
-    // bit  62     : cumple SLA
-    // bit  63     : entregada ya contada en maletasEntregadas
     private static final int  BITS_ARRIBO   = 31;
     private static final long MASCARA_ARRIBO   = (1L << BITS_ARRIBO) - 1;
     private static final long SIN_ARRIBO       = MASCARA_ARRIBO;
@@ -111,7 +84,6 @@ final class AcumuladorAuditoria {
         else sinRuta.put(key, b.clonar());
     }
 
-    /** Deshace la contribución del estado anterior de un envío que se vuelve a registrar. */
     private void descontar(long previo) {
         maletas -= cantidadDe(previo);
         if (!enrutadaDe(previo)) return;
@@ -141,12 +113,6 @@ final class AcumuladorAuditoria {
         bloque.setMaletasEntregadasAcum(maletasEntregadas);
     }
 
-    /**
-     * Cuenta como entregadas las maletas cuyo último arribo ya quedó detrás del corte temporal
-     * ({@code arribo <= corteMin}). Como {@code corteMin} solo crece, una entrega graduada solo
-     * se revierte si el envío se re-registra ({@link #descontar}); las entradas obsoletas de la
-     * cola se descartan al compararlas con el estado vigente.
-     */
     private void graduarEntregas() {
         while (!pendientesEntrega.isEmpty() && pendientesEntrega.peek().arriboMin <= corteMin) {
             ArriboPendiente p = pendientesEntrega.poll();

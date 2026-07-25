@@ -32,9 +32,6 @@ public class MigradorEnviosDb {
 
     private final JdbcTemplate jdbcTemplate;
 
-    // Ingesta masiva de envíos vía COPY (streaming): una sola orden por archivo en vez de millones de
-    // INSERT. La tabla se TRUNCA antes de cargar y el id_envio es único (ICAO-numero), así que no hace
-    // falta ON CONFLICT. Formato text: campos TAB-separados, filas terminadas en '\n'.
     private static final String SQL_COPY_ENVIO =
             "COPY envio (id_envio, icao_origen, icao_destino, cantidad_maletas, id_cliente, fecha_hora_registro) FROM STDIN";
     private static final String SQL_VUELO =
@@ -128,16 +125,12 @@ public class MigradorEnviosDb {
 
     public int[] migrarEnviosDesde(Reader reader, String origenIcao) throws IOException {
         final BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
-        final int[] contadores = new int[2]; // [0]=insertados, [1]=descartados
+        final int[] contadores = new int[2];
         try {
             jdbcTemplate.execute((ConnectionCallback<Void>) con -> {
-                // La carga es reproducible; sin fsync por commit va mucho más rápido y no arriesga datos.
                 try (Statement st = con.createStatement()) {
                     st.execute("SET synchronous_commit TO off");
                 }
-                // Idempotencia para el reintento: borra cualquier fila previa de este ICAO (id_envio =
-                // ICAO-numero) antes de re-copiar. Rango sobre el índice de id_envio ('-'=0x2D, '.'=0x2E),
-                // así usa el btree. Tras un TRUNCATE es no-op; tras un COPY parcial/colgado, limpia.
                 try (PreparedStatement del = con.prepareStatement(
                         "DELETE FROM envio WHERE id_envio >= ? AND id_envio < ?")) {
                     del.setString(1, origenIcao + "-");
@@ -171,8 +164,6 @@ public class MigradorEnviosDb {
                             contadores[1]++;
                             continue;
                         }
-                        // Fila COPY text (id_envio = ICAO-numero): campos TAB-separados, timestamp "YYYY-MM-DD HH:MM:00".
-                        // Los valores son ICAO/enteros/fecha: sin TAB, '\n' ni '\\', así que no requieren escape.
                         sb.append(origenIcao).append('-').append(parts[0].trim())
                           .append('\t').append(origenIcao)
                           .append('\t').append(destino)

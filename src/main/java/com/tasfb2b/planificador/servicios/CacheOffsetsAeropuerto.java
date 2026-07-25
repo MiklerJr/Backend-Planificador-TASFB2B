@@ -8,11 +8,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Caché lazy de offsets horarios (GMT) por código ICAO, para reconstruir horas locales
- * en los DTOs (registroLocal, salidaLocal/llegadaLocal) sin consultar la lista de
- * aeropuertos en cada tramo. Se construye una sola vez por proceso.
- */
 @Component
 public class CacheOffsetsAeropuerto {
 

@@ -23,13 +23,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Lado LECTOR de la auditoría por corrida: genera el {@code auditoria.zip} y su estimación
- * on-demand desde la BD (vía {@link LectorSolucionBd}) + los sin-ruta retenidos en
- * {@code EstadoJob.auditoriaSinRuta} por el bucle de simulación. Corre en hilos HTTP,
- * concurrente con el job; el handshake con el bucle pasa por
- * {@link PersistenciaSolucionService#tomarParaLectura}/{@code finalizarCorrida}.
- */
 @Slf4j
 @Service
 public class AuditoriaCorridaService {

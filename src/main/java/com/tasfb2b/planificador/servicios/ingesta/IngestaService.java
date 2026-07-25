@@ -147,12 +147,6 @@ public class IngestaService {
         }
     }
 
-    /**
-     * Migra un archivo de envíos con reintentos: la conexión Perú→us-east-1 se corta en transferencias
-     * largas y el COPY falla (ahora con socketTimeout, no cuelga). Cada intento re-abre el archivo y
-     * migrarEnviosDesde borra las filas previas de ese ICAO antes de re-copiar (idempotente), así un
-     * corte NO pierde los archivos ya cargados ni duplica filas. Aborta la ingesta si agota los intentos.
-     */
     private int[] migrarArchivoConReintento(EnvioTemp et) {
         final int maxIntentos = 4;
         RuntimeException ultimo = null;

@@ -4,17 +4,7 @@ import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 
 import java.util.List;
 
-/**
- * Ruta candidata materializada por {@link OperadorReparacionVoraz} (Dijkstra multicriterio):
- * secuencia de aristas + salidas reales (UTC epoch-min) con sus métricas de coste (tránsito,
- * holgura SLA, presión, escasez). Es la frontera de API que consume todo el motor ACO
- * ({@code algoritmo/aco/}) y la telemetría/re-ruteo de servicios. El constructor es
- * package-private: solo {@code OperadorReparacionVoraz} la construye. {@link #signature()}
- * memoiza su firma topológica (índice de arista @ salida) para la caché de esqueletos.
- */
 public final class RutaCandidata {
-    // Campos package-private: OperadorReparacionVoraz (mismo paquete) los lee directo,
-    // como cuando RutaCandidata era una clase anidada suya. Los getters públicos son la API externa.
     final List<Arista> aristas;
     final List<Long> salidasReales;
     final boolean cumpleSLA;
