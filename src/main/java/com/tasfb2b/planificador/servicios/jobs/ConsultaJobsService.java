@@ -69,7 +69,7 @@ public class ConsultaJobsService {
 
     public JobActivoResponse getJobActivo() {
         JobActivoResponse body = new JobActivoResponse();
-        List<EstadoJob> activos = jobs.listarActivos();   // ordenados por inicio ascendente
+        List<EstadoJob> activos = jobs.listarActivos();
         EstadoJob elegido = null;
         for (EstadoJob j : activos) {
             if ("ejecutando".equals(j.estado) || "calentando".equals(j.estado)) {
@@ -152,7 +152,7 @@ public class ConsultaJobsService {
             BloqueSimulacion bloque = ventana.get(i);
             List<CargaVueloFila> filas = new ArrayList<>();
             for (CargaVuelo carga : cargasDelBloque(bloque)) filas.add(cargaVueloRow(carga, bloque));
-            acc.addAll(0, filas);   // prepende para mantener el orden cronológico
+            acc.addAll(0, filas);
         }
         return acc;
     }
@@ -275,7 +275,7 @@ public class ConsultaJobsService {
         String vueloNorm = normalizarTexto(vueloId);
         List<AsignacionesResponse.AsignacionItem> asignaciones = new ArrayList<>();
 
-        for (BloqueSimulacion bloque : job.bloquesDesdeExacto(desde)) {   // desde purgado ⇒ vacío
+        for (BloqueSimulacion bloque : job.bloquesDesdeExacto(desde)) {
             if (bloque.getAsignaciones() == null) continue;
             for (AsignacionMaleta asignacion : bloque.getAsignaciones()) {
                 if (soloEnrutadas && !asignacion.isEnrutada()) continue;
@@ -302,8 +302,6 @@ public class ConsultaJobsService {
         body.setAsignaciones(asignaciones);
         return body;
     }
-
-    // Helpers privados
 
     private Metricas metricasDesdeBloques(List<BloqueSimulacion> bloques) {
         Metricas m = new Metricas();

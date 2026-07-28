@@ -1,11 +1,12 @@
 package com.tasfb2b.planificador.algoritmo.aco;
+
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
 import com.tasfb2b.planificador.algoritmo.alns.CodificadorClaveVuelo;
 import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import com.tasfb2b.planificador.dto.simulacion.*;

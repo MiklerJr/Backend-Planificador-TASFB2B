@@ -103,39 +103,30 @@ public class IngestaService {
 
     private void ejecutar(Path aero, Path vuelos, List<EnvioTemp> envios, IngestaEstado e) {
         try {
-            // 1. Reemplazo destructivo. CASCADE limpia las soluciones de la 5a (ruta_asignada/
-            //    tramo_ruta/cancelacion_vuelo, FK a envio/vuelo) y envio_inyectado (FK a aeropuerto).
             e.setFase("limpiando");
             jdbc.execute("TRUNCATE aeropuerto, vuelo, envio RESTART IDENTITY CASCADE");
 
-            // 2. Aeropuertos (parse robusto BOM-safe vía AnalizadorAeropuertos).
             e.setFase("aeropuertos");
             e.setAeropuertos(migrador.insertarAeropuertos(aeropuertoParser.parse(aero)));
 
-            // 3. Vuelos.
             e.setFase("vuelos");
             try (Reader r = Files.newBufferedReader(vuelos, StandardCharsets.UTF_8)) {
                 e.setVuelos(migrador.migrarVuelosDesde(r));
             }
 
-            // 4. Envíos (el ICAO de origen viene del nombre del archivo).
             e.setFase("envios");
             long ins = 0, desc = 0;
             int procesados = 0;
             for (EnvioTemp et : envios) {
-                try (Reader r = Files.newBufferedReader(et.path, StandardCharsets.UTF_8)) {
-                    int[] res = migrador.migrarEnviosDesde(r, et.icao);
-                    ins += res[0];
-                    desc += res[1];
-                }
+                int[] res = migrarArchivoConReintento(et);
+                ins += res[0];
+                desc += res[1];
                 procesados++;
                 e.setEnviosArchivosProcesados(procesados);
                 e.setEnviosInsertados(ins);
                 e.setEnviosDescartados(desc);
             }
 
-            // 5. Recargar la cache del motor (aeropuertos, vuelos, ventanas) e invalidar el grafo +
-            //    esqueletos compartidos: cambian los vuelos ⇒ los edge-idx cacheados ya no valen.
             e.setFase("recargando");
             cargadorDatos.load();
             motorCache.invalidar();
@@ -154,6 +145,29 @@ public class IngestaService {
             limpiar(aero, vuelos, envios);
             enCurso.set(false);
         }
+    }
+
+    private int[] migrarArchivoConReintento(EnvioTemp et) {
+        final int maxIntentos = 4;
+        RuntimeException ultimo = null;
+        for (int intento = 1; intento <= maxIntentos; intento++) {
+            try (Reader r = Files.newBufferedReader(et.path, StandardCharsets.UTF_8)) {
+                return migrador.migrarEnviosDesde(r, et.icao);
+            } catch (Exception ex) {
+                ultimo = (ex instanceof RuntimeException re) ? re
+                        : new IllegalStateException(ex.getMessage(), ex);
+                log.warn("Ingesta {} — intento {}/{} falló: {}", et.icao, intento, maxIntentos, ex.getMessage());
+                if (intento < maxIntentos) {
+                    try {
+                        Thread.sleep(1000L * intento * intento); // backoff 1s, 4s, 9s
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Ingesta interrumpida en " + et.icao, ie);
+                    }
+                }
+            }
+        }
+        throw new IllegalStateException("Archivo " + et.icao + " falló tras " + maxIntentos + " intentos", ultimo);
     }
 
     private static boolean vacio(MultipartFile f) {

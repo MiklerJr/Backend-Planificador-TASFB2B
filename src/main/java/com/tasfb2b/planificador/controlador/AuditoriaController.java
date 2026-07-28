@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.controlador;
 
+import com.tasfb2b.planificador.servicios.AuditoriaCorridaService;
 import com.tasfb2b.planificador.servicios.PlanificadorService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -23,9 +24,11 @@ import java.util.Map;
 public class AuditoriaController {
 
     private final PlanificadorService service;
+    private final AuditoriaCorridaService auditoriaCorrida;
 
-    public AuditoriaController(PlanificadorService service) {
+    public AuditoriaController(PlanificadorService service, AuditoriaCorridaService auditoriaCorrida) {
         this.service = service;
+        this.auditoriaCorrida = auditoriaCorrida;
     }
 
     @GetMapping(value = "/jobs/{jobId}/auditoria.zip")
@@ -38,7 +41,7 @@ public class AuditoriaController {
 
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
 
-        PlanificadorService.ResultadoAuditoria r = service.generarAuditoriaZip(jobId, desde, hasta);
+        AuditoriaCorridaService.ResultadoAuditoria r = auditoriaCorrida.generarAuditoriaZip(jobId, desde, hasta);
         if (!r.disponible()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", r.error()));
         }
@@ -75,7 +78,7 @@ public class AuditoriaController {
 
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
 
-        PlanificadorService.ResultadoEstimacion r = service.estimarAuditoria(jobId, desde, hasta);
+        AuditoriaCorridaService.ResultadoEstimacion r = auditoriaCorrida.estimarAuditoria(jobId, desde, hasta);
         if (!r.disponible()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", r.error()));
         }

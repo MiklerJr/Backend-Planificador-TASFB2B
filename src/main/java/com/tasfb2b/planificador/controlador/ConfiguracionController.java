@@ -88,11 +88,6 @@ public class ConfiguracionController {
         }
     }
 
-    /**
-     * Restaura el plan de vuelos de fábrica EN FRÍO: revierte horarios/destino de los vuelos
-     * editados a sus valores originales Y elimina los vuelos agregados (efímeros, por
-     * formulario o TXT). 200 {restaurados, eliminados} / 409 con simulación en curso.
-     */
     @PostMapping("/vuelos/restaurar-horarios")
     public ResponseEntity<Map<String, Object>> restaurarHorariosVuelos() {
         try {
@@ -105,15 +100,6 @@ public class ConfiguracionController {
         }
     }
 
-    /**
-     * Carga masiva de planes de vuelo EN FRÍO desde TXT (mismo formato del dataset que la
-     * carga en caliente del job: ORIG-DEST-HH:MM-HH:MM-CAPACIDAD, horas locales). Pensada
-     * para la preparación de la prueba: los vuelos se aplican de inmediato a BD + catálogo
-     * (efímeros) y entran al grafo al iniciar la próxima corrida. Duplicados y líneas
-     * inválidas se descartan POR LÍNEA y se reportan, sin abortar el lote.
-     * 200 {aplicados, descartados, detalleDescartados} / 400 sin archivos o sin ninguna
-     * línea de vuelo / 409 con simulación en curso (usa la carga en caliente del job).
-     */
     @PostMapping(value = "/vuelos/cargar-txt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> cargarVuelosTxtEnFrio(
             @RequestParam("archivos") MultipartFile[] archivos) {

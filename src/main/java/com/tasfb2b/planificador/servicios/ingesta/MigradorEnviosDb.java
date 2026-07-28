@@ -7,12 +7,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import org.postgresql.copy.CopyIn;
+import org.postgresql.copy.CopyManager;
+import org.postgresql.core.BaseConnection;
+import org.springframework.jdbc.core.ConnectionCallback;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.Reader;
-import java.sql.Timestamp;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,9 +32,8 @@ public class MigradorEnviosDb {
 
     private final JdbcTemplate jdbcTemplate;
 
-    private static final String SQL_ENVIO =
-            "INSERT INTO ENVIO (id_envio, icao_origen, icao_destino, cantidad_maletas, id_cliente, fecha_hora_registro) "
-          + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id_envio) DO NOTHING";
+    private static final String SQL_COPY_ENVIO =
+            "COPY envio (id_envio, icao_origen, icao_destino, cantidad_maletas, id_cliente, fecha_hora_registro) FROM STDIN";
     private static final String SQL_VUELO =
             "INSERT INTO VUELO (id_vuelo, icao_origen, icao_destino, hora_salida, hora_llegada, capacidad_maxima, capacidad_maxima_original) "
           + "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
@@ -33,14 +41,13 @@ public class MigradorEnviosDb {
             "INSERT INTO AEROPUERTO (icao, ciudad, pais, codigo_region, huso_horario, capacidad_almacen, capacidad_almacen_original, latitud, longitud, activo) "
           + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (icao) DO NOTHING";
 
-    private static final int LOTE_ENVIOS = 10_000;
+    private static final int COPY_FLUSH_FILAS = 50_000;  // filas acumuladas antes de cada writeToCopy
     private static final int LOTE_VUELOS = 500;
 
     public MigradorEnviosDb(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    // ── Aeropuertos ─────────────────────────────────────────────────────────────
     public int insertarAeropuertos(List<Aeropuerto> aeropuertos) {
         if (aeropuertos == null || aeropuertos.isEmpty()) return 0;
         List<Object[]> lote = new ArrayList<>(aeropuertos.size());
@@ -52,7 +59,6 @@ public class MigradorEnviosDb {
         return lote.size();
     }
 
-    // ── Vuelos ──────────────────────────────────────────────────────────────────
     public void migrarVuelos(String rutaArchivoVuelos) {
         try (BufferedReader br = new BufferedReader(new FileReader(rutaArchivoVuelos))) {
             int n = migrarVuelosDesde(br);
@@ -92,7 +98,6 @@ public class MigradorEnviosDb {
         return total;
     }
 
-    // ── Envíos ──────────────────────────────────────────────────────────────────
     public void migrarDirectorioCompleto(String rutaDirectorio) {
         File carpeta = new File(rutaDirectorio);
         File[] archivos = carpeta.listFiles((dir, name) -> name.endsWith(".txt") && name.startsWith("_envios_"));
@@ -119,44 +124,85 @@ public class MigradorEnviosDb {
     }
 
     public int[] migrarEnviosDesde(Reader reader, String origenIcao) throws IOException {
-        BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
-        List<Object[]> batchArgs = new ArrayList<>();
-        int insertados = 0, descartados = 0;
-        String linea;
-        while ((linea = br.readLine()) != null) {
-            String[] parts = linea.split("-");
-            if (parts.length < 7) continue;
+        final BufferedReader br = (reader instanceof BufferedReader b) ? b : new BufferedReader(reader);
+        final int[] contadores = new int[2];
+        try {
+            jdbcTemplate.execute((ConnectionCallback<Void>) con -> {
+                try (Statement st = con.createStatement()) {
+                    st.execute("SET synchronous_commit TO off");
+                }
+                try (PreparedStatement del = con.prepareStatement(
+                        "DELETE FROM envio WHERE id_envio >= ? AND id_envio < ?")) {
+                    del.setString(1, origenIcao + "-");
+                    del.setString(2, origenIcao + ".");
+                    del.executeUpdate();
+                }
+                CopyManager copyManager = new CopyManager(con.unwrap(BaseConnection.class));
+                CopyIn copyIn = copyManager.copyIn(SQL_COPY_ENVIO);
+                StringBuilder sb = new StringBuilder(1 << 20);
+                int enBuffer = 0;
+                try {
+                    String linea;
+                    while ((linea = br.readLine()) != null) {
+                        String[] parts = linea.split("-");
+                        if (parts.length < 7) continue;
 
-            String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
-                   destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
-            // RF03: id opcional; el resto de campos obligatorios deben estar presentes.
-            if (!ValidadorEnvio.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
-                descartados++;
-                continue;
-            }
-            try {
-                String id = origenIcao + "-" + parts[0].trim();
-                int hh = Integer.parseInt(horaStr), mm = Integer.parseInt(minStr);
-                int maletas = Integer.parseInt(maletasStr), idCliente = Integer.parseInt(clienteStr);
-                // Timestamp PostgreSQL (YYYY-MM-DD HH:MM:SS) desde la fecha YYYYMMDD + hh:mm.
-                String ts = String.format("%s-%s-%s %02d:%02d:00",
-                        fechaRaw.substring(0, 4), fechaRaw.substring(4, 6), fechaRaw.substring(6, 8), hh, mm);
-                batchArgs.add(new Object[]{ id, origenIcao, destino, maletas, idCliente, Timestamp.valueOf(ts) });
-            } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
-                descartados++;
-                continue;
-            }
-            if (batchArgs.size() == LOTE_ENVIOS) {
-                jdbcTemplate.batchUpdate(SQL_ENVIO, batchArgs);
-                insertados += batchArgs.size();
-                batchArgs.clear();
-            }
+                        String fechaRaw = parts[1].trim(), horaStr = parts[2].trim(), minStr = parts[3].trim(),
+                               destino = parts[4].trim(), maletasStr = parts[5].trim(), clienteStr = parts[6].trim();
+                        if (!ValidadorEnvio.camposObligatoriosPresentes(fechaRaw, horaStr, minStr, destino, maletasStr, clienteStr)) {
+                            contadores[1]++;
+                            continue;
+                        }
+                        int hh, mm, maletas, idCliente;
+                        try {
+                            hh = Integer.parseInt(horaStr);
+                            mm = Integer.parseInt(minStr);
+                            maletas = Integer.parseInt(maletasStr);
+                            idCliente = Integer.parseInt(clienteStr);
+                            if (fechaRaw.length() != 8) throw new NumberFormatException();
+                        } catch (RuntimeException ex) {
+                            contadores[1]++;
+                            continue;
+                        }
+                        sb.append(origenIcao).append('-').append(parts[0].trim())
+                          .append('\t').append(origenIcao)
+                          .append('\t').append(destino)
+                          .append('\t').append(maletas)
+                          .append('\t').append(idCliente)
+                          .append('\t').append(fechaRaw, 0, 4).append('-').append(fechaRaw, 4, 6)
+                          .append('-').append(fechaRaw, 6, 8).append(' ');
+                        if (hh < 10) sb.append('0');
+                        sb.append(hh).append(':');
+                        if (mm < 10) sb.append('0');
+                        sb.append(mm).append(":00").append('\n');
+                        contadores[0]++;
+
+                        if (++enBuffer >= COPY_FLUSH_FILAS) {
+                            byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+                            copyIn.writeToCopy(bytes, 0, bytes.length);
+                            sb.setLength(0);
+                            enBuffer = 0;
+                        }
+                    }
+                    if (sb.length() > 0) {
+                        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+                        copyIn.writeToCopy(bytes, 0, bytes.length);
+                    }
+                    copyIn.endCopy();
+                } catch (Exception e) {
+                    if (copyIn.isActive()) {
+                        try { copyIn.cancelCopy(); } catch (SQLException ignore) { /* ya abortado */ }
+                    }
+                    if (e instanceof IOException ioe) throw new UncheckedIOException(ioe);
+                    if (e instanceof SQLException sqle) throw sqle;
+                    throw new IllegalStateException("Fallo en COPY de envíos (" + origenIcao + ")", e);
+                }
+                return null;
+            });
+        } catch (UncheckedIOException uioe) {
+            throw uioe.getCause();
         }
-        if (!batchArgs.isEmpty()) {
-            jdbcTemplate.batchUpdate(SQL_ENVIO, batchArgs);
-            insertados += batchArgs.size();
-        }
-        return new int[]{ insertados, descartados };
+        return contadores;
     }
 
     public static List<InyeccionEnviosRequest.Item> parsearEnviosParaInyeccion(
@@ -189,7 +235,7 @@ public class MigradorEnviosDb {
                 it.setSede(sede);
                 items.add(it);
             } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
-                // línea malformada → descartar sin abortar
+                // descartar sin abortar
             }
         }
         return items;

@@ -9,6 +9,7 @@ import com.tasfb2b.planificador.dto.vuelos.VuelosUsadosResponse;
 import com.tasfb2b.planificador.servicios.jobs.ConsultaJobsService;
 import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
 import com.tasfb2b.planificador.servicios.PlanificadorService;
+import com.tasfb2b.planificador.servicios.TelemetriaSimulacionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,10 +26,13 @@ public class ConsultaJobsController {
 
     private final PlanificadorService service;
     private final ConsultaJobsService jobQuery;
+    private final TelemetriaSimulacionService telemetria;
 
-    public ConsultaJobsController(PlanificadorService service, ConsultaJobsService jobQuery) {
+    public ConsultaJobsController(PlanificadorService service, ConsultaJobsService jobQuery,
+                                  TelemetriaSimulacionService telemetria) {
         this.service = service;
         this.jobQuery = jobQuery;
+        this.telemetria = telemetria;
     }
 
     @GetMapping("/jobs")
@@ -47,30 +51,23 @@ public class ConsultaJobsController {
         EstadoJob job = service.getJob(jobId);
         if (job == null) return ResponseEntity.notFound().build();
         if (job.estadoInicial == null) return ResponseEntity.noContent().build();
-        return ResponseEntity.ok(service.construirEstadoInicialResponse(job));
+        return ResponseEntity.ok(telemetria.construirEstadoInicialResponse(job));
     }
 
     @GetMapping("/jobs/{jobId}/almacenes/serie")
     public ResponseEntity<SerieAlmacenesResponse> serieAlmacenesJob(
             @PathVariable String jobId,
             @RequestParam(defaultValue = "0") int desde) {
-        SerieAlmacenesResponse body = service.getSerieAlmacenes(jobId, desde);
+        SerieAlmacenesResponse body = telemetria.getSerieAlmacenes(jobId, desde);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
     }
 
     @GetMapping("/jobs/{jobId}/estado")
     public ResponseEntity<EstadoJobResponse> estadoJob(@PathVariable String jobId) {
-        EstadoJobResponse body = service.getEstadoJob(jobId);
+        EstadoJobResponse body = telemetria.getEstadoJob(jobId);
         if (body == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(body);
-    }
-
-    @GetMapping("/jobs/{jobId}/alerta-colapso")
-    public ResponseEntity<AlertaColapso> alertaColapsoJob(@PathVariable String jobId) {
-        EstadoJob job = service.getJob(jobId);
-        if (job == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(job.alertaColapso != null ? job.alertaColapso : AlertaColapso.verde());
     }
 
     @GetMapping("/jobs/{jobId}/dashboard")
@@ -139,7 +136,7 @@ public class ConsultaJobsController {
         } catch (java.time.format.DateTimeParseException e) {
             return ResponseEntity.badRequest().build();
         }
-        EnvioEstadoResponse estado = service.buscarEstadoEnvio(jobId, idEnvio, instante);
+        EnvioEstadoResponse estado = telemetria.buscarEstadoEnvio(jobId, idEnvio, instante);
         if (estado == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(estado);
     }

@@ -48,7 +48,7 @@ public class PersistenciaSolucionService {
         try {
             jdbc.execute("TRUNCATE ruta_asignada, tramo_ruta, cancelacion_vuelo, envio_inyectado, "
                     + "ruta_inyectada, tramo_inyectado RESTART IDENTITY CASCADE");
-            corridaPersistidaEnBd = jobId;   // a partir de aquí la BD refleja la solución de este job
+            corridaPersistidaEnBd = jobId;
             log.info("Persistencia iniciada para la corrida {} (tablas de solución limpias).", jobId);
             return true;
         } catch (Exception e) {
@@ -146,25 +146,21 @@ public class PersistenciaSolucionService {
 
     public record CancelacionVueloDb(String idVuelo, LocalDate fecha, int enviosAfectados) {}
 
-    // ── Identidad de fila para la persistencia (fragmentación) ────────────────────────────
     private static String idEnvioBd(LoteEnvio b) { return b.getIdPadre() != null ? b.getIdPadre() : b.getId(); }
     private static int    subLote(LoteEnvio b)   { return b.esFragmento() ? b.getFragmento() : 0; }
     private static String claveRuta(LoteEnvio b) { return idEnvioBd(b) + "|" + subLote(b); }
 
     private void escribirBloque(List<LoteEnvio> enrutados, TablasSolucion t) {
-        // 1. Desactivar la ruta activa previa de estos (envío, sub_lote) (no-op para los nuevos).
         List<Object[]> desactivar = new ArrayList<>(enrutados.size());
         for (LoteEnvio b : enrutados) desactivar.add(new Object[]{ idEnvioBd(b), subLote(b) });
         jdbc.batchUpdate("UPDATE " + t.rutaTabla()
                 + " SET activa = FALSE WHERE id_envio = ? AND sub_lote = ? AND activa", desactivar);
 
-        // 2. Insertar las rutas nuevas (activa=true) por lotes, recuperando id_ruta por (envío, sub_lote).
         Map<String, Long> idRutaPorEnvio = new HashMap<>();
         for (int i = 0; i < enrutados.size(); i += LOTE_RUTAS) {
             insertarRutasLote(enrutados.subList(i, Math.min(i + LOTE_RUTAS, enrutados.size())), idRutaPorEnvio, t);
         }
 
-        // 3. Insertar todos los tramos del bloque en un único batch.
         List<Object[]> tramos = new ArrayList<>();
         for (LoteEnvio b : enrutados) {
             Long idRuta = idRutaPorEnvio.get(claveRuta(b));

@@ -92,7 +92,7 @@ class AcumuladosFisicosEjeTemporalTest {
 
     /** Registra los batches en el AcumuladorAuditoria (Fase 5b) y llena los acumulados físicos del bloque. */
     private static void llenar(BloqueSimulacion bloque, Map<String, LoteEnvio> auditAcc) {
-        PlanificadorService.AcumuladorAuditoria acc = new PlanificadorService.AcumuladorAuditoria(false);
+        AcumuladorAuditoria acc = new AcumuladorAuditoria(false);
         for (LoteEnvio b : auditAcc.values()) acc.registrar(b);
         acc.llenarAcumuladosFisicos(bloque);
     }

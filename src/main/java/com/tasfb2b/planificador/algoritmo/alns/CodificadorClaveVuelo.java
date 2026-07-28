@@ -6,6 +6,17 @@ public final class CodificadorClaveVuelo {
     public static final long MIN_DIA  = 24 * 60L;
     public static final long MASCARA_DIA = (1L << BITS_DIA) - 1;
 
+    public static final int  BITS_SLOT = 22;
+    public static final long MASCARA_SLOT = (1L << BITS_SLOT) - 1;
+
+    public static int indiceNodoDeSlot(long claveAlmacen) {
+        return (int) (claveAlmacen >> BITS_SLOT);
+    }
+
+    public static long slotDe(long claveAlmacen) {
+        return claveAlmacen & MASCARA_SLOT;
+    }
+
     private CodificadorClaveVuelo() {}
 
     public static long claveVuelo(int indiceArista, long epochMin) {

@@ -10,6 +10,7 @@ import com.tasfb2b.planificador.dto.vuelos.*;
 import com.tasfb2b.planificador.excepcion.ParametroInvalidoException;
 import com.tasfb2b.planificador.servicios.ingesta.IngestaService;
 import com.tasfb2b.planificador.servicios.jobs.EstadoJob;
+import com.tasfb2b.planificador.servicios.jobs.OperacionesEnVivoService;
 import com.tasfb2b.planificador.servicios.ingesta.MigradorEnviosDb;
 import com.tasfb2b.planificador.servicios.AltasEnCalienteService;
 import com.tasfb2b.planificador.servicios.PlanificadorService;
@@ -19,7 +20,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -42,12 +42,14 @@ import java.util.Map;
 public class EscenarioController {
 
     private final PlanificadorService service;
+    private final OperacionesEnVivoService operacionesEnVivo;
     private final PlanificadorProperties props;
     private final IngestaService ingesta;
 
-    public EscenarioController(PlanificadorService service, PlanificadorProperties props,
-                               IngestaService ingesta) {
+    public EscenarioController(PlanificadorService service, OperacionesEnVivoService operacionesEnVivo,
+                               PlanificadorProperties props, IngestaService ingesta) {
         this.service = service;
+        this.operacionesEnVivo = operacionesEnVivo;
         this.props = props;
         this.ingesta = ingesta;
     }
@@ -57,36 +59,6 @@ public class EscenarioController {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Hay una ingesta de dataset en curso; espera a que termine.");
         }
-    }
-
-    @GetMapping("/ejecutar")
-    public ResponseEntity<SimulacionResponse> ejecutar(
-            @RequestParam(defaultValue = "alns") String algoritmo,
-            @RequestParam(defaultValue = "14")   int    k) {
-
-        rechazarSiIngestaEnCurso();
-        return switch (algoritmo.toLowerCase()) {
-            case "alns" -> ResponseEntity.ok(service.ejecutarALNS(k));
-            default     -> throw new ParametroInvalidoException(
-                    "algoritmo no soportado en este endpoint síncrono: '" + algoritmo + "' (use 'alns')");
-        };
-    }
-
-    @GetMapping("/bloque/{index}")
-    public ResponseEntity<BloqueSimulacion> getBloque(@PathVariable int index) {
-        BloqueSimulacion bloque = service.getBloque(index);
-        if (bloque == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(bloque);
-    }
-
-    @GetMapping("/ejecutar-colapso")
-    public ResponseEntity<SimulacionResponse> ejecutarColapso(
-            @RequestParam(defaultValue = "75")   int    k,
-            @RequestParam(defaultValue = "0.20") double umbralColapso) {
-
-        rechazarSiIngestaEnCurso();
-        umbralColapso = Math.max(0.0, Math.min(1.0, umbralColapso));
-        return ResponseEntity.ok(service.ejecutarHastaColapso(k, umbralColapso));
     }
 
     @PostMapping("/escenario1/iniciar")
@@ -221,7 +193,7 @@ public class EscenarioController {
             @PathVariable String jobId,
             @RequestBody CancelacionVueloRequest orden) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        boolean ok = service.solicitarCancelacionVuelo(jobId, orden);
+        boolean ok = operacionesEnVivo.solicitarCancelacionVuelo(jobId, orden);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -235,17 +207,12 @@ public class EscenarioController {
                 "fechaHoraSalida", String.valueOf(orden.getFechaHoraSalida())));
     }
 
-    /**
-     * Alta de vuelo EN CALIENTE (efímera por corrida): se encola y el worker la aplica en la frontera
-     * del siguiente bloque. Se revierte al iniciar la corrida siguiente (no contamina el dataset).
-     * 202 encolada / 400 inválida / 404 job inexistente / 409 job no activo.
-     */
     @PostMapping("/jobs/{jobId}/agregar-vuelo")
     public ResponseEntity<Map<String, Object>> agregarVueloJob(
             @PathVariable String jobId,
             @RequestBody AltaVueloRequest alta) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        boolean ok = service.solicitarAltaVuelo(jobId, alta);   // lanza 400 si es inválida
+        boolean ok = operacionesEnVivo.solicitarAltaVuelo(jobId, alta);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -259,18 +226,12 @@ public class EscenarioController {
                 "destino",  alta.getDestino()));
     }
 
-    /**
-     * Alta de aeropuerto EN CALIENTE (efímera por corrida): se encola y el worker la aplica en la
-     * frontera del siguiente bloque. Se revierte al iniciar la corrida siguiente. Por sí solo no cambia
-     * rutas; participa con vuelos EN CALIENTE hacia/desde él o inyecciones.
-     * 202 encolada / 400 inválida / 404 job inexistente / 409 job no activo.
-     */
     @PostMapping("/jobs/{jobId}/agregar-aeropuerto")
     public ResponseEntity<Map<String, Object>> agregarAeropuertoJob(
             @PathVariable String jobId,
             @RequestBody AltaAeropuertoRequest alta) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        boolean ok = service.solicitarAltaAeropuerto(jobId, alta);   // lanza 400 si es inválida
+        boolean ok = operacionesEnVivo.solicitarAltaAeropuerto(jobId, alta);
         if (!ok) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -287,7 +248,7 @@ public class EscenarioController {
             @PathVariable String jobId,
             @RequestBody InyeccionEnviosRequest req) {
         if (service.getJob(jobId) == null) return ResponseEntity.notFound().build();
-        int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
+        int encolados = operacionesEnVivo.solicitarInyeccionEnvios(jobId, req);
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -318,8 +279,7 @@ public class EscenarioController {
                 throw new ParametroInvalidoException(
                         "Archivo sin ICAO de origen derivable del nombre: " + f.getOriginalFilename()
                       + " (use _envios_<ICAO>_.txt o el parámetro 'origen').");
-            // La fecha-hora del TXT está en hora LOCAL de la sede origen; el parser la convierte a UTC.
-            Integer offset = service.getOffsetAeropuerto(icao);
+            Integer offset = operacionesEnVivo.getOffsetAeropuerto(icao);
             if (offset == null)
                 throw new ParametroInvalidoException("ICAO origen desconocido: " + icao);
             try (Reader r = new InputStreamReader(f.getInputStream(), StandardCharsets.UTF_8)) {
@@ -335,7 +295,7 @@ public class EscenarioController {
 
         InyeccionEnviosRequest req = new InyeccionEnviosRequest();
         req.setEnvios(items);
-        int encolados = service.solicitarInyeccionEnvios(jobId, req);   // -1 = job inactivo; lanza 400
+        int encolados = operacionesEnVivo.solicitarInyeccionEnvios(jobId, req);
         if (encolados < 0) {
             return ResponseEntity.status(409).body(Map.of(
                     "jobId", jobId, "encolado", false,
@@ -345,17 +305,6 @@ public class EscenarioController {
                 "jobId", jobId, "encolado", true, "encolados", encolados));
     }
 
-    /**
-     * Carga masiva de planes de vuelo EN CALIENTE desde TXT (formato del dataset:
-     * ORIG-DEST-HH:MM-HH:MM-CAPACIDAD, horas LOCALES; líneas "*"/"**"/"//" y cabecera ignoradas).
-     * Cada línea válida se encola por la misma tubería que agregar-vuelo (efímera por corrida,
-     * recurrente diaria, aplicada en la frontera del siguiente bloque). Los duplicados ("no se
-     * preocupe si coincide con algún vuelo existente") y las líneas inválidas se descartan POR
-     * LÍNEA y se reportan en la respuesta, sin abortar el lote — por eso el 202 puede traer
-     * encolados=0. El 202 refleja el ENCOLADO; la aplicación real se ve en /estado
-     * (vuelosAgregados / altasVueloNoAplicadas).
-     * 202 resumen / 400 sin archivos o sin ninguna línea de vuelo / 404 job inexistente / 409 job no activo.
-     */
     @PostMapping(value = "/jobs/{jobId}/cargar-vuelos-txt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> cargarVuelosTxt(
             @PathVariable String jobId,
@@ -381,7 +330,7 @@ public class EscenarioController {
                     continue;
                 }
                 try {
-                    if (!service.solicitarAltaVuelo(jobId, linea.alta())) {
+                    if (!operacionesEnVivo.solicitarAltaVuelo(jobId, linea.alta())) {
                         return ResponseEntity.status(409).body(Map.of(
                                 "jobId", jobId, "encolado", false,
                                 "motivo", "el job no está activo (ya terminó o fue cancelado)"));

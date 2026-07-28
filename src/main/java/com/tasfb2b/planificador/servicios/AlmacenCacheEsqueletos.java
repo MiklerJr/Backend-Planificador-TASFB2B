@@ -33,7 +33,7 @@ import java.util.Map;
 @Component
 public class AlmacenCacheEsqueletos {
 
-    static final int MAGIC = 0x54534B31;   // "TSK1"
+    static final int MAGIC = 0x54534B31;
     static final int VERSION = 1;
     private static final int MAX_SKELETONS_LEIDOS = 64;
     private static final int MAX_TRAMOS_LEIDOS = 4096;
@@ -133,7 +133,7 @@ public class AlmacenCacheEsqueletos {
         try {
             md = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 no disponible", ex);   // imposible en un JRE estándar
+            throw new IllegalStateException("SHA-256 no disponible", ex);
         }
         md.update(("escala|" + tiempoMinEscala + "|recojo|" + tiempoRecojoDestino + "\n")
                 .getBytes(StandardCharsets.UTF_8));

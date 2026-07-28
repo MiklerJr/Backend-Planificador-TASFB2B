@@ -77,7 +77,6 @@ public class LoteEnvio {
         return (slaMin - transitMin) / slaMin;
     }
 
-    // Prefijo fijo
     public boolean tienePrefijo() {
         return prefijoFijo != null && !prefijoFijo.isEmpty();
     }

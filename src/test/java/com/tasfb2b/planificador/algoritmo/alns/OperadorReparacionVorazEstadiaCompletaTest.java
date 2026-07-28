@@ -1,10 +1,11 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
+
 import com.tasfb2b.planificador.algoritmo.aco.ColoniaACO;
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.configuracion.PlanificadorProperties;
 import org.junit.jupiter.api.Test;
 
@@ -154,7 +155,7 @@ class OperadorReparacionVorazEstadiaCompletaTest {
         blockAirport.put(claveSlotIntermedio(graph), CAPACIDAD_ALMACEN + 50);
         op.confirmarBloque(new HashMap<>(), blockAirport);
 
-        OperadorReparacionVoraz.PreColapso pre = op.evaluarPreColapso(blockAirport, List.of());
+        PreColapso pre = op.evaluarPreColapso(blockAirport, List.of());
 
         assertTrue(pre.utilAlmacenMax() > 1.0,
                 "una ocupación sobre capacidad debe reportar utilización > 100%");

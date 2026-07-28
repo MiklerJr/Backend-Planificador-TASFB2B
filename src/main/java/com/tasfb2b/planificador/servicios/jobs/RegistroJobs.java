@@ -46,8 +46,8 @@ public class RegistroJobs {
         EstadoJob job = new EstadoJob(jobId, escenario, k);
         jobs.put(jobId, job);
         log.info("Job creado: {} (escenario={}, K={}) — estado=encolado", jobId, escenario, k);
-        purgarJobsViejos();   // anti-OOM (RAM): libera los pesados de corridas anteriores ya terminadas
-        purgarZipsViejos();   // anti-OOM (disco): borra los ZIP de auditoría de corridas anteriores
+        purgarJobsViejos();
+        purgarZipsViejos();
         return job;
     }
 
@@ -86,7 +86,7 @@ public class RegistroJobs {
                 log.error("Job {} falló: {}", job.getJobId(), ex.getMessage(), ex);
             } finally {
                 job.fin = java.time.LocalDateTime.now();
-                job.finRealMs = System.currentTimeMillis();   // congela el temporizador real
+                job.finRealMs = System.currentTimeMillis();
                 futures.remove(job.getJobId());
             }
         });
@@ -154,7 +154,7 @@ public class RegistroJobs {
     public int posicionEnCola(String jobId) {
         EstadoJob target = jobs.get(jobId);
         if (target == null || !"encolado".equals(target.estado)) return 0;
-        int posicion = 1; // el propio job ocupa al menos posición 1
+        int posicion = 1;
         for (EstadoJob j : jobs.values()) {
             if (j == target) continue;
             if ("encolado".equals(j.estado) && j.getInicio().isBefore(target.getInicio())) {

@@ -341,8 +341,6 @@ public class AuditoriaService {
         return nombre;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────
-
     private static boolean sinCiclos(List<Arista> ruta) {
         Set<String> visitados = new HashSet<>();
         visitados.add(ruta.get(0).origen.codigo);
@@ -354,7 +352,6 @@ public class AuditoriaService {
 
     private boolean cumpleEscalaMinima(List<Arista> ruta, List<Long> deps) {
         if (deps == null || deps.size() != ruta.size()) {
-            // Sin info de departures reales, validamos contra los tiempos estáticos.
             for (int i = 0; i < ruta.size() - 1; i++) {
                 int salidaSig = ruta.get(i + 1).minutoDelDiaSalida;
                 int llegadaAct = (ruta.get(i).minutoDelDiaSalida + ruta.get(i).duracionMinutos) % 1440;

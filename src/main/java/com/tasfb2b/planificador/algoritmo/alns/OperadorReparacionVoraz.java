@@ -1,5 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
+
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
@@ -15,7 +16,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     private long conexionMin = 10L;
     private long tiempoRecojoDestino = 15L;
-    public static final long SLOT_ALMACEN_MIN = 60L;
+    public static final long SLOT_ALMACEN_MIN = 15L;
     private static final long HORIZONTE_MAX_MIN  = 3 * 24 * 60L;
     private static final long MIN_DIA          = CodificadorClaveVuelo.MIN_DIA;
     private static final int  BITS_DIA         = CodificadorClaveVuelo.BITS_DIA;
@@ -41,6 +42,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     private final ConcurrentHashMap<Long, Integer> ocupacionAeropuerto = new ConcurrentHashMap<>();
 
     private final Set<Long> vueloDiasCancelados = ConcurrentHashMap.newKeySet();
+
+    private int[] picoAlmacenPurgado;
 
     private final ConcurrentHashMap<Long, Integer> ocupacionOrigenBacklog = new ConcurrentHashMap<>();
     private long relojUtcMin = Long.MIN_VALUE;
@@ -83,6 +86,34 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         adyacenciaPorIndice = adj;
 
         this.hubPorIndice = new boolean[conteoNodos];
+        this.picoAlmacenPurgado = new int[conteoNodos];
+    }
+
+    public int purgarOcupacionAnteriorA(long diaCorte) {
+        int purgadas = 0;
+        for (Iterator<Map.Entry<Long, Integer>> it = ocupacionVuelo.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Long, Integer> entry = it.next();
+            long dia = entry.getKey() & CodificadorClaveVuelo.MASCARA_DIA;
+            if (dia < diaCorte) { it.remove(); purgadas++; }
+        }
+        long slotsPorDia = MIN_DIA / SLOT_ALMACEN_MIN;
+        for (Iterator<Map.Entry<Long, Integer>> it = ocupacionAeropuerto.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Long, Integer> entry = it.next();
+            long slot = CodificadorClaveVuelo.slotDe(entry.getKey());
+            if (slot / slotsPorDia >= diaCorte) continue;
+            int nodeIdx = CodificadorClaveVuelo.indiceNodoDeSlot(entry.getKey());
+            if (nodeIdx >= 0 && nodeIdx < picoAlmacenPurgado.length
+                    && entry.getValue() > picoAlmacenPurgado[nodeIdx]) {
+                picoAlmacenPurgado[nodeIdx] = entry.getValue();
+            }
+            it.remove();
+            purgadas++;
+        }
+        return purgadas;
+    }
+
+    public int[] tamañoOcupacionGlobal() {
+        return new int[] { ocupacionVuelo.size(), ocupacionAeropuerto.size() };
     }
 
     public boolean incorporarArista(Arista e) {
@@ -107,6 +138,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         adyacenciaPorIndice = Arrays.copyOf(adyacenciaPorIndice, idx + 1);
         adyacenciaPorIndice[idx] = new ArrayList<>();
         hubPorIndice = Arrays.copyOf(hubPorIndice, idx + 1);
+        picoAlmacenPurgado = Arrays.copyOf(picoAlmacenPurgado, idx + 1);
         conteoNodos = idx + 1;
         return idx;
     }
@@ -136,19 +168,27 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         this.hubPorIndice = flags;
     }
 
-    private boolean esHub(int nodeIdx) {
+    boolean esHub(int nodeIdx) {
         return nodeIdx >= 0 && nodeIdx < hubPorIndice.length && hubPorIndice[nodeIdx];
     }
 
     public void reclasificarHubsPorUtilizacion(double umbralPico) {
         double[] picoUtil = new double[conteoNodos];
         for (Map.Entry<Long, Integer> entry : ocupacionAeropuerto.entrySet()) {
-            int nodeIdx = (int) (entry.getKey() >> BITS_DIA);
+            int nodeIdx = CodificadorClaveVuelo.indiceNodoDeSlot(entry.getKey());
             if (nodeIdx < 0 || nodeIdx >= conteoNodos) continue;
             String code = nodoPorIndice[nodeIdx];
             Nodo nodo = code != null ? grafo.nodos.get(code) : null;
             if (nodo == null || nodo.capacidad <= 0) continue;
             double util = entry.getValue() / (double) nodo.capacidad;
+            if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
+        }
+        for (int nodeIdx = 0; nodeIdx < conteoNodos && nodeIdx < picoAlmacenPurgado.length; nodeIdx++) {
+            if (picoAlmacenPurgado[nodeIdx] <= 0) continue;
+            String code = nodoPorIndice[nodeIdx];
+            Nodo nodo = code != null ? grafo.nodos.get(code) : null;
+            if (nodo == null || nodo.capacidad <= 0) continue;
+            double util = picoAlmacenPurgado[nodeIdx] / (double) nodo.capacidad;
             if (util > picoUtil[nodeIdx]) picoUtil[nodeIdx] = util;
         }
 
@@ -164,8 +204,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         double utilMax = 0.0;
         String almacenCritico = null;
         if (blockAirport != null) {
-            for (Long key : blockAirport.keySet()) {
-                int nodeIdx = (int) (key >> BITS_DIA);
+            for (long key : blockAirport.keySet()) {
+                int nodeIdx = CodificadorClaveVuelo.indiceNodoDeSlot(key);
                 if (nodeIdx < 0 || nodeIdx >= conteoNodos) continue;
                 String code = nodoPorIndice[nodeIdx];
                 Nodo nodo = code != null ? grafo.nodos.get(code) : null;
@@ -191,8 +231,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return new PreColapso(utilMax, almacenCritico, holguraMin, envioUrgente);
     }
 
-    public record PreColapso(double utilAlmacenMax, String almacenCritico,
-                             double holguraSlaMin, String envioUrgente) {}
 
     private int[] esqueletoEvitandoHubs(int startIdx, int targetIdx, long readyMin, int slaHours) {
         if (startIdx < 0 || targetIdx < 0 || startIdx == targetIdx) return null;
@@ -305,10 +343,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         return vueloDiasCancelados.add(claveVuelo);
     }
 
-    public boolean esVueloCancelado(long claveVuelo) {
-        return vueloDiasCancelados.contains(claveVuelo);
-    }
-
     public boolean rutaUsaVueloCancelado(LoteEnvio batch) {
         if (batch == null || vueloDiasCancelados.isEmpty()) return false;
         List<Arista> route = batch.getRutaAsignada();
@@ -390,7 +424,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         if (origen == null || origen.indice < 0 || origen.capacidad <= 0) return true;
         long desde = aMinutoEpoch(batch.tiempoListoEfectivo());
         if (relojUtcMin <= desde) return true;
-        return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getCantidad(), Map.of());
+        return cabeAlmacenPierna(origen, desde, relojUtcMin, batch.getCantidad(), new HashMap<>());
     }
 
     private void acumularEsperaOrigen(LoteEnvio batch, int signo) {
@@ -482,9 +516,9 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
 
     public boolean sinRutaPorAlmacenLleno(LoteEnvio batch) {
         if (batch == null) return false;
-        ResultadoRuta con = buscarRutaMasCorta(batch, Map.of(), Map.of(), false);
+        ResultadoRuta con = buscarRutaMasCorta(batch, new HashMap<>(), new HashMap<>(), false);
         if (con.cumpleSLA && !con.aristas.isEmpty()) return false;
-        ResultadoRuta sin = buscarRutaMasCorta(batch, Map.of(), Map.of(), true);
+        ResultadoRuta sin = buscarRutaMasCorta(batch, new HashMap<>(), new HashMap<>(), true);
         return sin.cumpleSLA && !sin.aristas.isEmpty();
     }
 
@@ -816,27 +850,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
              + ocupacionOrigenBacklog.getOrDefault(claveSlot, 0);
     }
 
-    public void aplicarAsignacionBloque(LoteEnvio batch,
-                                         Map<Long, Integer> blockFlight,
-                                         Map<Long, Integer> blockAirport) {
-        List<Arista> route = batch.getRutaAsignada();
-        List<Long> deps  = batch.getSalidasAsignadas();
-        if (route == null || route.isEmpty() || deps == null || deps.size() != route.size()) return;
-        ResultadoRuta fake = new ResultadoRuta(route, deps, batch.isCumpleSLA());
-        aplicarABloque(batch, fake, blockFlight, blockAirport);
-    }
-
     public static long aMinutoEpochPublico(LocalDateTime dt) {
         return aMinutoEpoch(dt);
-    }
-
-    public boolean intentarDijkstraDirecto(LoteEnvio batch,
-                                            Map<Long, Integer> blockFlight,
-                                            Map<Long, Integer> blockAirport) {
-        List<RutaCandidata> candidates = generarCandidatosRuta(batch, blockFlight, blockAirport, 1);
-        if (candidates.isEmpty()) return false;
-        aplicarCandidatoRuta(batch, candidates.get(0));
-        return true;
     }
 
     public RutaCandidata materializarRutaCandidata(LoteEnvio batch,
@@ -1011,7 +1026,8 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
     }
 
     private static long claveSlot(int nodeIdx, long slot) {
-        return (((long) nodeIdx) << BITS_DIA) | (slot & CodificadorClaveVuelo.MASCARA_DIA);
+        return (((long) nodeIdx) << CodificadorClaveVuelo.BITS_SLOT)
+                | (slot & CodificadorClaveVuelo.MASCARA_SLOT);
     }
 
     public static long claveAlmacenDeSlot(int nodeIdx, long epochMin) {
@@ -1318,7 +1334,7 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
         long airportDaysLlenos = 0, airportDaysSobre = 0, totalAirportAsig = 0, totalAirportCap = 0;
         Map<String, long[]> porAero = new HashMap<>();
         for (Map.Entry<Long, Integer> entry : ocupacionAeropuerto.entrySet()) {
-            int    nodeIdx  = (int)(entry.getKey() >> BITS_DIA);
+            int    nodeIdx  = CodificadorClaveVuelo.indiceNodoDeSlot(entry.getKey());
             int    asignado = entry.getValue();
             totalAirportAsig += asignado;
             String code = (nodeIdx < nodoPorIndice.length) ? nodoPorIndice[nodeIdx] : "?";
@@ -1389,58 +1405,6 @@ public class OperadorReparacionVoraz implements OperadorReparacion {
             this.arrivalMin = arrivalMin;
             this.legs = legs;
             this.pressure = pressure;
-        }
-    }
-
-    public static final class RutaCandidata {
-        private final List<Arista> aristas;
-        private final List<Long> salidasReales;
-        private final boolean cumpleSLA;
-        private final long arrivalMin;
-        private final long transitMin;
-        private final long slackMin;
-        private final double pressure;
-        private final double costoEscasez;
-        private String cacheFirma;
-
-        private RutaCandidata(List<Arista> edges,
-                               List<Long> salidasReales,
-                               boolean cumpleSLA,
-                               long arrivalMin,
-                               long transitMin,
-                               long slackMin,
-                               double pressure,
-                               double costoEscasez) {
-            this.aristas = List.copyOf(edges);
-            this.salidasReales = List.copyOf(salidasReales);
-            this.cumpleSLA = cumpleSLA;
-            this.arrivalMin = arrivalMin;
-            this.transitMin = transitMin;
-            this.slackMin = slackMin;
-            this.pressure = pressure;
-            this.costoEscasez = costoEscasez;
-        }
-
-        public List<Arista> getAristas() { return aristas; }
-        public List<Long> getSalidasReales() { return salidasReales; }
-        public boolean isCumpleSLA() { return cumpleSLA; }
-        public long getLlegadaMin() { return arrivalMin; }
-        public long getTransitoMin() { return transitMin; }
-        public long getHolguraMin() { return slackMin; }
-        public double getPresion() { return pressure; }
-        public double getCostoEscasez() { return costoEscasez; }
-        public int getTramos() { return aristas.size(); }
-
-        public String signature() {
-            String cached = cacheFirma;
-            if (cached != null) return cached;
-            StringBuilder sb = new StringBuilder(aristas.size() * 12);
-            for (int i = 0; i < aristas.size(); i++) {
-                sb.append(aristas.get(i).indice).append('@').append(salidasReales.get(i)).append(';');
-            }
-            cached = sb.toString();
-            cacheFirma = cached;
-            return cached;
         }
     }
 

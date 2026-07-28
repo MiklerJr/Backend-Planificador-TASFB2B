@@ -106,6 +106,10 @@ public class EstadoJob {
 
     private volatile int maxBloquesConAsignaciones = 500;
 
+    private volatile int maxAsignacionesBuffer = 0;
+
+    private int asignacionesRetenidas = 0;
+
     private final Map<String, VueloUsadoAcc> vuelosUsadosAcum = new LinkedHashMap<>();
 
     public volatile Metricas metricasSnapshot;
@@ -113,6 +117,23 @@ public class EstadoJob {
     public void setMaxBloquesConAsignaciones(int n) { if (n > 0) this.maxBloquesConAsignaciones = n; }
 
     public int getMaxBloquesConAsignaciones() { return maxBloquesConAsignaciones; }
+
+    public void setMaxAsignacionesBuffer(int n) { if (n >= 0) this.maxAsignacionesBuffer = n; }
+
+    public int getMaxAsignacionesBuffer() { return maxAsignacionesBuffer; }
+
+    public int asignacionesRetenidas() {
+        synchronized (bloquesLock) { return asignacionesRetenidas; }
+    }
+
+    private static boolean debePurgarBloque(int bloques, int asignaciones, int maxBloques, int maxAsignaciones) {
+        if (bloques > maxBloques) return true;
+        return maxAsignaciones > 0 && asignaciones > maxAsignaciones && bloques > 1;
+    }
+
+    private static int cuentaAsignaciones(BloqueSimulacion bloque) {
+        return bloque == null || bloque.getAsignaciones() == null ? 0 : bloque.getAsignaciones().size();
+    }
 
     public EstadoJob(String jobId, String escenario, int k) {
         this.jobId     = jobId;
@@ -133,7 +154,7 @@ public class EstadoJob {
 
     public boolean encolarCancelacionVuelo(CancelacionVueloRequest orden) {
         if (orden == null) return false;
-        if (cancelacionesVueloPendientes.contains(orden)) return false;   // anti doble-click
+        if (cancelacionesVueloPendientes.contains(orden)) return false;
         return cancelacionesVueloPendientes.add(orden);
     }
 
@@ -159,7 +180,7 @@ public class EstadoJob {
 
     public boolean encolarAltaVuelo(AltaVueloRequest alta) {
         if (alta == null) return false;
-        if (altasVueloPendientes.contains(alta)) return false;   // anti doble-click
+        if (altasVueloPendientes.contains(alta)) return false;
         return altasVueloPendientes.add(alta);
     }
 
@@ -175,7 +196,7 @@ public class EstadoJob {
 
     public boolean encolarAltaAeropuerto(AltaAeropuertoRequest alta) {
         if (alta == null) return false;
-        if (altasAeropuertoPendientes.contains(alta)) return false;   // anti doble-click
+        if (altasAeropuertoPendientes.contains(alta)) return false;
         return altasAeropuertoPendientes.add(alta);
     }
 
@@ -202,8 +223,10 @@ public class EstadoJob {
         indexarRutasSinteticas(bloque);
         synchronized (bloquesLock) {
             bloquesParciales.add(bloque);
-            while (bloquesParciales.size() > maxBloquesConAsignaciones) {
-                bloquesParciales.remove(0);
+            asignacionesRetenidas += cuentaAsignaciones(bloque);
+            while (debePurgarBloque(bloquesParciales.size(), asignacionesRetenidas,
+                    maxBloquesConAsignaciones, maxAsignacionesBuffer)) {
+                asignacionesRetenidas -= cuentaAsignaciones(bloquesParciales.remove(0));
                 baseBloquesPurgados++;
             }
         }
@@ -211,7 +234,7 @@ public class EstadoJob {
     }
 
     private void purgarVuelosUsadosViejos() {
-        int corte = bloquesPublicados() - maxBloquesConAsignaciones;
+        int corte = primerBloqueDisponible();
         if (corte <= 0) return;
         synchronized (vuelosUsadosAcum) {
             Iterator<VueloUsadoAcc> it = vuelosUsadosAcum.values().iterator();
@@ -376,7 +399,7 @@ public class EstadoJob {
     }
 
     public void liberarPesados() {
-        synchronized (bloquesLock) { bloquesParciales.clear(); }
+        synchronized (bloquesLock) { bloquesParciales.clear(); asignacionesRetenidas = 0; }
         synchronized (vuelosUsadosAcum) { vuelosUsadosAcum.clear(); }
         synchronized (seriesLock) { seriesAlmacenes.clear(); }
         rutasSinteticas.clear();

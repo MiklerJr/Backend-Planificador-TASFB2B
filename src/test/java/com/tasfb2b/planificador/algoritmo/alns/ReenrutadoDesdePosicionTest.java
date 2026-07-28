@@ -1,9 +1,10 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
+
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
 import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 import com.tasfb2b.planificador.algoritmo.grafo.Nodo;
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

@@ -1,0 +1,14 @@
+# Perfil "e3": corrida larga del escenario 3 (hasta colapso) SIN ritmo de reloj.
+#
+# Usar con: ./mvnw spring-boot:run -Dspring-boot.run.profiles=e3
+#
+# Única diferencia con application.yaml: el E3 NO duerme (Sa·60 − Ta) entre bloques, así que el
+# wall-clock de la corrida es ≈ nº de bloques × Ta (10 s) en vez de × Sa (5 min). El presupuesto
+# del motor por bloque (Ta = 10 s, deadline dentro de procesarBloque) NO cambia, así que la
+# simulación es la misma que en producción: solo se elimina el tiempo muerto entre bloques.
+#
+# NO heredar del perfil "smoke": aquel baja ta-segundos a 0 e iteraciones-base a 3, lo que sí
+# altera el resultado del algoritmo.
+planificador:
+  scenario:
+    simular-tiempo-real-3: false       # sin sleep de Sa entre bloques (única perilla tocada)

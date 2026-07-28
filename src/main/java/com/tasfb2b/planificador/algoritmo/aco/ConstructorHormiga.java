@@ -1,7 +1,8 @@
 package com.tasfb2b.planificador.algoritmo.aco;
 
+
 import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz;
-import com.tasfb2b.planificador.algoritmo.alns.OperadorReparacionVoraz.RutaCandidata;
+import com.tasfb2b.planificador.algoritmo.alns.RutaCandidata;
 import com.tasfb2b.planificador.algoritmo.alns.LoteEnvio;
 
 import java.util.ArrayList;
@@ -49,8 +50,7 @@ final class ConstructorHormiga {
         Map<Long, Integer> simAirport = new HashMap<>(blockAirport);
         BolsaPendientes pendientes = new BolsaPendientes(base);
         List<Asignacion> asignaciones = new ArrayList<>();
-
-        Map<LoteEnvio, OpcionEnvio> evalCache = new IdentityHashMap<>(base.size() * 2);
+        Map<LoteEnvio, OpcionEnvio> evalCache = new IdentityHashMap<>();
 
         while (!pendientes.isEmpty() && System.nanoTime() < deadline) {
             List<OpcionEnvio> opciones = evaluarFrontier(

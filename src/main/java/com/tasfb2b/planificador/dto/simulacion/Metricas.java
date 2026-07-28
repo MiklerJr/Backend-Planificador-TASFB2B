@@ -16,7 +16,6 @@ public class Metricas {
     private boolean collapsoDetectado;
     private int     bloqueColapso;
 
-    // Detalle del colapso real
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String motivoColapso;
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -24,14 +23,12 @@ public class Metricas {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String instanteColapsoUtc;
 
-    // Métricas de calibración
     private long taMinMs;
     private long taMaxMs;
     private long taPromedioMs;
     private long tiempoTotalAlgMs;
     private boolean advertenciaCalibracion;
 
-    // Métricas del backlog acumulativo
     private int backlogActual;
     private int backlogPico;
     private int sinRutaDefinitivo;

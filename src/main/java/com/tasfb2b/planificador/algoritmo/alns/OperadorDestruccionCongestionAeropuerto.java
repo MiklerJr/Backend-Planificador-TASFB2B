@@ -1,7 +1,6 @@
 package com.tasfb2b.planificador.algoritmo.alns;
 
 import com.tasfb2b.planificador.algoritmo.grafo.Arista;
-import com.tasfb2b.planificador.algoritmo.grafo.Grafo;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,8 +19,6 @@ public class OperadorDestruccionCongestionAeropuerto implements OperadorDestrucc
 
     private Random rng = new Random();
 
-    public OperadorDestruccionCongestionAeropuerto(Grafo graph) { }
-
     @Override
     public void setAleatorio(Random rng) {
         if (rng != null) this.rng = rng;
@@ -32,7 +29,6 @@ public class OperadorDestruccionCongestionAeropuerto implements OperadorDestrucc
         List<LoteEnvio> all    = solution.getLotes();
         int                target = Math.max(1, (int)(all.size() * factor));
 
-        // 1. Contar uso por aeropuerto (todas las escalas + destinos finales).
         Map<String, Integer> uso = new HashMap<>();
         for (LoteEnvio b : all) {
             if (b.getRutaAsignada() == null || b.getRutaAsignada().isEmpty()) continue;
@@ -45,14 +41,12 @@ public class OperadorDestruccionCongestionAeropuerto implements OperadorDestrucc
 
         if (uso.isEmpty()) return List.of();
 
-        // 2. Top-N aeropuertos más cargados.
         Set<String> congestionados = uso.entrySet().stream()
                 .sorted(Comparator.comparingInt(Map.Entry<String, Integer>::getValue).reversed())
                 .limit(TOP_AEROPUERTOS)
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toSet());
 
-        // 3. Batches cuyas rutas pasan por al menos uno de los congestionados.
         List<LoteEnvio> candidatos = new ArrayList<>();
         for (LoteEnvio b : all) {
             if (b.getRutaAsignada() == null || b.getRutaAsignada().isEmpty()) continue;
@@ -68,7 +62,6 @@ public class OperadorDestruccionCongestionAeropuerto implements OperadorDestrucc
 
         if (candidatos.isEmpty()) return List.of();
 
-        // 4. Aleatorizar dentro de los candidatos para no destruir siempre los mismos.
         Collections.shuffle(candidatos, rng);
         return candidatos.subList(0, Math.min(target, candidatos.size()));
     }

@@ -9,7 +9,7 @@ public class SolucionAlns {
 
     private double pesoTransit    = 1.0;
     private double pesoTarde      = 5000.0;
-    private double pesoUsoAlmacen = 0.0;   // 0 = desactivado
+    private double pesoUsoAlmacen = 0.0;
 
     public SolucionAlns(List<LoteEnvio> lotes) {
         this.lotes = lotes;

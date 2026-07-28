@@ -21,6 +21,13 @@ public class PlanificadorProperties {
     private Cache        cache        = new Cache();
     private Operativo    operativo    = new Operativo();
     private Fragmentacion fragmentacion = new Fragmentacion();
+    private Memoria      memoria      = new Memoria();
+
+    @Data
+    public static class Memoria {
+        private int purgaOcupacionCadaBloques = 20;
+        private int purgaOcupacionRetencionDias = 7;
+    }
 
     @Data
     public static class Fragmentacion {
@@ -56,6 +63,8 @@ public class PlanificadorProperties {
         private int maxVentanasColapso = 0;
 
         private int maxBloquesBuffer = 60;
+
+        private int maxAsignacionesBuffer = 0;
 
         private int maxJobsEnMemoria = 3;
 
@@ -110,7 +119,6 @@ public class PlanificadorProperties {
     @Data
     public static class Consulta {
         private int maxFilasPagina = 5000;
-        private int demandaMaxDias = 31;
     }
 
     @Data

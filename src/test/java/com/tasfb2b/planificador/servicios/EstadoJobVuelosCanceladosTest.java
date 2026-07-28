@@ -29,7 +29,8 @@ class EstadoJobVuelosCanceladosTest {
         RegistroJobs jobs = new RegistroJobs();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        ConsultaJobsController controller = new ConsultaJobsController(service, new ConsultaJobsService(jobs, null));
+        ConsultaJobsController controller = new ConsultaJobsController(service,
+                new ConsultaJobsService(jobs, null), new TelemetriaSimulacionService(jobs));
         EstadoJob job = jobs.crear("2", 14);
 
         // El worker registra una cancelación aplicada (misma lista que recibe
@@ -54,7 +55,8 @@ class EstadoJobVuelosCanceladosTest {
         RegistroJobs jobs = new RegistroJobs();
         PlanificadorService service = new PlanificadorService(null, null, null, jobs,
                 null, null);
-        ConsultaJobsController controller = new ConsultaJobsController(service, new ConsultaJobsService(jobs, null));
+        ConsultaJobsController controller = new ConsultaJobsController(service,
+                new ConsultaJobsService(jobs, null), new TelemetriaSimulacionService(jobs));
         EstadoJob job = jobs.crear("3", 75);
 
         EstadoJobResponse body = controller.estadoJob(job.getJobId()).getBody();
